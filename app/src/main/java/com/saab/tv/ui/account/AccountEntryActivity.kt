@@ -26,8 +26,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.saab.tv.MainActivity
@@ -148,6 +146,8 @@ class AccountEntryActivity : ComponentActivity() {
 @Composable
 private fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boolean, onSubmit: (String, String, Boolean) -> Unit) {
     var signup by rememberSaveable { mutableStateOf(false) }
+    var remote by remember { mutableStateOf(false) }
+    if (remote) AccountRemoteDialog(auth, signup, onDismiss = { remote = false }, onSubmit = onSubmit)
     var username by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
@@ -198,6 +198,8 @@ private fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boo
                         SetupButton("Create Account", { signup = true; passwordVisible = false; confirmVisible = false },
                             Modifier.weight(1f), primary = signup, enabled = !busy)
                     }
+                    SetupButton(if (signup) "Create Account With Phone" else "Sign In With Phone", { remote = true },
+                        modifier = Modifier.fillMaxWidth(), enabled = !busy, compact = true)
                     OutlinedTextField(value = username, onValueChange = { username = it.take(32) }, label = { Text("Username") },
                         enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(usernameFocus),
                         textStyle = MaterialTheme.typography.bodyMedium,
@@ -210,10 +212,12 @@ private fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boo
                         enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(passwordFocus),
                         textStyle = MaterialTheme.typography.bodyMedium,
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = { SetupButton(if (passwordVisible) "Hide" else "Show", { passwordVisible = !passwordVisible }, enabled = !busy, compact = true,
-                            modifier = Modifier.padding(end = 8.dp).semantics { contentDescription = if (passwordVisible) "Hide Password" else "Show Password" }) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = if (signup) ImeAction.Next else ImeAction.Done),
                         keyboardActions = KeyboardActions(onNext = { confirmFocus.requestFocus() }, onDone = { submit() }))
+                    // An independent focus target: text fields/TV IMEs can consume
+                    // D-pad events aimed at a nested trailing button.
+                    SetupButton(if (passwordVisible) "Hide Password" else "Show Password", { passwordVisible = !passwordVisible },
+                        enabled = !busy, compact = true, modifier = Modifier.fillMaxWidth())
                     if (signup) {
                         Text("8+ characters · uppercase · lowercase · number · symbol", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         OutlinedTextField(value = confirm, onValueChange = { confirm = it.take(128) }, label = { Text("Confirm Password") },
@@ -222,10 +226,10 @@ private fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boo
                             isError = confirm.isNotEmpty() && confirm != password,
                             supportingText = if (confirm.isNotEmpty() && confirm != password) {{ Text("Passwords do not match") }} else null,
                             visualTransformation = if (confirmVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            trailingIcon = { SetupButton(if (confirmVisible) "Hide" else "Show", { confirmVisible = !confirmVisible }, enabled = !busy, compact = true,
-                                modifier = Modifier.padding(end = 8.dp).semantics { contentDescription = if (confirmVisible) "Hide Confirm Password" else "Show Confirm Password" }) },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = { if (valid) submitFocus.requestFocus(); submit() }))
+                        SetupButton(if (confirmVisible) "Hide Confirmation" else "Show Confirmation", { confirmVisible = !confirmVisible },
+                            enabled = !busy, compact = true, modifier = Modifier.fillMaxWidth())
                     }
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
                     SetupButton(if (busy) "Please Wait…" else if (signup) "Create Account" else "Sign In", submit,
