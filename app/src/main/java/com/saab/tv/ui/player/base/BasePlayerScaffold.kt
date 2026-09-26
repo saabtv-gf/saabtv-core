@@ -177,8 +177,8 @@ fun BasePlayerScaffold(
     playbackController: PlayerPlaybackController,
     renderSurface: PlayerRenderSurface,
     seekThumbnailProvider: (suspend (positionMs: Long) -> Bitmap?)? = null,
-    seekTimeIntervalSeconds: Int = 10,
-    seekThumbnailIntervalSeconds: Int = 10,
+    seekTimeIntervalSeconds: Int = 30,
+    seekThumbnailIntervalSeconds: Int = 30,
     seekThumbnailCachePercent: Int? = null,
     seekThumbnailCachedFrames: Int? = null,
     seekThumbnailTotalFrames: Int? = null,
@@ -190,13 +190,13 @@ fun BasePlayerScaffold(
     skipSegmentInfo: SkipSegmentInfo? = null,
     nextEpisodeInfo: NextEpisodeInfo? = null,
     onAutoplayNextEpisode: ((currentSourceUrl: String?, positionMs: Long, durationMs: Long?) -> Unit)? = null,
-    autoplayEnabled: Boolean = false,
+    autoplayEnabled: Boolean = true,
     autoSkipIntro: Boolean = true,
     introSkipCountdownSeconds: Int = 5,
     outroSkipCountdownSeconds: Int = 5,
     onSeekPreviewPosition: (Long) -> Unit = {},
     onSourceChosen: (PlayerSourceOption) -> Unit = {},
-    autoplayThresholdMode: String = "percentage",
+    autoplayThresholdMode: String = "introdb",
     autoplayThresholdPercent: Int = 95,
     autoplayThresholdSeconds: Int = 30,
     episodes: List<MetaVideo> = emptyList(),
@@ -3566,7 +3566,11 @@ private fun buildSubtitleTrackChips(track: PlayerTrackOption): List<String> {
     if (isSubtitleOffTrack(track)) return emptyList()
 
     val chips = mutableListOf<String>()
-    chips += if (track.isExternal) "Add-on" else "Embedded"
+    chips += when {
+        !track.isExternal -> "Embedded"
+        track.subtitleSourcePriority == SubtitleSourcePriority.STREAM_PROVIDED -> "Stream"
+        else -> "Add-on"
+    }
 
     if (!track.supported) {
         chips += "Unsupported"

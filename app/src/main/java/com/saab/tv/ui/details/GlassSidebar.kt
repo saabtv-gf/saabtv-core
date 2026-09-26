@@ -40,6 +40,7 @@ import com.saab.tv.data.stream.StreamLanguageSelector
 import com.saab.tv.data.tmdb.TmdbEpisodeEnrichment
 import com.saab.tv.domain.episodeMatchesPlaybackId
 import com.saab.tv.domain.normalizeEpisodeList
+import com.saab.tv.domain.resolveEpisodePanelPosition
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -152,37 +153,10 @@ fun GlassSidebar(
     var previousState by remember { mutableStateOf<SidebarState>(SidebarState.Closed) }
     var sourceLanguageFilter by remember { mutableStateOf<String?>(null) }
 
-    // When sidebar opens with episodes, auto-navigate to the currently playing episode,
-    // reset to the beginning if freshly opened from details (Closed→Episodes),
-    // or preserve position when returning from sources (Sources→Episodes).
+    // Sources start with their language selector. Episode focus is resolved synchronously below.
     LaunchedEffect(state, currentEpisodeId) {
         if (state is SidebarState.Sources && previousState !is SidebarState.Sources) {
             sourceLanguageFilter = null
-        }
-        if (state is SidebarState.Episodes) {
-            if (currentEpisodeId != null) {
-                val seasonMap = normalizeEpisodeList(state.videos).groupBy { it.season }
-                var matched = false
-                for ((season, eps) in seasonMap) {
-                    val idx = eps.indexOfFirst { ep -> episodeMatchesPlaybackId(null, currentEpisodeId, ep) }
-                    if (idx >= 0) {
-                        savedSeason = season
-                        savedIndex = idx
-                        matched = true
-                        break
-                    }
-                }
-                if (!matched && previousState is SidebarState.Closed) {
-                    savedSeason = seasonMap.keys.minOrNull()
-                    savedIndex = 0
-                }
-            } else if (previousState is SidebarState.Closed) {
-                // Fresh open from details screen — reset to first episode
-                savedSeason = null
-                savedIndex = 0
-                runCatching { episodesListState.scrollToItem(0) }
-            }
-            // Sources→Episodes: keep savedSeason/savedIndex from the episode click
         }
         previousState = state
     }
@@ -194,7 +168,7 @@ fun GlassSidebar(
     }
     val sourceContentReady = (state as? SidebarState.Sources)?.streams != null
     LaunchedEffect(focusMode, sourceContentReady) {
-        if (isVisible) { delay(200); runCatching { focusRequester.requestFocus() } }
+        if (state is SidebarState.Sources) { delay(200); runCatching { focusRequester.requestFocus() } }
     }
 
     val isEpisodes = state is SidebarState.Episodes
@@ -258,21 +232,33 @@ fun EpisodesContent(
     onDismiss: () -> Unit
 ) {
     val seasons = remember(videos) { normalizeEpisodeList(videos).groupBy { it.season }.toSortedMap() }
-    var selectedSeason by remember(savedSeason, videos) {
-        mutableIntStateOf(savedSeason?.takeIf(seasons::containsKey) ?: seasons.keys.minOrNull() ?: 1)
+    val initialPosition = remember(videos, currentEpisodeId) {
+        resolveEpisodePanelPosition(videos, currentEpisodeId, savedSeason, savedIndex)
     }
+    var selectedSeason by remember(initialPosition) { mutableIntStateOf(initialPosition.season) }
+    var targetIndex by remember(initialPosition) { mutableIntStateOf(initialPosition.index) }
     val episodes = seasons[selectedSeason] ?: emptyList()
 
     val tabRequester = remember { FocusRequester() }
+    val episodeRequester = remember { FocusRequester() }
+    val seasonListState = rememberLazyListState()
     val scope = rememberCoroutineScope() // Needed for manual scrolling
     val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L, verticalRepeatIntervalMs = 200L) }
 
     LaunchedEffect(selectedSeason) { onSeasonChange(selectedSeason) }
 
     // Scroll to the saved episode when the sidebar opens (or back to top when savedIndex is 0)
-    LaunchedEffect(savedIndex, selectedSeason) {
-        if (episodes.isNotEmpty() && savedIndex in episodes.indices) {
-            runCatching { listState.scrollToItem(savedIndex) }
+    LaunchedEffect(targetIndex, selectedSeason) {
+        val seasonIndex = seasons.keys.indexOf(selectedSeason)
+        if (seasonIndex >= 0) seasonListState.scrollToItem(seasonIndex)
+        if (episodes.isNotEmpty()) {
+            listState.scrollToItem(targetIndex.coerceIn(episodes.indices))
+            // LazyColumn does not attach an off-screen item's focus node until layout.
+            repeat(30) {
+                withFrameNanos { }
+                if (listState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex } &&
+                    runCatching { episodeRequester.requestFocus(); true }.getOrDefault(false)) return@LaunchedEffect
+            }
         }
     }
 
@@ -280,7 +266,7 @@ fun EpisodesContent(
         Text("More Episodes", style = MaterialTheme.typography.headlineSmall, color = Color.White, modifier = Modifier.padding(bottom = 16.dp))
 
         if (seasons.isNotEmpty()) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
+            LazyRow(state = seasonListState, horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
                 itemsIndexed(seasons.keys.toList()) { idx, num ->
                     SeasonTab(
                         number = num,
@@ -294,6 +280,7 @@ fun EpisodesContent(
                             .focusProperties { up = FocusRequester.Cancel },
                         onClick = {
                             selectedSeason = num
+                            targetIndex = 0
                             // Only reset scroll to top when manually changing seasons
                             scope.launch { listState.scrollToItem(0) }
                         }
@@ -312,9 +299,9 @@ fun EpisodesContent(
             else {
                 itemsIndexed(episodes, key = { index, ep -> "${ep.season}:${ep.episode}:${ep.id}:$index" }) { index, ep ->
                     // Focus Logic: Attach requester to saved index; Attach 'Up' navigation to first index
-                    val isTarget = index == (if (savedIndex in episodes.indices) savedIndex else 0)
+                    val isTarget = index == (if (targetIndex in episodes.indices) targetIndex else 0)
                     val mod = Modifier
-                        .then(if (isTarget) Modifier.focusRequester(focusRequester) else Modifier)
+                        .then(if (isTarget) Modifier.focusRequester(episodeRequester) else Modifier)
                         .then(if (index == 0) Modifier.focusProperties { up = if (seasons.isNotEmpty()) tabRequester else FocusRequester.Cancel } else Modifier)
 
                     val isCurrentEpisode = episodeMatchesPlaybackId(null, currentEpisodeId, ep)

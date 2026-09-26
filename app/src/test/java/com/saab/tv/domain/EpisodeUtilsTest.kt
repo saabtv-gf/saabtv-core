@@ -7,6 +7,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EpisodeUtilsTest {
+    @Test fun episodePanelTargetsTheCurrentSeasonAndEpisodeBeforeComposition() {
+        val videos = episodes + (1..12).map { MetaVideo(id = "tt123:2:$it", title = "Episode $it", season = 2, episode = it) }
+        assertEquals(EpisodePanelPosition(2, 9), resolveEpisodePanelPosition(videos, "tt123:2:10"))
+        assertEquals(EpisodePanelPosition(2, 11), resolveEpisodePanelPosition(videos, "tmdb:123:2:12", 1, 0))
+        assertEquals(EpisodePanelPosition(1, 1), resolveEpisodePanelPosition(videos, "native-2"))
+        assertEquals(EpisodePanelPosition(2, 11), resolveEpisodePanelPosition(videos, "missing", 2, 99))
+        assertEquals(EpisodePanelPosition(1, 0), resolveEpisodePanelPosition(emptyList(), null))
+    }
     private val episodes = listOf(
         MetaVideo(id = "native-2", title = "Second", season = 1, episode = 2),
         MetaVideo(id = "native-1", title = "First", season = 1, episode = 1),

@@ -35,6 +35,21 @@ fun normalizeEpisodeList(episodes: List<MetaVideo>): List<MetaVideo> {
         .toList()
 }
 
+data class EpisodePanelPosition(val season: Int, val index: Int)
+
+/** Resolve before composing the panel so the first season cannot overwrite the playback target. */
+fun resolveEpisodePanelPosition(
+    videos: List<MetaVideo>, playbackId: String?, savedSeason: Int? = null, savedIndex: Int = 0
+): EpisodePanelPosition {
+    val seasons = normalizeEpisodeList(videos).groupBy { it.season }
+    seasons.forEach { (season, episodes) ->
+        val index = episodes.indexOfFirst { episodeMatchesPlaybackId(null, playbackId, it) }
+        if (index >= 0) return EpisodePanelPosition(season, index)
+    }
+    val season = savedSeason?.takeIf { it in seasons } ?: seasons.keys.firstOrNull() ?: 1
+    return EpisodePanelPosition(season, savedIndex.coerceIn(0, (seasons[season].orEmpty().size - 1).coerceAtLeast(0)))
+}
+
 /** Matches both canonical series:season:episode IDs and addon-native episode IDs. */
 fun episodeMatchesPlaybackId(
     seriesId: String?,

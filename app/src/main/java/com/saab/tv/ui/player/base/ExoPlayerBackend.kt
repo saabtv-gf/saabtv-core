@@ -207,7 +207,6 @@ class ExoPlayerBackend(
     var resolveStreamSubtitles: (suspend (PlayerSourceOption) -> List<PlayerSubtitleSource>)? = null
 
     private var externalSubtitleSources: Map<String, PlayerSubtitleSource> = emptyMap()
-    private var externalSubtitleLabelKeys: Map<String, String?> = emptyMap()
     private var okHttpClient: OkHttpClient? = null
     private var forcedSubtitleTrackId: String? = null
     private var sourcePreparedElapsedMs: Long = 0L
@@ -464,7 +463,8 @@ class ExoPlayerBackend(
             var didUpdateHint = false
             val explicitId = trackFormat.id?.trim()?.takeIf { it.isNotEmpty() }
             if (explicitId != null) {
-                val stableId = externalSubtitleTrackId(explicitId)
+                val stableId = matchExternalSubtitleTrackId(explicitId, externalSubtitleSources.keys)
+                    ?: stableTrackId("s", 0, 0, explicitId)
                 if (subtitleFormatHintsByTrackId[stableId] != formatTag) {
                     subtitleFormatHintsByTrackId[stableId] = formatTag
                     didUpdateHint = true
@@ -583,9 +583,6 @@ class ExoPlayerBackend(
             loadRequest = normalizedRequest
             externalSubtitleSources = normalizedSubtitles.associateBy { subtitle ->
                 externalSubtitleTrackId(subtitle.id)
-            }
-            externalSubtitleLabelKeys = externalSubtitleSources.mapValues { (_, source) ->
-                normalizedSubtitleLabelKey(source.label)
             }
             pendingAudioTrackId = normalizedRequest.preferredAudioTrackId
             pendingSubtitleTrackId = normalizeSubtitleSelectionId(normalizedRequest.preferredSubtitleTrackId)
@@ -1010,7 +1007,6 @@ class ExoPlayerBackend(
         _audioTracks.value = emptyList()
         _subtitleTracks.value = emptyList()
         externalSubtitleSources = emptyMap()
-        externalSubtitleLabelKeys = emptyMap()
         forcedSubtitleTrackId = null
         subtitleFormatHintsByTrackId.clear()
         subtitleFormatHintsByLabelLanguage.clear()
@@ -1101,7 +1097,6 @@ class ExoPlayerBackend(
             val activeSubtitles = (source.subtitles + matchedSubtitles.orEmpty().ifEmpty { fallbackSubtitles })
                 .distinctBy { it.url }
             externalSubtitleSources = activeSubtitles.associateBy { externalSubtitleTrackId(it.id) }
-            externalSubtitleLabelKeys = externalSubtitleSources.mapValues { normalizedSubtitleLabelKey(it.value.label) }
 
             // Include ALL external subtitles upfront as sidecar sources.
             // SingleSampleMediaSource is lazy — it won't download until the
@@ -1757,7 +1752,6 @@ class ExoPlayerBackend(
         var selectedAudioId: String? = null
         val subtitleOptionsRaw = mutableListOf<PlayerTrackOption>()
         var selectedSubtitleId: String? = null
-        val claimedExternalSubtitleIds = mutableSetOf<String>()
 
         tracks.groups.forEachIndexed { groupIndex, group ->
             val trackType = group.type
@@ -1786,14 +1780,10 @@ class ExoPlayerBackend(
                         // SubtitleConfiguration.id is carried into Format.id.
                         // Language/label matching can misclassify an embedded
                         // "English" track as an external "English" sidecar.
-                        val matchedExternalId = format.id?.takeIf { it in externalSubtitleSources }
-                            ?: rawId.takeIf { it in externalSubtitleSources }
+                        val matchedExternalId = matchExternalSubtitleTrackId(format.id, externalSubtitleSources.keys)
                         val id = matchedExternalId ?: rawId
                         val selected = group.isTrackSelected(trackIndex)
                         val externalSubtitle = externalSubtitleSources[id]
-                        if (externalSubtitle != null) {
-                            claimedExternalSubtitleIds += id
-                        }
                         subtitleTrackLocators[id] = TrackLocator(mediaTrackGroup, trackIndex)
                         if (selected) selectedSubtitleId = id
                         subtitleOptionsRaw += PlayerTrackOption(
@@ -1882,47 +1872,6 @@ class ExoPlayerBackend(
         }
     }
 
-    private fun matchExternalSubtitleId(
-        format: Format,
-        claimedExternalIds: Set<String>
-    ): String? {
-        val formatLabelKey = normalizedSubtitleLabelKey(format.label) ?: return null
-        val formatLanguageKey = normalizedSubtitleLanguageKey(format.language)
-
-        val exactMatches = externalSubtitleSources
-            .asSequence()
-            .filter { (id, _) ->
-                id !in claimedExternalIds &&
-                    externalSubtitleLabelKeys[id] == formatLabelKey
-            }
-            .toList()
-
-        val candidateMatches = if (exactMatches.isNotEmpty()) {
-            exactMatches
-        } else {
-            // Fallback for addons that mutate labels between source declaration and loaded text track.
-            externalSubtitleSources
-                .asSequence()
-                .filter { (id, _) ->
-                    if (id in claimedExternalIds) return@filter false
-                    val sourceLabelKey = externalSubtitleLabelKeys[id] ?: return@filter false
-                    sourceLabelKey.contains(formatLabelKey) || formatLabelKey.contains(sourceLabelKey)
-                }
-                .toList()
-        }
-
-        if (candidateMatches.isEmpty()) return null
-
-        return candidateMatches
-            .firstOrNull { (_, source) ->
-                val sourceLanguageKey = normalizedSubtitleLanguageKey(source.language)
-                sourceLanguageKey == null ||
-                    formatLanguageKey == null ||
-                    subtitleLanguagesRoughlyMatch(sourceLanguageKey, formatLanguageKey)
-            }
-            ?.key
-            ?: candidateMatches.first().key
-    }
 
     private fun applyPendingTrackSelections() {
         val audioId = pendingAudioTrackId
@@ -2341,11 +2290,6 @@ class ExoPlayerBackend(
 
         val stableId = externalSubtitleTrackId(cleanId)
         return if (stableId in externalSubtitleSources.keys) stableId else cleanId
-    }
-
-    private fun externalSubtitleTrackId(subtitleId: String): String {
-        val cleanId = subtitleId.trim().ifBlank { "ext_unknown" }
-        return if (cleanId.startsWith("s:")) cleanId else "s:$cleanId"
     }
 
     private fun buildExternalSubtitleLabel(

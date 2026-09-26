@@ -812,7 +812,7 @@ fun DetailsScreen(
         GlassSidebar(
             state = sidebarState,
             sourceLanguagePreferences = state.sourceLanguagePreferences,
-            currentEpisodeId = state.resumePlaybackId,
+            currentEpisodeId = state.lastPlayedEpisodeId ?: state.resumePlaybackId,
             episodeProgressMap = state.episodeProgressMap,
             episodeEnrichmentMap = state.episodeEnrichmentMap,
             onToggleWatched = { episode -> viewModel.toggleEpisodeWatched(episode) },

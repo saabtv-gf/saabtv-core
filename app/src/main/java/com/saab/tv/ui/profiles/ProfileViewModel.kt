@@ -7,6 +7,7 @@ import com.saab.tv.data.cache.SeekThumbnailCache
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.profile.ProfileConfigurationManager
 import com.saab.tv.data.profile.ProfilePin
+import com.saab.tv.data.profile.withOnboardingPreferences
 import com.saab.tv.data.trakt.TraktAuthManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -39,11 +40,22 @@ class ProfileViewModel @Inject constructor(
 
     private val _isInitializingProfile = MutableStateFlow(false)
     val isInitializingProfile: StateFlow<Boolean> = _isInitializingProfile
+    private val _wizardError = MutableStateFlow<String?>(null)
+    val wizardError: StateFlow<String?> = _wizardError
 
     // WIZARD DATA
     var tempName = ""
     var tempAvatarRef = "avatar_1"
     var tempThemeId = "void"  // Changed from tempColor
+    var tempIs4kTv = true
+    var tempLanguages = listOf("en", "te", "hi")
+        private set
+    private var createdProfileId: Int? = null
+    private var copySourceId: Int? = null
+
+    fun setupSources(): List<ProfileEntity> = _profiles.value.filter {
+        it.id != createdProfileId && !needsInitialSetup(it.id)
+    }
 
     private var editingProfileId: Int? = null
 
@@ -67,6 +79,11 @@ class ProfileViewModel @Inject constructor(
         tempName = ""
         tempAvatarRef = "avatar_1"
         tempThemeId = "void"
+        tempIs4kTv = true
+        tempLanguages = listOf("en", "te", "hi")
+        createdProfileId = null
+        copySourceId = null
+        _wizardError.value = null
         _wizardStep.value = 1
     }
 
@@ -79,6 +96,7 @@ class ProfileViewModel @Inject constructor(
     }
 
     fun cancelWizard() {
+        if (_isInitializingProfile.value) return
         _wizardStep.value = 0
         editingProfileId = null
     }
@@ -95,35 +113,77 @@ class ProfileViewModel @Inject constructor(
 
     fun setWizardTheme(themeId: String) {
         tempThemeId = themeId
+        if (editingProfileId != null) finishWizard()
+        else _wizardStep.value = if (setupSources().isNotEmpty()) 4 else 5
+    }
+
+    fun chooseManualSetup() {
+        copySourceId = null
+        _wizardStep.value = 5
+    }
+
+    fun chooseCopySetup(sourceId: Int) {
+        if (setupSources().none { it.id == sourceId }) return
+        copySourceId = sourceId
         finishWizard()
     }
 
+    fun setWizardTv(is4k: Boolean) {
+        tempIs4kTv = is4k
+        _wizardStep.value = 6
+    }
+
+    fun setWizardLanguage(priority: Int, language: String) {
+        if (_isInitializingProfile.value || _wizardStep.value != 6 + priority ||
+            priority !in 0..2 || language.isBlank() || language in tempLanguages.take(priority)) return
+        val updated = tempLanguages.toMutableList()
+        updated[priority] = language
+        // Keep defaults distinct when a prior step chooses a later step's default.
+        for (index in priority + 1..2) {
+            if (updated[index] in updated.take(index)) {
+                updated[index] = listOf("en", "te", "hi", "es", "fr").first { it !in updated.take(index) }
+            }
+        }
+        tempLanguages = updated
+        if (priority == 2) finishWizard() else _wizardStep.value = 7 + priority
+    }
+
     private fun finishWizard() {
+        if (_isInitializingProfile.value) return
+        _isInitializingProfile.value = true
+        _wizardError.value = null
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            if (editingProfileId != null) {
-                val updatedProfile = _profiles.value.find { it.id == editingProfileId }?.copy(
-                    name = tempName,
-                    avatarRef = tempAvatarRef,
-                    themeId = tempThemeId
-                )
-                if (updatedProfile != null) dao.updateProfile(updatedProfile)
-            } else {
-                val profileId = dao.insertProfile(
-                    ProfileEntity(
+            try {
+                if (editingProfileId != null) {
+                    val updatedProfile = _profiles.value.find { it.id == editingProfileId }?.copy(
                         name = tempName,
                         avatarRef = tempAvatarRef,
-                        themeId = tempThemeId,
-                        navPosition = "left",
-                        homeTabLayout = "cinematic",
-                        roundCorners = true
+                        themeId = tempThemeId
                     )
-                ).toInt()
-                if (profileId > 0) {
+                    if (updatedProfile != null) dao.updateProfile(updatedProfile)
+                } else {
+                    val newProfile = ProfileEntity(
+                        name = tempName, avatarRef = tempAvatarRef, themeId = tempThemeId
+                    ).withOnboardingPreferences(tempIs4kTv, tempLanguages)
+                    val profileId = createdProfileId?.also {
+                        // A retry may follow changes to setup; keep the pending profile in sync.
+                        dao.updateProfile(newProfile.copy(id = it))
+                    } ?: dao.insertProfile(newProfile).toInt()
+                    check(profileId > 0) { "Profile Was Not Created" }
+                    createdProfileId = profileId
                     profileConfigurationManager.markPendingSetup(profileId)
+                    val source = copySourceId
+                    if (source != null) profileConfigurationManager.initializeByCopying(profileId, source)
+                    else profileConfigurationManager.initializeFromScratch(profileId)
                 }
+                _wizardStep.value = 0
+                editingProfileId = null
+                createdProfileId = null
+            } catch (_: Exception) {
+                _wizardError.value = "Profile Setup Failed. Please Try Again."
+            } finally {
+                _isInitializingProfile.value = false
             }
-            _wizardStep.value = 0
-            editingProfileId = null
         }
     }
 
@@ -214,6 +274,9 @@ class ProfileViewModel @Inject constructor(
     }
 
     fun goBackStep() {
-        if (_wizardStep.value > 0) _wizardStep.value -= 1
+        if (_isInitializingProfile.value) return
+        _wizardError.value = null
+        if (_wizardStep.value == 5 && setupSources().isEmpty()) _wizardStep.value = 3
+        else if (_wizardStep.value > 0) _wizardStep.value -= 1
     }
 }

@@ -1070,7 +1070,7 @@ private enum class LanguageField {
     AUDIO_PRIMARY, AUDIO_SECONDARY, SUBTITLE_PRIMARY, SUBTITLE_SECONDARY
 }
 
-private val AUDIO_LANGUAGE_OPTIONS: List<Pair<String, String>> = listOf(
+internal val AUDIO_LANGUAGE_OPTIONS: List<Pair<String, String>> = listOf(
     "Default" to "",
     "English" to "en",
     "Spanish" to "es",
@@ -1513,7 +1513,7 @@ private fun SettingLanguageRow(
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun LanguagePickerContent(
+internal fun LanguagePickerContent(
     title: String,
     options: List<Pair<String, String>>,
     selectedValue: String,
@@ -1526,8 +1526,11 @@ private fun LanguagePickerContent(
     val accentColor = MaterialTheme.colorScheme.primary
 
     LaunchedEffect(selectedIndex) {
-        if (selectedIndex > 0) {
-            runCatching { listState.scrollToItem(selectedIndex) }
+        listState.scrollToItem(selectedIndex)
+        repeat(30) {
+            withFrameNanos { }
+            if (listState.layoutInfo.visibleItemsInfo.any { it.index == selectedIndex } &&
+                runCatching { focusRequester.requestFocus(); true }.getOrDefault(false)) return@LaunchedEffect
         }
     }
 

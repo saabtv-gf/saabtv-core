@@ -109,6 +109,10 @@ jobs:
             printf 'SHA-256 `%s`: `%s`\n' "$APK_NAME" "$HASH"
           } > release-notes.md
 
+          if [ -f ".github/release-notes/$VERSION.md" ]; then
+            cat ".github/release-notes/$VERSION.md" >> release-notes.md
+          fi
+
           printf 'apk=%s\n' "release/$APK_NAME" >> "$GITHUB_OUTPUT"
           printf 'checksum=%s\n' "release/$APK_NAME.sha256" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"

@@ -71,6 +71,8 @@ fun ProfileScreen(
 ) {
     val wizardStep by viewModel.wizardStep.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val isSaving by viewModel.isInitializingProfile.collectAsStateWithLifecycle()
+    val wizardError by viewModel.wizardError.collectAsStateWithLifecycle()
 
     Box(
         modifier = Modifier
@@ -115,6 +117,34 @@ fun ProfileScreen(
                         onFinish = { viewModel.setWizardTheme(it) },
                         onBack = { viewModel.goBackStep() }
                     )
+                    4 -> ProfileSetupChoiceStep(
+                        profiles = viewModel.setupSources(),
+                        onCopy = viewModel::chooseCopySetup,
+                        onManual = viewModel::chooseManualSetup,
+                        onBack = viewModel::goBackStep
+                    )
+                    5 -> ProfileTvStep(onSelect = viewModel::setWizardTv, onBack = viewModel::goBackStep)
+                    6, 7, 8 -> ProfileLanguageStep(
+                        priority = step - 6,
+                        languages = viewModel.tempLanguages,
+                        onSelect = { viewModel.setWizardLanguage(step - 6, it) },
+                        onBack = viewModel::goBackStep
+                    )
+                }
+            }
+        }
+
+        if (wizardError != null && wizardStep > 0) {
+            Text(wizardError.orEmpty(), color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp))
+        }
+        if (isSaving && wizardStep > 0) {
+            // Modal blocker: no changes or duplicate inserts while setup is being saved.
+            Dialog(onDismissRequest = {}, properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)) {
+                Row(Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp)).padding(32.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    androidx.compose.material3.CircularProgressIndicator()
+                    Text("Setting Up Profile", color = Color.White)
                 }
             }
         }

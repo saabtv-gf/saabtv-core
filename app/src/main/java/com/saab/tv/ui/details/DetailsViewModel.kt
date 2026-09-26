@@ -77,6 +77,7 @@ class DetailsViewModel @Inject constructor(
         val isLoading: Boolean = true,
         val isLoadingStreams: Boolean = false,
         val resumePlaybackId: String? = null,
+        val lastPlayedEpisodeId: String? = null,
         val isMovieWatched: Boolean = false,
         val autoPlayStream: Stream? = null,
         val addonSubtitles: List<AddonSubtitle> = emptyList(),
@@ -174,6 +175,8 @@ class DetailsViewModel @Inject constructor(
                 loadedContentKey = requestKey
                 // Use resolved ID for streams — guarantees IMDb format for stream addons
                 val streamFetchId = if (details.id.startsWith("tt")) details.id else resolvedId
+                val lastPlayedEpisodeId = if (details.type == "series")
+                    dao.getLatestSeriesEpisodeHistory("${streamFetchId}:%")?.id else null
                 val resumePlaybackId = if (details.type == "series") {
                     val latest = dao.getLatestSeriesEpisodeHistory("${streamFetchId}:%")
                     if (latest != null && !latest.watched) {
@@ -206,6 +209,7 @@ class DetailsViewModel @Inject constructor(
                     contentKey = requestKey,
                     isLoading = false,
                     resumePlaybackId = resumePlaybackId,
+                    lastPlayedEpisodeId = lastPlayedEpisodeId,
                     isMovieWatched = isMovieWatched,
                     episodeProgressMap = episodeProgressMap,
                     autoPlayStream = null,
@@ -270,6 +274,8 @@ class DetailsViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            val lastPlayedEpisodeId = if (meta.type == "series")
+                dao.getLatestSeriesEpisodeHistory("${_state.value.resolvedId ?: meta.id}:%")?.id else null
             val resumePlaybackId = if (meta.type == "series") {
                 val latest = dao.getLatestSeriesEpisodeHistory("${meta.id}:%")
                 if (latest != null && !latest.watched) {
@@ -296,6 +302,7 @@ class DetailsViewModel @Inject constructor(
                 } else emptyMap()
                 _state.value = _state.value.copy(
                     resumePlaybackId = resumePlaybackId,
+                    lastPlayedEpisodeId = lastPlayedEpisodeId,
                     isMovieWatched = isMovieWatched,
                     autoPlayStream = null,
                     episodeProgressMap = episodeProgressMap
