@@ -26,7 +26,7 @@ data class SeekThumbnailProgress(
 class SeekThumbnailCache @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private val root = File(context.cacheDir, CACHE_DIRECTORY)
+    private val root = File(context.cacheDir, "$CACHE_DIRECTORY/${com.saab.tv.data.account.AccountStorage.scope(context)}")
     private val ioDispatcher = Executors.newSingleThreadExecutor { task ->
         Thread(task, "seek-thumbnail-cache").apply { priority = Thread.MIN_PRIORITY }
     }.asCoroutineDispatcher()

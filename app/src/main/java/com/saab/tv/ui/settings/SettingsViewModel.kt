@@ -8,6 +8,7 @@ import com.saab.tv.data.cache.SeekThumbnailCache
 import com.saab.tv.data.cache.SeekThumbnailWorkerService
 import com.saab.tv.ui.player.base.SeekIntervalPolicy
 import com.saab.tv.data.profile.ProfileConfigurationManager
+import com.saab.tv.data.profile.withAutoSkipCountdown
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -128,34 +129,10 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun updateAutoSkipIntro(profileId: Int, enabled: Boolean) {
-        viewModelScope.launch(mutationDispatcher + NonCancellable) {
-            dao.getProfileById(profileId)?.let { dao.insertProfile(it.copy(autoSkipIntro = enabled)) }
-        }
-    }
-
-    fun updateIntroAutoSkipCountdown(profileId: Int, seconds: Int) {
-        val safeSeconds = when (seconds) {
-            5, 10 -> seconds
-            else -> 0
-        }
-        viewModelScope.launch(mutationDispatcher + NonCancellable) {
-            dao.getProfileById(profileId)?.let { profile ->
-                dao.insertProfile(profile.copy(
-                    autoSkipIntro = safeSeconds > 0,
-                    introSkipCountdownSeconds = safeSeconds.takeIf { it > 0 }
-                        ?: profile.introSkipCountdownSeconds
-                ))
-            }
-        }
-    }
-
-    fun updateSkipCountdown(profileId: Int, seconds: Int, intro: Boolean) {
-        val safeSeconds = if (seconds == 10) 10 else 5
+    fun updateAutoSkipCountdown(profileId: Int, seconds: Int) {
         viewModelScope.launch(mutationDispatcher + NonCancellable) {
             dao.getProfileById(profileId)?.let {
-                dao.insertProfile(if (intro) it.copy(introSkipCountdownSeconds = safeSeconds)
-                    else it.copy(outroSkipCountdownSeconds = safeSeconds))
+                dao.insertProfile(it.withAutoSkipCountdown(seconds))
             }
         }
     }

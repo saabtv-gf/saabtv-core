@@ -54,7 +54,7 @@ class TorrServerEngine @Inject constructor(
             binaryFile.setExecutable(true)
         }
 
-        val configDir = File(context.filesDir, "torrserver")
+        val configDir = File(com.saab.tv.data.account.AccountStorage.files(context), "torrserver")
         configDir.mkdirs()
 
         process = ProcessBuilder(binaryPath, "-p", PORT.toString(), "-d", configDir.absolutePath)

@@ -20,10 +20,10 @@ import javax.inject.Inject
 class SaabTvApplication : Application(), ImageLoaderFactory {
 
     @Inject
-    lateinit var imageLoader: ImageLoader
+    lateinit var imageLoader: dagger.Lazy<ImageLoader>
 
     @Inject
-    lateinit var startupOptimizer: StartupOptimizer
+    lateinit var startupOptimizer: dagger.Lazy<StartupOptimizer>
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
@@ -51,14 +51,13 @@ class SaabTvApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
-        if (currentProcessName().endsWith(THUMBNAIL_WORKER_PROCESS)) return
+        if (isHelperProcess()) return
         AppHealthMonitor.install(this)
-        startupOptimizer.warmup()
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (!currentProcessName().endsWith(THUMBNAIL_WORKER_PROCESS) &&
+        if (!isHelperProcess() &&
             level >= TRIM_MEMORY_RUNNING_LOW
         ) {
             AppHealthMonitor.recordMemoryPressure(this, level)
@@ -68,7 +67,7 @@ class SaabTvApplication : Application(), ImageLoaderFactory {
 
     override fun onLowMemory() {
         super.onLowMemory()
-        if (!currentProcessName().endsWith(THUMBNAIL_WORKER_PROCESS)) {
+        if (!isHelperProcess()) {
             AppHealthMonitor.recordMemoryPressure(this, TRIM_MEMORY_COMPLETE)
             SeekThumbnailWorkerService.cancelAll(this)
         }
@@ -83,7 +82,13 @@ class SaabTvApplication : Application(), ImageLoaderFactory {
             .orEmpty()
     }
 
-    override fun newImageLoader(): ImageLoader = imageLoader
+    fun warmupForAccount() { startupOptimizer.get().warmup() }
+
+    private fun isHelperProcess() = currentProcessName().let {
+        it.endsWith(THUMBNAIL_WORKER_PROCESS) || it.endsWith(":account_restart")
+    }
+
+    override fun newImageLoader(): ImageLoader = imageLoader.get()
 
     private companion object {
         const val THUMBNAIL_WORKER_PROCESS = ":thumbnail_worker"

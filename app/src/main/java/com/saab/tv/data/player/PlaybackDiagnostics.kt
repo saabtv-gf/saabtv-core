@@ -51,14 +51,14 @@ object PlaybackDiagnostics {
     /** Diagnostic recording is opt-in because per-frame logging adds disk I/O. */
     fun isEnabled(context: Context): Boolean {
         enabledCache?.let { return it }
-        return context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        return com.saab.tv.data.account.AccountStorage.preferences(context, PREFERENCES)
             .getBoolean(ENABLED_KEY, false)
             .also { enabledCache = it }
     }
 
     fun setEnabled(context: Context, enabled: Boolean) {
         enabledCache = enabled
-        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        com.saab.tv.data.account.AccountStorage.preferences(context, PREFERENCES)
             .edit()
             .putBoolean(ENABLED_KEY, enabled)
             .apply()

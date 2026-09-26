@@ -46,6 +46,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.ExperimentalComposeUiApi
 
 enum class SettingsSection(val label: String, @DrawableRes val iconRes: Int) {
+    Account("Account", R.drawable.info_icon),
     Personalization("Personalization", R.drawable.personalization_icon),
     Theme("Theme", R.drawable.palette_icon),
     Dashboard("Home Screen", R.drawable.home_icon),
@@ -262,6 +263,9 @@ fun SettingsScreen(
                     label = "SettingsContent"
                 ) { target ->
                     when (target) {
+                        SettingsSection.Account -> com.saab.tv.ui.account.AccountSettingsScreen(
+                            onBack = { itemRequesters[selectedSection]?.requestFocus() }
+                        )
                         SettingsSection.Personalization -> {
                             PersonalizationSettings(
                                 currentProfile = currentProfile,

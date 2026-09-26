@@ -185,7 +185,7 @@ fun AvatarUploadDialog(
 private fun saveAvatarImage(context: Context, imageBytes: ByteArray): String? {
     return try {
         // Create avatars directory if it doesn't exist
-        val avatarsDir = File(context.filesDir, "avatars")
+        val avatarsDir = File(com.saab.tv.data.account.AccountStorage.files(context), "avatars")
         if (!avatarsDir.exists()) {
             avatarsDir.mkdirs()
         }

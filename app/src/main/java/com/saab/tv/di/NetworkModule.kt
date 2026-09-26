@@ -45,7 +45,7 @@ object NetworkModule {
             maxRequestsPerHost = 8
         }
         return OkHttpClient.Builder()
-            .cache(Cache(context.cacheDir.resolve("http_metadata"), 50L * 1024L * 1024L))
+            .cache(Cache(context.cacheDir.resolve("http_metadata/${com.saab.tv.data.account.AccountStorage.scope(context)}"), 50L * 1024L * 1024L))
             .dispatcher(dispatcher)
             .retryOnConnectionFailure(true)
             .connectTimeout(15, TimeUnit.SECONDS)

@@ -342,14 +342,14 @@ class SeekThumbnailWorkerService : Service() {
     )
 
     private fun retryAllowed(request: SeekThumbnailWorkerRequest): Boolean {
-        val retryAt = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val retryAt = com.saab.tv.data.account.AccountStorage.preferences(this, PREFS_NAME)
             .getLong("$RETRY_AFTER_PREFIX${request.key.hashCode()}", 0L)
         return System.currentTimeMillis() >= retryAt
     }
 
     private fun updateRetryBackoff(request: SeekThumbnailWorkerRequest, generatedFrame: Boolean) {
         val key = "$RETRY_AFTER_PREFIX${request.key.hashCode()}"
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().apply {
+        com.saab.tv.data.account.AccountStorage.preferences(this, PREFS_NAME).edit().apply {
             if (generatedFrame) remove(key)
             else putLong(key, System.currentTimeMillis() + FAILED_BATCH_RETRY_DELAY_MS)
         }.apply()
@@ -432,12 +432,12 @@ class SeekThumbnailWorkerService : Service() {
         private const val FAILED_BATCH_RETRY_DELAY_MS = 30_000L
 
         private fun isProfileEnabled(context: Context, profileId: Int): Boolean =
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            com.saab.tv.data.account.AccountStorage.preferences(context, PREFS_NAME)
                 .getBoolean("$PROFILE_ENABLED_PREFIX$profileId", true)
 
         fun setProfileEnabled(context: Context, profileId: Int, enabled: Boolean) {
             if (profileId <= 0) return
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            com.saab.tv.data.account.AccountStorage.preferences(context, PREFS_NAME)
                 .edit()
                 .putBoolean("$PROFILE_ENABLED_PREFIX$profileId", enabled)
                 .apply()

@@ -60,6 +60,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.saab.tv.BuildConfig
 import com.saab.tv.data.model.ProfileEntity
+import com.saab.tv.data.profile.autoSkipCountdownSeconds
 import com.saab.tv.data.model.ThemeEntity
 import com.saab.tv.data.update.AppUpdateManager
 import com.saab.tv.data.update.UpdateState
@@ -340,7 +341,7 @@ fun PlaybackSettings(
             )
 
             SettingOptionRow(
-                label = "Seek & Thumbnail Interval",
+                label = "Seek Interval",
                 options = listOf("10 Seconds" to 10, "20 Seconds" to 20, "30 Seconds" to 30),
                 selectedOption = currentProfile.seekTimeIntervalSeconds,
                 onOptionSelected = {
@@ -377,14 +378,6 @@ fun PlaybackSettings(
                 onBack = onGoBack
             )
 
-            SettingOptionRow(
-                label = "Outro / Next Episode Countdown",
-                options = listOf("5 Seconds" to 5, "10 Seconds" to 10),
-                selectedOption = currentProfile.outroSkipCountdownSeconds,
-                onOptionSelected = { viewModel.updateSkipCountdown(currentProfile.id, it, intro = false) },
-                onBack = onGoBack
-            )
-
             // SKIP INTRO
             SettingToggleRow(
                 label = "Skip Intro",
@@ -394,24 +387,20 @@ fun PlaybackSettings(
                 onBack = onGoBack
             )
 
-            if (currentProfile.skipIntro) {
-                SettingOptionRow(
-                    label = "Auto-Skip Countdown",
-                    options = listOf("Off" to 0, "5 Seconds" to 5, "10 Seconds" to 10),
-                    selectedOption = if (currentProfile.autoSkipIntro) {
-                        currentProfile.introSkipCountdownSeconds
-                    } else 0,
-                    onOptionSelected = {
-                        viewModel.updateIntroAutoSkipCountdown(currentProfile.id, it)
-                    },
-                    onBack = onGoBack
-                )
-            }
+            SettingOptionRow(
+                label = "Auto-Skip Countdown",
+                options = listOf("Off" to 0, "5 Seconds" to 5, "10 Seconds" to 10),
+                selectedOption = currentProfile.autoSkipCountdownSeconds,
+                onOptionSelected = {
+                    viewModel.updateAutoSkipCountdown(currentProfile.id, it)
+                },
+                onBack = onGoBack
+            )
 
             // AUTOPLAY NEXT EPISODE
             SettingToggleRow(
                 label = "Autoplay Next Episode",
-                subtitle = "Skip detected outros and play the next episode after a 5-second countdown",
+                subtitle = "Use the Auto-Skip Countdown for detected outros and the next episode",
                 isChecked = currentProfile.autoplayNextEpisode,
                 onCheckedChange = { viewModel.updateAutoplayNextEpisode(currentProfile.id, it) },
                 onBack = onGoBack

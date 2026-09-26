@@ -8,8 +8,8 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class TvAppSmokeTest {
     @Test
-    fun coldLaunchKeepsMainActivityResponsive() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+    fun coldLaunchKeepsAccountGateResponsive() {
+        ActivityScenario.launch(com.saab.tv.ui.account.AccountEntryActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 check(!activity.isFinishing)
                 check(!activity.isDestroyed)

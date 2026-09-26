@@ -36,7 +36,7 @@ object ImageLoaderModule {
             // Disk cache for offline/fast reload
             .diskCache {
                 DiskCache.Builder()
-                    .directory(context.cacheDir.resolve("image_cache"))
+                    .directory(context.cacheDir.resolve("image_cache/${com.saab.tv.data.account.AccountStorage.scope(context)}"))
                     .maxSizeBytes(100L * 1024 * 1024) // 100MB
                     .build()
             }

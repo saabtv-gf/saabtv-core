@@ -115,6 +115,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import com.saab.tv.data.profile.ProfileConfigurationManager
+import com.saab.tv.data.profile.autoSkipCountdownSeconds
 
 import java.util.Locale
 import javax.inject.Inject
@@ -641,6 +642,8 @@ class MainActivity : ComponentActivity() {
     lateinit var profileConfigurationManager: ProfileConfigurationManager
     @Inject
     lateinit var streamSortingService: StreamSortingService
+    @Inject lateinit var accountSync: com.saab.tv.data.account.AccountSyncManager
+    @Inject lateinit var accountAuth: com.saab.tv.data.account.AccountAuthManager
 
     private var splashOverlay: SaabTvSplashView? = null
     private var splashStartedAtMs = 0L
@@ -651,8 +654,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        if (!accountAuth.hasSession) return
         lifecycleScope.launch(Dispatchers.IO) {
             profileConfigurationManager.saveActiveRuntimeState()
+            accountSync.syncNow()
         }
     }
 
@@ -733,6 +738,14 @@ class MainActivity : ComponentActivity() {
             }
         }
         super.onCreate(safeState)
+        if (!accountAuth.hasSession) {
+            startActivity(Intent(this, com.saab.tv.ui.account.AccountEntryActivity::class.java))
+            finish()
+            return
+        }
+        com.saab.tv.data.account.AccountStorage.bindRunningAccount(this)
+        (application as SaabTvApplication).warmupForAccount()
+        accountSync.start()
         window.setFormat(android.graphics.PixelFormat.RGBA_8888)
 
         // Fix sideload launch bug: pressing Home and returning re-creates the activity
@@ -1671,8 +1684,8 @@ class MainActivity : ComponentActivity() {
                                     seekThumbnailIntervalSeconds = currentProfile?.seekTimeIntervalSeconds ?: 10,
                                     autoplayNextEpisode = currentProfile?.autoplayNextEpisode ?: false,
                                     autoSkipIntro = currentProfile?.autoSkipIntro ?: true,
-                                    introSkipCountdownSeconds = currentProfile?.introSkipCountdownSeconds ?: 5,
-                                    outroSkipCountdownSeconds = currentProfile?.outroSkipCountdownSeconds ?: 5,
+                                    introSkipCountdownSeconds = currentProfile?.autoSkipCountdownSeconds ?: 5,
+                                    outroSkipCountdownSeconds = currentProfile?.autoSkipCountdownSeconds ?: 5,
                                     autoSelectSource = currentProfile?.autoSelectSource ?: false,
                                     autoplayThresholdMode = currentProfile?.autoplayThresholdMode ?: "percentage",
                                     autoplayThresholdPercent = currentProfile?.autoplayThresholdPercent ?: 95,

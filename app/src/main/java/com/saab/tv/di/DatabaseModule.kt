@@ -7,6 +7,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.saab.tv.data.local.AddonDao
 import com.saab.tv.data.local.SaabTvDatabase
+import com.saab.tv.data.account.AccountStorage
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -253,7 +254,7 @@ object DatabaseModule {
         return Room.databaseBuilder(
             context,
             SaabTvDatabase::class.java,
-            "saabtv_db"
+            AccountStorage.databaseName(context)
         )
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .addCallback(object : RoomDatabase.Callback() {

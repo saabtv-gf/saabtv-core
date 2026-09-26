@@ -2,6 +2,7 @@ package com.saab.tv.data.security
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.saab.tv.data.account.AccountStorage
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -16,14 +17,21 @@ data class SecurePreferencesResult(
 
 /** Creates an isolated encrypted store and fails closed to process-memory only. */
 object SecurePreferences {
-    fun create(context: Context, prefsName: String, keyAlias: String): SecurePreferencesResult {
+    private val stores = mutableMapOf<String, SecurePreferencesResult>()
+
+    @Synchronized
+    fun create(context: Context, prefsName: String, keyAlias: String, accountScoped: Boolean = true): SecurePreferencesResult {
+        val storageName = if (accountScoped) AccountStorage.name(context, prefsName) else prefsName
+        val storageAlias = if (accountScoped) AccountStorage.name(context, keyAlias) else keyAlias
+        val cacheKey = "${context.applicationInfo.dataDir}:$storageName:$storageAlias"
+        stores[cacheKey]?.let { return it }
         fun encrypted(): SharedPreferences {
-            val masterKey = MasterKey.Builder(context, keyAlias)
+            val masterKey = MasterKey.Builder(context, storageAlias)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
             return EncryptedSharedPreferences.create(
                 context,
-                prefsName,
+                storageName,
                 masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
@@ -31,25 +39,25 @@ object SecurePreferences {
         }
 
         runCatching { encrypted() }.getOrNull()?.let {
-            return SecurePreferencesResult(it, true)
+            return SecurePreferencesResult(it, true).also { result -> stores[cacheKey] = result }
         }
 
         // Reset only this integration's file and key. Never delete a shared alias.
         runCatching {
-            File(context.applicationInfo.dataDir, "shared_prefs/$prefsName.xml").delete()
-            File(context.applicationInfo.dataDir, "shared_prefs/$prefsName.xml.bak").delete()
+            File(context.applicationInfo.dataDir, "shared_prefs/$storageName.xml").delete()
+            File(context.applicationInfo.dataDir, "shared_prefs/$storageName.xml.bak").delete()
             KeyStore.getInstance("AndroidKeyStore").apply {
                 load(null)
-                deleteEntry(keyAlias)
+                deleteEntry(storageAlias)
             }
         }
 
         runCatching { encrypted() }.getOrNull()?.let {
-            return SecurePreferencesResult(it, true)
+            return SecurePreferencesResult(it, true).also { result -> stores[cacheKey] = result }
         }
 
         Log.e("SecurePreferences", "Encrypted storage unavailable for $prefsName; using non-persistent memory")
-        return SecurePreferencesResult(MemorySharedPreferences(), false)
+        return SecurePreferencesResult(MemorySharedPreferences(), false).also { stores[cacheKey] = it }
     }
 }
 

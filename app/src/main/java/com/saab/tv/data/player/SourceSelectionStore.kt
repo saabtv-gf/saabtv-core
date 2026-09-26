@@ -1,6 +1,7 @@
 package com.saab.tv.data.player
 
 import android.content.Context
+import com.saab.tv.data.account.AccountStorage
 import com.saab.tv.data.model.stremio.Stream
 import com.saab.tv.data.profile.ProfileConfigurationManager
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -13,7 +14,7 @@ class SourceSelectionStore @Inject constructor(
     @ApplicationContext context: Context,
     private val profileConfigurationManager: ProfileConfigurationManager
 ) {
-    private val prefs = context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
+    private val prefs = AccountStorage.preferences(context, PREFS_FILE)
 
     fun rememberSelection(playbackId: String, stream: Stream) {
         val scopedId = canonicalSourceScopeId(playbackId)

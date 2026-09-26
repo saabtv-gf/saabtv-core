@@ -23,11 +23,13 @@ class ProfileOnboardingDefaultsTest {
         val base = ProfileEntity(name = "New", themeId = "custom")
         val fourK = base.withOnboardingPreferences(true, listOf("te", "hi", "en"))
         assertTrue(fourK.tunnelingEnabled)
+        assertTrue(fourK.sourceEnabledQualities.split(",").contains("4k"))
         assertEquals("3d", fourK.sourceExcludedFormats)
         assertEquals(listOf("te", "hi", "en"), listOf(fourK.sourceLanguagePriority1, fourK.sourceLanguagePriority2, fourK.sourceLanguagePriority3))
         assertEquals("custom", fourK.themeId)
         val hd = base.withOnboardingPreferences(false, listOf("en", "fr", "de"))
         assertFalse(hd.tunnelingEnabled)
+        assertEquals("1080p,720p,unknown", hd.sourceEnabledQualities)
         assertEquals(setOf("dv", "hdr", "dts", "dolby", "hevc", "av1", "3d"), hd.sourceExcludedFormats.split(",").toSet())
     }
 

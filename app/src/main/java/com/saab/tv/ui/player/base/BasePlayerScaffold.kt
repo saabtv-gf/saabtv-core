@@ -305,7 +305,7 @@ fun BasePlayerScaffold(
         !introSkipped && start >= 0 && end > start && uiState.positionMs >= start && uiState.positionMs < end
     }
 
-    val introCountdownActive = showSkipIntro && autoSkipIntro && !introSkipCancelled &&
+    val introCountdownActive = showSkipIntro && autoSkipIntro && introSkipCountdownSeconds > 0 && !introSkipCancelled &&
         pendingPreviewSeekPosition == null
     LaunchedEffect(introCountdownActive, introSkipCountdownSeconds) {
         if (introCountdownActive) introCountdown = if (introSkipCountdownSeconds == 10) 10 else 5
@@ -323,7 +323,7 @@ fun BasePlayerScaffold(
         }
     }
 
-    val shouldShowNextEpisode = autoplayEnabled &&
+    val shouldShowNextEpisode = autoplayEnabled && outroSkipCountdownSeconds > 0 &&
         (isNearCompletion || uiState.isEnded) &&
         nextEpisodeInfo != null &&
         onAutoplayNextEpisode != null &&
@@ -339,7 +339,7 @@ fun BasePlayerScaffold(
     }
 
     val overlayVisible = countdownActive && nextEpisodeInfo != null && !autoplayCancelled && !nextEpisodeTriggered
-    val showPlayNextButton = autoplayEnabled && autoplayCancelled && !nextEpisodeTriggered &&
+    val showPlayNextButton = autoplayEnabled && (autoplayCancelled || outroSkipCountdownSeconds <= 0) && !nextEpisodeTriggered &&
         nextEpisodeInfo != null &&
         onAutoplayNextEpisode != null &&
         uiState.errorMessage.isNullOrBlank() &&

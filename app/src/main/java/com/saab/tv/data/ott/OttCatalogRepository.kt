@@ -98,8 +98,7 @@ class OttCatalogRepository @Inject constructor(
         val genres: List<String>? = null
     )
 
-    private val preferences = context.applicationContext
-        .getSharedPreferences(CACHE_PREFERENCES, Context.MODE_PRIVATE)
+    private val preferences = com.saab.tv.data.account.AccountStorage.preferences(context, CACHE_PREFERENCES)
     private val gson = Gson()
     private val justWatchClient = JustWatchOttClient(okHttpClient)
     private val cacheMutex = Mutex()

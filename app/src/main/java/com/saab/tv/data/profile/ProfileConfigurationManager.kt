@@ -2,6 +2,7 @@ package com.saab.tv.data.profile
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.saab.tv.data.account.AccountStorage
 import android.util.AtomicFile
 import com.google.gson.Gson
 import com.saab.tv.data.auth.StremioAuthManager
@@ -49,7 +50,7 @@ class ProfileConfigurationManager @Inject constructor(
 
     private val gson = Gson()
     private val prefs: SharedPreferences by lazy {
-        context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
+        AccountStorage.preferences(context, PREFS_FILE)
     }
 
     private var startupRuntimeCaptured = false
@@ -265,7 +266,7 @@ class ProfileConfigurationManager @Inject constructor(
     }
 
     private fun snapshotFile(profileId: Int): File {
-        return File(File(context.filesDir, SNAPSHOT_DIR), "profile_$profileId.json")
+        return File(File(AccountStorage.files(context), SNAPSHOT_DIR), "profile_$profileId.json")
     }
 
     private fun getPendingSetupIds(): Set<String> {

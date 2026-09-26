@@ -278,10 +278,12 @@ fun HubCategoryManagerDialog(
                 // Save to internal storage
                 val filename = "hub_item_${java.util.UUID.randomUUID()}.jpg"
                 try {
-                    context.openFileOutput(filename, android.content.Context.MODE_PRIVATE).use {
+                    val imageFile = java.io.File(com.saab.tv.data.account.AccountStorage.files(context), "hub_images/$filename")
+                    imageFile.parentFile?.mkdirs()
+                    imageFile.outputStream().use {
                         it.write(bytes)
                     }
-                    val path = context.getFileStreamPath(filename).absolutePath
+                    val path = imageFile.absolutePath
 
                     // Update item with new path in real-time
                     val mutable = currentItems.toMutableList()

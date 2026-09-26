@@ -39,7 +39,7 @@
             tools:targetApi="q" />
 
         <activity
-            android:name=".MainActivity"
+            android:name=".ui.account.AccountEntryActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.SaabTv">
@@ -49,6 +49,18 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ui.account.AccountRestartActivity"
+            android:exported="false"
+            android:process=":account_restart"
+            android:theme="@style/Theme.SaabTv" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.SaabTv" />
 
         <activity
             android:name=".ui.trailer.YouTubeTrailerActivity"

@@ -1,6 +1,7 @@
 package com.saab.tv.data.player
 
 import android.content.Context
+import com.saab.tv.data.account.AccountStorage
 import com.saab.tv.data.profile.ProfileConfigurationManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -17,7 +18,7 @@ class PlaybackTrackSelectionStore @Inject constructor(
         val subtitleDelayMs: Long? = null
     )
 
-    private val prefs = context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
+    private val prefs = AccountStorage.preferences(context, PREFS_FILE)
 
     fun getSelection(playbackId: String): Selection? {
         val scopedId = canonicalPlaybackId(playbackId) ?: return null
