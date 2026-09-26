@@ -1,0 +1,23 @@
+libmpv-android v1.0.0
+Source: https://github.com/jarnedemeulemeester/libmpv-android/tree/v1.0.0
+Release asset: libmpv-release.aar
+Original SHA-256: df146592480fc8418415a06b1f1a1d6318b0088e21f52254b0e9a82b61ca8fa2
+
+The wrapper is MIT licensed. The bundled mpv and FFmpeg components retain their
+respective upstream licenses. Saab TV is licensed under GPL-3.0.
+
+Local packaging modification: private FFmpeg and libc++ ELF filenames, SONAMEs,
+DT_NEEDED entries, and GNU ELF version-requirement filenames are namespaced with
+the libsaabmpv_ prefix. This prevents them from colliding with the application's
+existing playback native libraries while remaining valid for Android's strict
+dynamic linker.
+The Java 21 wrapper bytecode is replaced by the same MIT-licensed wrapper built
+from source by Saab TV for its Java 17 target.
+
+ThumbFast design reference
+Source: https://github.com/po5/thumbfast
+License: MPL-2.0
+
+No ThumbFast source code is bundled. The thumbnail worker independently adopts
+the persistent secondary-player design, serialized keyframe seeks, small output,
+network opt-in, and idle/cancellation lifecycle concepts.

@@ -1,0 +1,68 @@
+# Built application files
+*.apk
+*.aab
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+build/
+
+# Gradle files
+.gradle/
+.kotlin/
+
+# Local configuration file (sdk path, etc)
+local.properties
+release-signing.properties
+
+# Android Studio
+*.iml
+.idea/
+.navigation/
+captures/
+
+# External native build
+.externalNativeBuild/
+.cxx/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Keystore files (never commit signing keys)
+*.jks
+*.keystore
+
+# Log files
+*.log
+
+# Cloudflare Wrangler cache
+.wrangler/
+
+# Release build outputs
+app/release/
+
+# Extracted library sources
+org/
+
+# Superseded upstream libmpv archive. The build uses the namespaced archive.
+app/libs/libmpv-release.aar
+
+# Orphaned files (not part of source)
+demo.mp4
+screen.png
+recovery/
+android-file-chooser/

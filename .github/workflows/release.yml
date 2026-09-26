@@ -1,0 +1,130 @@
+name: Release Saab TV
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.repository == 'saabtv-gf/saabtv-core'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set Up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set Up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set Up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore Signing Key And Configuration
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SAABTV_RELEASE_KEYSTORE_BASE64 }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+          ACRA_URL: ${{ secrets.ACRA_URL }}
+          ACRA_TOKEN: ${{ secrets.ACRA_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "SAABTV_RELEASE_KEYSTORE_BASE64 is not configured."
+            exit 1
+          fi
+
+          printf '%s' "$KEYSTORE_BASE64" |
+            base64 --decode > "$RUNNER_TEMP/saabtv-release.jks"
+
+          {
+            printf 'tmdb.api_key=%s\n' "$TMDB_API_KEY"
+            printf 'TRAKT_CLIENT_ID=%s\n' "$TRAKT_CLIENT_ID"
+            printf 'TRAKT_CLIENT_SECRET=%s\n' "$TRAKT_CLIENT_SECRET"
+            printf 'acra.url=%s\n' "$ACRA_URL"
+            printf 'acra.token=%s\n' "$ACRA_TOKEN"
+          } > local.properties
+
+      - name: Confirm Tag Matches App Version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          SOURCE_VERSION="$(
+            sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' \
+              app/build.gradle.kts
+          )"
+
+          if [ "$TAG_VERSION" != "$SOURCE_VERSION" ]; then
+            echo "Tag version $TAG_VERSION does not match app version $SOURCE_VERSION."
+            exit 1
+          fi
+
+      - name: Test And Build Signed 32-Bit APK
+        env:
+          SAABTV_RELEASE_STORE_FILE: ${{ runner.temp }}/saabtv-release.jks
+          SAABTV_RELEASE_STORE_PASSWORD: ${{ secrets.SAABTV_RELEASE_STORE_PASSWORD }}
+          SAABTV_RELEASE_KEY_ALIAS: ${{ secrets.SAABTV_RELEASE_KEY_ALIAS }}
+          SAABTV_RELEASE_KEY_PASSWORD: ${{ secrets.SAABTV_RELEASE_KEY_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon \
+            :app:testDebugUnitTest \
+            :app:lintRelease \
+            :app:assembleRelease \
+            -Psaab32BitOnly=true
+
+      - name: Prepare Release Files
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          APK_NAME="saab-tv-${VERSION}-armeabi-v7a.apk"
+          SOURCE_APK="app/build/outputs/apk/release/app-armeabi-v7a-release.apk"
+
+          mkdir -p release
+          cp "$SOURCE_APK" "release/$APK_NAME"
+
+          HASH="$(sha256sum "release/$APK_NAME" | awk '{print $1}')"
+          printf '%s  %s\n' "$HASH" "$APK_NAME" > "release/$APK_NAME.sha256"
+
+          {
+            printf 'Signed 32-bit Android TV release.\n\n'
+            printf 'SHA-256 `%s`: `%s`\n' "$APK_NAME" "$HASH"
+          } > release-notes.md
+
+          printf 'apk=%s\n' "release/$APK_NAME" >> "$GITHUB_OUTPUT"
+          printf 'checksum=%s\n' "release/$APK_NAME.sha256" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK: ${{ steps.prepare.outputs.apk }}
+          CHECKSUM: ${{ steps.prepare.outputs.checksum }}
+          VERSION: ${{ steps.prepare.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$APK" \
+            "$CHECKSUM" \
+            --verify-tag \
+            --latest \
+            --title "Saab TV $VERSION" \
+            --generate-notes \
+            --notes "$(cat release-notes.md)"

@@ -1,0 +1,231 @@
+# Curated fallback profile for Saab TV. Regenerate device-observed rules with
+# :benchmark:connectedCheck before performance releases.
+
+# ============================================================================
+# DEVICE-GENERATED RULES REPLACE BROAD PACKAGE WILDCARDS
+# ============================================================================
+
+# ============================================================================
+# STARTUP CRITICAL PATH
+# ============================================================================
+
+# Application startup
+HSPLcom/saab/tv/SaabTvApplication;->onCreate()V
+HSPLcom/saab/tv/SaabTvApplication;->newImageLoader()Lcoil/ImageLoader;
+HSPLcom/saab/tv/StartupOptimizer;->warmup()V
+
+# MainActivity lifecycle
+HSPLcom/saab/tv/MainActivity;->onCreate(Landroid/os/Bundle;)V
+
+# Hilt DI initialization
+HSPLdagger/hilt/android/internal/**;->**(**)**
+
+# ============================================================================
+# COIL IMAGE LOADING - Critical for smooth first scroll
+# ============================================================================
+
+# Memory cache operations
+HSPLcoil/memory/MemoryCache$Builder;->**(**)**
+HSPLcoil/memory/RealMemoryCache;->**(**)**
+
+# Disk cache operations
+HSPLcoil/disk/DiskCache$Builder;->**(**)**
+HSPLcoil/disk/RealDiskCache;->**(**)**
+
+# Image request execution
+HSPLcoil/request/ImageRequest$Builder;->**(**)**
+HSPLcoil/RealImageLoader;->**(**)**
+HSPLcoil/decode/**;->**(**)**
+HSPLcoil/fetch/**;->**(**)**
+
+# ============================================================================
+# COMPOSE UI - Critical for first frame
+# ============================================================================
+
+# Composition
+HSPLandroidx/compose/runtime/CompositionImpl;->**(**)**
+HSPLandroidx/compose/runtime/Composer**;->**(**)**
+HSPLandroidx/compose/runtime/Recomposer;->**(**)**
+HSPLandroidx/compose/runtime/SnapshotState**;->**(**)**
+HSPLandroidx/compose/runtime/external/kotlinx/collections/immutable/**;->**(**)**
+
+# Layout
+HSPLandroidx/compose/ui/layout/**;->**(**)**
+HSPLandroidx/compose/foundation/layout/**;->**(**)**
+
+# Lazy lists - critical for scrolling
+HSPLandroidx/compose/foundation/lazy/LazyListState;->**(**)**
+HSPLandroidx/compose/foundation/lazy/LazyListKt**;->**(**)**
+HSPLandroidx/compose/foundation/lazy/LazyListMeasuredItem;->**(**)**
+HSPLandroidx/compose/foundation/lazy/LazyListItemProvider;->**(**)**
+HSPLandroidx/compose/foundation/lazy/LazyRow**;->**(**)**
+HSPLandroidx/compose/foundation/lazy/LazyColumn**;->**(**)**
+
+# Animation - smooth navigation transitions
+HSPLandroidx/compose/animation/**;->**(**)**
+HSPLandroidx/compose/animation/core/**;->**(**)**
+
+# Lifecycle / collectAsState
+HSPLandroidx/lifecycle/compose/**;->**(**)**
+
+# TV Material components
+HSPLandroidx/tv/material3/**;->**(**)**
+
+# ============================================================================
+# SAAB TV UI - Home screen critical path
+# ============================================================================
+
+HSPLcom/saab/tv/ui/home/HomeScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/home/HomeViewModel;->**(**)**
+HSPLcom/saab/tv/ui/home/HomeViewModel$HomeState;->**(**)**
+HSPLcom/saab/tv/ui/home/InfiniteLoopRowKt;->**(**)**
+HSPLcom/saab/tv/ui/home/HubRowKt;->**(**)**
+HSPLcom/saab/tv/ui/home/HubCardKt;->**(**)**
+HSPLcom/saab/tv/ui/home/HeroCarouselKt;->**(**)**
+HSPLcom/saab/tv/ui/home/SaabTvCardKt;->**(**)**
+HSPLcom/saab/tv/ui/home/GridViewScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/home/ViewMoreCardKt;->**(**)**
+HSPLcom/saab/tv/ui/home/DpadRepeatGateKt;->**(**)**
+HSPLcom/saab/tv/ui/home/FocusPivotSpecKt;->**(**)**
+
+# Card & background components
+HSPLcom/saab/tv/ui/components/SaabTvBackgroundKt;->**(**)**
+HSPLcom/saab/tv/ui/components/GlassComponentsKt;->**(**)**
+HSPLcom/saab/tv/ui/components/CenterCarouselRowKt;->**(**)**
+
+# Navigation
+HSPLcom/saab/tv/ui/navigation/**;->**(**)**
+
+# ============================================================================
+# SAAB TV UI - Secondary screens
+# ============================================================================
+
+# Details
+HSPLcom/saab/tv/ui/details/DetailsScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/details/DetailsViewModel;->**(**)**
+HSPLcom/saab/tv/ui/details/GlassSidebarKt;->**(**)**
+
+# Search
+HSPLcom/saab/tv/ui/search/SearchScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/search/SearchViewModel;->**(**)**
+HSPLcom/saab/tv/ui/search/VirtualKeyboardKt;->**(**)**
+
+# Settings
+HSPLcom/saab/tv/ui/settings/SettingsScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/settings/SettingsViewModel;->**(**)**
+HSPLcom/saab/tv/ui/settings/SettingsSubScreensKt;->**(**)**
+HSPLcom/saab/tv/ui/settings/DashboardEditorScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/settings/DashboardViewModel;->**(**)**
+HSPLcom/saab/tv/ui/settings/ThemeScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/settings/ThemeEditorScreenKt;->**(**)**
+
+# Player
+HSPLcom/saab/tv/ui/player/PlayerScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/player/PlayerViewModel;->**(**)**
+HSPLcom/saab/tv/ui/player/base/PlayerModelsKt;->**(**)**
+HSPLcom/saab/tv/ui/player/base/ExoPlayerBackend;->**(**)**
+HSPLcom/saab/tv/ui/player/base/ComposePlayerSurfaceKt;->**(**)**
+HSPLcom/saab/tv/ui/player/base/BasePlayerScaffoldKt;->**(**)**
+
+# Profiles
+HSPLcom/saab/tv/ui/profiles/ProfileScreenKt;->**(**)**
+HSPLcom/saab/tv/ui/profiles/ProfileViewModel;->**(**)**
+
+# ============================================================================
+# SAAB TV VIEWMODELS & UTILS
+# ============================================================================
+
+HSPLcom/saab/tv/ui/MainViewModel;->**(**)**
+HSPLcom/saab/tv/ui/theme/ThemeManager;->**(**)**
+HSPLcom/saab/tv/ui/theme/Theme**;->**(**)**
+HSPLcom/saab/tv/ui/utils/ImagePrefetcher**;->**(**)**
+HSPLcom/saab/tv/ui/utils/FocusUtils**;->**(**)**
+
+# ============================================================================
+# DATA LAYER - Repository, DAO, DI
+# ============================================================================
+
+HSPLcom/saab/tv/data/repository/AddonRepository;->**(**)**
+HSPLcom/saab/tv/data/repository/SubtitleRepository;->**(**)**
+HSPLcom/saab/tv/data/repository/IntroRepository;->**(**)**
+HSPLcom/saab/tv/data/local/AddonDao_Impl;->**(**)**
+HSPLcom/saab/tv/data/local/SaabTvDatabase_Impl;->**(**)**
+HSPLcom/saab/tv/data/profile/ProfileConfigurationManager;->**(**)**
+HSPLcom/saab/tv/data/auth/StremioAuthManager;->**(**)**
+HSPLcom/saab/tv/data/player/SourceSelectionStore;->**(**)**
+HSPLcom/saab/tv/data/player/PlaybackTrackSelectionStore;->**(**)**
+
+# DI modules
+HSPLcom/saab/tv/di/DatabaseModule;->**(**)**
+HSPLcom/saab/tv/di/NetworkModule;->**(**)**
+HSPLcom/saab/tv/di/ImageLoaderModule;->**(**)**
+
+# ============================================================================
+# DATA MODELS - Hot deserialization paths
+# ============================================================================
+
+# Stremio models (Gson deserialization)
+HSPLcom/saab/tv/data/model/stremio/MetaItem;->**(**)**
+HSPLcom/saab/tv/data/model/stremio/MetaVideo;->**(**)**
+HSPLcom/saab/tv/data/model/stremio/MetaResponse;->**(**)**
+HSPLcom/saab/tv/data/model/stremio/CatalogResponse;->**(**)**
+HSPLcom/saab/tv/data/model/stremio/Stream;->**(**)**
+HSPLcom/saab/tv/data/model/stremio/StreamResponse;->**(**)**
+
+# Room entities
+HSPLcom/saab/tv/data/model/WatchHistoryEntity;->**(**)**
+HSPLcom/saab/tv/data/model/ProfileEntity;->**(**)**
+HSPLcom/saab/tv/data/model/AddonEntity;->**(**)**
+HSPLcom/saab/tv/data/model/CatalogConfigEntity;->**(**)**
+HSPLcom/saab/tv/data/model/ThemeEntity;->**(**)**
+HSPLcom/saab/tv/data/model/HubRowEntity;->**(**)**
+HSPLcom/saab/tv/data/model/HubRowItemEntity;->**(**)**
+HSPLcom/saab/tv/data/model/HubRowWithItems;->**(**)**
+
+# Domain models
+HSPLcom/saab/tv/domain/HomeRow;->**(**)**
+HSPLcom/saab/tv/domain/CategoryRow;->**(**)**
+HSPLcom/saab/tv/domain/HubGroupRow;->**(**)**
+HSPLcom/saab/tv/domain/HubItem;->**(**)**
+HSPLcom/saab/tv/domain/HubShape;->**(**)**
+HSPLcom/saab/tv/domain/DashboardTab;->**(**)**
+HSPLcom/saab/tv/domain/HeroConfig;->**(**)**
+HSPLcom/saab/tv/domain/AddonSubtitle;->**(**)**
+
+# ============================================================================
+# NETWORKING - Faster first API call
+# ============================================================================
+
+HSPLretrofit2/Retrofit;->**(**)**
+HSPLretrofit2/OkHttpCall;->**(**)**
+HSPLokhttp3/OkHttpClient;->**(**)**
+HSPLokhttp3/internal/connection/RealConnectionPool;->**(**)**
+HSPLokhttp3/internal/http2/**;->**(**)**
+
+# ============================================================================
+# ROOM DATABASE - Faster first query
+# ============================================================================
+
+HSPLandroidx/room/RoomDatabase;->**(**)**
+
+# ============================================================================
+# GSON DESERIALIZATION - First API response parsing
+# ============================================================================
+
+HSPLcom/google/gson/Gson;->**(**)**
+HSPLcom/google/gson/internal/bind/**;->**(**)**
+HSPLcom/google/gson/reflect/TypeToken;->**(**)**
+HSPLcom/google/gson/stream/JsonReader;->**(**)**
+
+# ============================================================================
+# SHARED PREFERENCES - Profile loading
+# ============================================================================
+
+HSPLandroid/app/SharedPreferencesImpl;->**(**)**
+HSPLandroidx/security/crypto/EncryptedSharedPreferences;->**(**)**
+
+# ============================================================================
+# COROUTINES - Background processing
+# ============================================================================
+
+HSPLkotlinx/coroutines/**;->**(**)**
