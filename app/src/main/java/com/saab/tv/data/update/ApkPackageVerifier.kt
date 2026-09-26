@@ -25,6 +25,16 @@ internal object ApkPackageVerifier {
         if (archive.packageName != context.packageName) {
             return ApkVerificationResult(false, "Downloaded package identity does not match Saab TV")
         }
+        if ((archive.applicationInfo?.minSdkVersion ?: 0) > Build.VERSION.SDK_INT) {
+            return ApkVerificationResult(false, "This update requires a newer Android version than this TV supports")
+        }
+        val nativeAbis = java.util.zip.ZipFile(apkFile).use { zip ->
+            zip.entries().asSequence().map { it.name }.filter { it.startsWith("lib/") && it.endsWith(".so") }
+                .map { it.split('/')[1] }.toSet()
+        }
+        if (nativeAbis.isNotEmpty() && nativeAbis.none { it in Build.SUPPORTED_ABIS }) {
+            return ApkVerificationResult(false, "Downloaded APK does not support this TV’s CPU architecture")
+        }
         val installed = runCatching {
             @Suppress("DEPRECATION")
             packageManager.getPackageInfo(context.packageName, flags)
@@ -36,7 +46,10 @@ internal object ApkPackageVerifier {
 
         val candidate = currentSignerDigests(archive)
         val trusted = signingHistoryDigests(installed)
-        if (candidate.isEmpty() || trusted.isEmpty() || candidate.none(trusted::contains)) {
+        val installedHasMultipleSigners = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && installed.signingInfo?.hasMultipleSigners() == true
+        val signersMatch = if (installedHasMultipleSigners) candidate == currentSignerDigests(installed)
+            else candidate.size == 1 && trusted.containsAll(candidate)
+        if (candidate.isEmpty() || trusted.isEmpty() || !signersMatch) {
             return ApkVerificationResult(false, "Downloaded APK is not signed by the Saab TV release key")
         }
         return ApkVerificationResult(true, "Package name, version and signing certificate verified")
@@ -55,7 +68,7 @@ internal object ApkPackageVerifier {
     @Suppress("DEPRECATION")
     private fun signingHistoryDigests(info: PackageInfo): Set<String> {
         val signatures: Array<out Signature> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            info.signingInfo?.signingCertificateHistory.orEmpty()
+            info.signingInfo?.let { if (it.hasMultipleSigners()) it.apkContentsSigners else it.signingCertificateHistory }.orEmpty()
         } else {
             info.signatures.orEmpty()
         }

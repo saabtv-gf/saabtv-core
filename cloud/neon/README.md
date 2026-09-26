@@ -18,7 +18,7 @@ The availability RPC returns only a boolean. Account snapshots are protected by 
 - Backups are AES-GCM encrypted on the TV. The encryption key is derived using PBKDF2-HMAC-SHA256 (210,000 iterations) from the password and stable account ID. Session credentials and the derived key are kept in Android Keystore-backed encrypted preferences.
 - Local PIN/runtime state remains subject to Android app sandbox protection. Cloud encryption does not replace a device lock or protect a rooted TV.
 - Existing local profiles can be explicitly imported once. Original data is retained. Sign-out keeps the isolated local account cache; it does not delete the account or cloud backup.
-- Sync is debounced and retried periodically while the app runs. Offline playback continues with cached account data. A conflicting cloud copy requires choosing Restore Cloud or Keep This TV in Account settings; it is not merged automatically.
+- Routine changes are coalesced into automatic sync attempts no more than once per 60 seconds while the app runs; unchanged data is not uploaded. Opening keyboards, TV settings or the installer does not force a cloud write. Sync Now and sign-out can explicitly flush immediately. Offline playback continues with cached account data. A conflicting cloud copy requires choosing Restore Backup or Use This TV’s Data in Account settings; it is not merged automatically.
 - A cloud restore is journaled as ciphertext so an interrupted restore can safely replay at next launch. Account changes restart the app process to clear account-owned singleton state.
 
 ## Validation

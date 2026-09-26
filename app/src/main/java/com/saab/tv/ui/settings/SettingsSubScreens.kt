@@ -64,6 +64,10 @@ import com.saab.tv.data.profile.autoSkipCountdownSeconds
 import com.saab.tv.data.model.ThemeEntity
 import com.saab.tv.data.update.AppUpdateManager
 import com.saab.tv.data.update.UpdateState
+import com.saab.tv.ui.components.SetupButton
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.saab.tv.ui.details.GlassSidebarScaffold
 import com.saab.tv.ui.theme.ThemeManager
 import kotlinx.coroutines.delay
@@ -633,6 +637,7 @@ fun SettingToggleRow(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val accentColor = MaterialTheme.colorScheme.primary
+
 
     LaunchedEffect(isFocused) {
         if (isFocused) onFocus()
@@ -1988,6 +1993,14 @@ fun AboutSettings(
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val accentColor = MaterialTheme.colorScheme.primary
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, updateManager) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) scope.launch { updateManager.resumePendingUpdate() }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Column(
         modifier = Modifier
@@ -2037,49 +2050,26 @@ fun AboutSettings(
         Spacer(Modifier.height(12.dp))
 
         // CHECK FOR UPDATES BUTTON
-        val checkInteraction = remember { MutableInteractionSource() }
-        val isCheckFocused by checkInteraction.collectIsFocusedAsState()
-        val checkScale by animateFloatAsState(if (isCheckFocused) 1.02f else 1f)
         val isChecking = updateState is UpdateState.Checking
-        val isDownloading = updateState is UpdateState.Downloading
+        val isDownloading = updateState is UpdateState.Downloading || updateState is UpdateState.Verifying || updateState is UpdateState.AwaitingInstallPermission
 
-        Row(
+        SetupButton(
+            text = if (isChecking) "Checking…" else "Check For Updates",
+            enabled = !isChecking && !isDownloading,
+            onClick = { scope.launch { updateManager.checkForUpdate() } },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp)
                 .onPreviewKeyEvent {
                     if (it.key == Key.DirectionLeft && it.type == KeyEventType.KeyDown) {
                         onGoBack(); true
                     } else false
                 }
-                .scale(checkScale)
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (isCheckFocused) accentColor.copy(0.15f) else Color.White.copy(0.05f))
-                .border(
-                    if (isCheckFocused) 1.dp else 0.dp,
-                    if (isCheckFocused) accentColor else Color.Transparent,
-                    RoundedCornerShape(8.dp)
-                )
-                .clickable(interactionSource = checkInteraction, indication = null) {
-                    if (!isChecking && !isDownloading) {
-                        scope.launch { updateManager.checkForUpdate() }
-                    }
-                }
-                .focusable(interactionSource = checkInteraction)
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = when (updateState) {
-                    is UpdateState.Checking -> "Checking..."
-                    is UpdateState.UpToDate -> "You're up to date"
-                    is UpdateState.Error -> (updateState as UpdateState.Error).message
-                    else -> "Check for Updates"
-                },
-                color = if (isCheckFocused) Color.White else Color.White.copy(0.8f),
-                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium, fontSize = 15.sp)
-            )
+        )
+        if (updateState is UpdateState.UpToDate) Text("You’re Up To Date", modifier = Modifier.padding(top = 12.dp), color = accentColor)
+        if (updateState is UpdateState.Error) {
+            Text((updateState as UpdateState.Error).message, modifier = Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium)
+            SetupButton("Retry Update", { scope.launch { updateManager.retryDownload() } }, modifier = Modifier.padding(top = 12.dp))
         }
 
         // UPDATE AVAILABLE SECTION
@@ -2108,73 +2098,56 @@ fun AboutSettings(
             Spacer(Modifier.height(12.dp))
 
             // DOWNLOAD BUTTON
-            val dlInteraction = remember { MutableInteractionSource() }
-            val isDlFocused by dlInteraction.collectIsFocusedAsState()
-            val dlScale by animateFloatAsState(if (isDlFocused) 1.02f else 1f)
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .scale(dlScale)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isDlFocused) accentColor.copy(0.3f) else accentColor.copy(0.15f))
-                    .border(
-                        if (isDlFocused) 1.dp else 0.dp,
-                        if (isDlFocused) accentColor else Color.Transparent,
-                        RoundedCornerShape(8.dp)
-                    )
-                    .clickable(interactionSource = dlInteraction, indication = null) {
-                        scope.launch { updateManager.downloadAndInstall(info.apkUrl, info.sha256) }
-                    }
-                    .focusable(interactionSource = dlInteraction)
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    "Download & Install",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                )
-            }
+            SetupButton("Download And Install", { scope.launch { updateManager.downloadAndInstall(info.apkUrl, info.sha256) } },
+                modifier = Modifier.fillMaxWidth(), primary = true)
         }
 
         // DOWNLOAD PROGRESS
         if (updateState is UpdateState.Downloading) {
-            val progress = (updateState as UpdateState.Downloading).progress
+            val download = updateState as UpdateState.Downloading
+            val progress = download.progress
             Spacer(Modifier.height(16.dp))
             Text(
-                "Downloading... ${(progress * 100).toInt()}%",
+                if (progress < 0) "Downloading… %.1f MB".format(download.downloadedMb)
+                else "Downloading… ${(progress * 100).toInt()}% · %.1f / %.1f MB".format(download.downloadedMb, download.totalMb),
                 color = accentColor,
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
             )
             Spacer(Modifier.height(8.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(0.1f))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(accentColor)
-                )
+            if (progress < 0) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+            else androidx.compose.material3.LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+        }
+
+        if (updateState is UpdateState.AwaitingInstallPermission) {
+            Text("Allow Saab TV To Install Updates", modifier = Modifier.padding(top = 16.dp), color = accentColor)
+            Text("In TV Settings, enable installation from Saab TV. The download starts only after permission is granted. Return here with Back.",
+                style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                SetupButton("Open TV Settings", { updateManager.openInstallPermissionSettings() }, primary = true)
+                SetupButton("Cancel", { updateManager.cancelPendingUpdate() })
             }
+        }
+        if (updateState is UpdateState.Verifying) {
+            Text("Verifying Update…", modifier = Modifier.padding(top = 16.dp), color = accentColor)
+            Text("Checking checksum, package, Android version, CPU and signing certificate.", style = MaterialTheme.typography.bodyMedium)
         }
 
         // READY TO INSTALL
         if (updateState is UpdateState.ReadyToInstall) {
             Spacer(Modifier.height(16.dp))
             Text(
-                "Download complete. Installing...",
+                "Update Verified. Confirm Installation On Your TV.",
                 color = accentColor,
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
             )
+            SetupButton("Install Update", { scope.launch { updateManager.installDownloaded((updateState as UpdateState.ReadyToInstall).file) } },
+                primary = true, modifier = Modifier.padding(top = 12.dp))
+        }
+        if (updateState is UpdateState.InstallError) {
+            val failed = updateState as UpdateState.InstallError
+            Text(failed.message, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp), style = MaterialTheme.typography.bodyMedium)
+            SetupButton("Retry Installation", { scope.launch { updateManager.installDownloaded(failed.file) } }, primary = true, modifier = Modifier.padding(top = 12.dp))
+            SetupButton("Download Again", { scope.launch { updateManager.retryDownload() } }, modifier = Modifier.padding(top = 12.dp))
         }
     }
 }

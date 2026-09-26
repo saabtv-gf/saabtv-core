@@ -13,42 +13,31 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.window.Dialog
 import com.saab.tv.data.model.ProfileEntity
-import com.saab.tv.ui.addons.VoidButton
-import com.saab.tv.ui.details.FilterDropdown
+import com.saab.tv.ui.components.SetupButton
+import com.saab.tv.ui.components.ProfileSetupLayout
 import com.saab.tv.ui.settings.AUDIO_LANGUAGE_OPTIONS
 import com.saab.tv.ui.settings.LanguagePickerContent
-
-@Composable
-private fun SetupStep(title: String, description: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    BackHandler(onBack = onBack)
-    Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center) {
-        Text(title, style = MaterialTheme.typography.headlineMedium, color = Color.White)
-        Spacer(Modifier.height(12.dp))
-        Text(description, style = MaterialTheme.typography.bodyLarge, color = Color.LightGray)
-        Spacer(Modifier.height(28.dp))
-        content()
-        Spacer(Modifier.height(24.dp))
-        VoidButton(text = "Back", onClick = onBack, modifier = Modifier.width(180.dp))
-    }
-}
 
 @Composable
 internal fun ProfileSetupChoiceStep(profiles: List<ProfileEntity>, onCopy: (Int) -> Unit, onManual: () -> Unit, onBack: () -> Unit) {
     val requester = remember { FocusRequester() }
     var selectedId by remember(profiles) { mutableIntStateOf(profiles.firstOrNull()?.id ?: 0) }
     LaunchedEffect(Unit) { withFrameNanos { }; runCatching { requester.requestFocus() } }
-    SetupStep("Set Up Your Profile", "Copy All Settings And Addons, Or Set Up Manually. Your Theme Stays Yours.", onBack) {
-        FilterDropdown(currentValue = profiles.firstOrNull { it.id == selectedId }?.let { "${it.name} · ${it.id}" }.orEmpty(),
-            options = profiles.map { "${it.name} · ${it.id}" },
-            modifier = Modifier.width(380.dp).focusRequester(requester),
-            onSelect = { label -> profiles.firstOrNull { "${it.name} · ${it.id}" == label }?.let { selectedId = it.id } })
-        Spacer(Modifier.height(16.dp))
+    ProfileSetupLayout("Make It Yours", "Copy settings, addons and integrations from a profile, or choose your own preferences. Your new theme stays unchanged.", "PROFILE SETUP · PREFERENCES", onBack) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 168.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            profiles.forEachIndexed { index, profile ->
+                SetupButton(text = if (selectedId == profile.id) "✓  ${profile.name}" else profile.name,
+                    onClick = { selectedId = profile.id }, primary = selectedId == profile.id,
+                    modifier = Modifier.fillMaxWidth(), focusRequester = if (index == 0) requester else null)
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            VoidButton(text = "Copy Profile", onClick = { onCopy(selectedId) }, modifier = Modifier.width(230.dp))
-            VoidButton(text = "Set Up Manually", onClick = onManual, modifier = Modifier.width(230.dp))
+            SetupButton(text = "Copy Settings", onClick = { onCopy(selectedId) }, primary = true, enabled = profiles.any { it.id == selectedId }, modifier = Modifier.weight(1f))
+            SetupButton(text = "Set Up Manually", onClick = onManual, modifier = Modifier.weight(1f))
         }
     }
 }
@@ -57,28 +46,38 @@ internal fun ProfileSetupChoiceStep(profiles: List<ProfileEntity>, onCopy: (Int)
 internal fun ProfileTvStep(onSelect: (Boolean) -> Unit, onBack: () -> Unit) {
     val requester = remember { FocusRequester() }
     LaunchedEffect(Unit) { withFrameNanos { }; runCatching { requester.requestFocus() } }
-    SetupStep("Is Your TV 4K?", "This Sets Tunneled Playback And The Initial Format Filters.", onBack) {
+    ProfileSetupLayout("Choose Your TV", "Match streams to your display. You can change playback and quality preferences later in Settings.", "PROFILE SETUP · DISPLAY", onBack) {
         Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            VoidButton(text = "Yes, 4K TV", onClick = { onSelect(true) }, focusRequester = requester, modifier = Modifier.width(240.dp))
-            VoidButton(text = "No, Not 4K", onClick = { onSelect(false) }, modifier = Modifier.width(240.dp))
+            SetupButton(text = "4K / Ultra HD", onClick = { onSelect(true) }, primary = true, focusRequester = requester, modifier = Modifier.weight(1f))
+            SetupButton(text = "HD / Full HD", onClick = { onSelect(false) }, modifier = Modifier.weight(1f))
         }
+        Text("4K enables Ultra HD streams and tunneled playback. HD / Full HD excludes Ultra HD streams and disables tunneling.",
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
 internal fun ProfileLanguageStep(priority: Int, languages: List<String>, onSelect: (String) -> Unit, onBack: () -> Unit) {
     val options = remember(priority, languages) { AUDIO_LANGUAGE_OPTIONS.filter { it.second.isNotBlank() && it.second !in languages.take(priority) } }
-    var code by remember(priority) { mutableStateOf(languages[priority]) }
+    var code by remember(priority, languages) { mutableStateOf(languages[priority].takeIf { candidate -> options.any { it.second == candidate } } ?: options.first().second) }
     var showPicker by remember(priority) { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
     val pickerRequester = remember { FocusRequester() }
     LaunchedEffect(priority) { withFrameNanos { }; runCatching { requester.requestFocus() } }
     val ordinal = listOf("First", "Second", "Third")[priority]
-    SetupStep("$ordinal Language Preference", "Step ${priority + 1} Of 3 · Used To Rank Streams In Order Of Preference.", onBack) {
-        VoidButton(text = options.firstOrNull { it.second == code }?.first.orEmpty(),
-            onClick = { showPicker = true }, modifier = Modifier.width(380.dp), focusRequester = requester)
-        Spacer(Modifier.height(20.dp))
-        VoidButton(text = if (priority == 2) "Create Profile" else "Continue", onClick = { onSelect(code) }, modifier = Modifier.width(260.dp))
+    ProfileSetupLayout("$ordinal Language", "Streams in your first language rank ahead of your second and third choices. Each choice must be different.", "PROFILE SETUP · LANGUAGE ${priority + 1} OF 3", onBack) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            repeat(3) { index ->
+                Column(Modifier.weight(1f).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                    Text(listOf("First", "Second", "Third")[index], style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (index < priority) AUDIO_LANGUAGE_OPTIONS.firstOrNull { it.second == languages[index] }?.first.orEmpty() else if (index == priority) "Choose Below" else "Up Next",
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        }
+        SetupButton(text = "${options.firstOrNull { it.second == code }?.first.orEmpty()}  ·  Change",
+            onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth(), focusRequester = requester)
+        SetupButton(text = if (priority == 2) "Create Profile" else "Continue", onClick = { onSelect(code) }, primary = true, modifier = Modifier.fillMaxWidth())
     }
     if (showPicker) Dialog(onDismissRequest = { showPicker = false }) {
         Box(Modifier.width(420.dp).height(380.dp)

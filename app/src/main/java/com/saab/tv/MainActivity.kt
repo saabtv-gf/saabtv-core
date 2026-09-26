@@ -657,7 +657,9 @@ class MainActivity : ComponentActivity() {
         if (!accountAuth.hasSession) return
         lifecycleScope.launch(Dispatchers.IO) {
             profileConfigurationManager.saveActiveRuntimeState()
-            accountSync.syncNow()
+            // Opening keyboards, permission settings or the installer must not
+            // force another cloud write. The 60-second scheduler coalesces changes.
+            accountSync.requestSync()
         }
     }
 

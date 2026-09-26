@@ -49,6 +49,9 @@ import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.model.ThemeEntity
 import com.saab.tv.ui.addons.VoidButton
 import com.saab.tv.ui.addons.VoidInput
+import com.saab.tv.ui.components.SetupButton
+import com.saab.tv.ui.components.SetupHeader
+import com.saab.tv.ui.components.ProfileSetupLayout
 import com.saab.tv.ui.components.CenterCarouselRow
 import com.saab.tv.ui.components.cardFocusSound
 import com.saab.tv.ui.home.DpadRepeatGate
@@ -166,21 +169,21 @@ fun WelcomeView(onStart: () -> Unit) {
     ) {
         Text(
             "Welcome To Saab TV",
-            style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 4.sp),
+            style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
             color = Color.White
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            "Your cinematic universe awaits.",
-            style = MaterialTheme.typography.titleMedium,
-            color = Color.Gray
+            "A profile makes your watchlist, progress and preferences your own.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(48.dp))
 
-        VoidButton(
+        SetupButton(
             text = "Create First Profile",
             onClick = onStart,
-            isPrimary = true,
+            primary = true,
             modifier = Modifier.width(250.dp),
             focusRequester = requester
         )
@@ -423,22 +426,22 @@ private fun ProfileInitialSetupDialog(
                 )
                 Spacer(Modifier.height(24.dp))
 
-                VoidButton(
-                    text = if (canCopy) "Copy From Another Profile" else "No Profile Available To Copy",
+                SetupButton(
+                    text = if (canCopy) "Copy Settings" else "No Profiles To Copy",
                     onClick = onCopy,
                     enabled = canCopy && !isLoading,
-                    isPrimary = true,
+                    primary = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(12.dp))
-                VoidButton(
+                SetupButton(
                     text = "Start From Scratch",
                     onClick = onStartScratch,
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(12.dp))
-                VoidButton(
+                SetupButton(
                     text = "Cancel",
                     onClick = onDismiss,
                     enabled = !isLoading,
@@ -469,7 +472,7 @@ private fun CopyProfileSelectionDialog(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "Copy Configuration",
+                    text = "Copy Profile Settings",
                     style = MaterialTheme.typography.headlineSmall,
                     color = Color.White
                 )
@@ -489,7 +492,7 @@ private fun CopyProfileSelectionDialog(
                     )
                 } else {
                     sourceProfiles.forEach { sourceProfile ->
-                        VoidButton(
+                        SetupButton(
                             text = sourceProfile.name,
                             onClick = { onSelectProfile(sourceProfile) },
                             enabled = !isLoading,
@@ -499,7 +502,7 @@ private fun CopyProfileSelectionDialog(
                     }
                 }
 
-                VoidButton(
+                SetupButton(
                     text = "Back",
                     onClick = onBack,
                     enabled = !isLoading,
@@ -540,15 +543,15 @@ private fun ScratchConfirmDialog(
                     color = Color.Gray
                 )
                 Spacer(Modifier.height(24.dp))
-                VoidButton(
-                    text = "Yes, Start Fresh",
+                SetupButton(
+                    text = "Start Fresh",
                     onClick = onConfirm,
                     enabled = !isLoading,
-                    isPrimary = true,
+                    primary = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(12.dp))
-                VoidButton(
+                SetupButton(
                     text = "Back",
                     onClick = onBack,
                     enabled = !isLoading,
@@ -1087,31 +1090,18 @@ fun WizardNameStep(initialName: String, onNext: (String) -> Unit, onCancel: () -
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
-    BackHandler { onCancel() }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .offset(y = (-80).dp), // Move up to avoid virtual keyboard cropping
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            if(initialName.isEmpty()) "What should we call you?" else "Update your name",
-            style = MaterialTheme.typography.headlineMedium,
-            color = Color.White
-        )
-        Spacer(Modifier.height(32.dp))
-
-        Box(modifier = Modifier.width(400.dp)) {
+    ProfileSetupLayout(if(initialName.isEmpty()) "Name Your Profile" else "Edit Your Profile",
+        "Give this profile a name. Its watchlist, progress and preferences stay separate.", "PROFILE SETUP · NAME", onCancel) {
+        Box(modifier = Modifier.fillMaxWidth()) {
             VoidInput(
                 value = name,
-                onValueChange = { name = it },
-                placeholder = "Enter Name",
+                onValueChange = { name = it.take(32) },
+                placeholder = "Profile Name",
                 modifier = Modifier.focusRequester(focusRequester),
-                onDone = { if(name.isNotEmpty()) onNext(name) }
+                onDone = { if(name.isNotBlank()) onNext(name.trim()) }
             )
         }
+        SetupButton("Continue", { onNext(name.trim()) }, primary = true, enabled = name.isNotBlank(), modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -1140,11 +1130,11 @@ fun WizardAvatarStep(onNext: (String) -> Unit, onBack: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("Choose an Avatar", style = MaterialTheme.typography.headlineMedium, color = Color.White)
-        Spacer(Modifier.height(16.dp))
-        Text("Select an avatar that represents you.", color = Color.Gray)
+        Column(Modifier.widthIn(max = 600.dp).padding(horizontal = 32.dp)) {
+            SetupHeader("Choose Your Avatar", "Select an avatar to continue, or upload a photo from your phone.", "PROFILE SETUP · AVATAR")
+        }
 
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(24.dp))
 
         CenterCarouselRow(
             itemWidth = 120.dp,
@@ -1173,18 +1163,10 @@ fun WizardAvatarStep(onNext: (String) -> Unit, onBack: () -> Unit) {
         
         Spacer(Modifier.height(32.dp))
         
-        Text(
-            "Or",
-            style = MaterialTheme.typography.bodyLarge,
-            color = Color.Gray
-        )
-        
-        Spacer(Modifier.height(16.dp))
-        
-        UploadAvatarButton(
-            onClick = { showUploadDialog = true },
-            focusRequester = uploadButtonRequester
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            SetupButton("Back", onBack, modifier = Modifier.width(160.dp))
+            SetupButton("Upload Photo", { showUploadDialog = true }, focusRequester = uploadButtonRequester, modifier = Modifier.width(220.dp))
+        }
     }
     
     if (showUploadDialog) {
@@ -1264,14 +1246,10 @@ fun WizardThemeStep(onFinish: (String) -> Unit, onBack: () -> Unit) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Offset for theme name labels below circles (not present in avatar selector)
-            Spacer(Modifier.height(32.dp))
-            
-            Text("Choose a Theme", style = MaterialTheme.typography.headlineMedium, color = Color.White)
-            Spacer(Modifier.height(16.dp))
-            Text("Select a color scheme for your experience.", color = Color.Gray)
-
-            Spacer(Modifier.height(40.dp))
+            Column(Modifier.widthIn(max = 600.dp).padding(horizontal = 32.dp)) {
+                SetupHeader("Choose Your Theme", "Preview colors with the remote. Select a theme to continue.", "PROFILE SETUP · THEME")
+            }
+            Spacer(Modifier.height(24.dp))
 
             CenterCarouselRow(
                 itemWidth = 120.dp,
@@ -1300,18 +1278,10 @@ fun WizardThemeStep(onFinish: (String) -> Unit, onBack: () -> Unit) {
             
             Spacer(Modifier.height(32.dp))
             
-            Text(
-                "Or",
-                style = MaterialTheme.typography.bodyLarge,
-                color = Color.Gray
-            )
-            
-            Spacer(Modifier.height(16.dp))
-            
-            CreateThemeButton(
-                onClick = { showThemeEditor = true },
-                focusRequester = createButtonRequester
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                SetupButton("Back", onBack, modifier = Modifier.width(160.dp))
+                SetupButton("Create Theme", { showThemeEditor = true }, focusRequester = createButtonRequester, modifier = Modifier.width(220.dp))
+            }
         }
     }
     

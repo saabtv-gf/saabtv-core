@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Base64
 import android.util.AtomicFile
+import android.os.SystemClock
 import androidx.room.InvalidationTracker
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -117,39 +118,34 @@ class AccountSyncManager @Inject constructor(
     private val _status = MutableStateFlow("Not synced yet")
     val status: StateFlow<String> = _status
     private var started = false
-    private var pending: Job? = null
+    private val cadence = AccountSyncCadence(SystemClock.elapsedRealtime())
     @Volatile private var suspended = false
     private val preferenceStores = AccountSnapshotStore(context, db).preferenceStores()
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> requestSync() }
+    private val databaseObserver = object : InvalidationTracker.Observer(AccountSnapshotStore.TABLES.toTypedArray()) {
+        override fun onInvalidated(tables: Set<String>) { requestSync() }
+    }
 
     fun start() {
         if (started || !auth.hasSession) return
         started = true
-        db.invalidationTracker.addObserver(object : InvalidationTracker.Observer(AccountSnapshotStore.TABLES.toTypedArray()) {
-            override fun onInvalidated(tables: Set<String>) { requestSync() }
-        })
+        db.invalidationTracker.addObserver(databaseObserver)
         preferenceStores.forEach { it.registerOnSharedPreferenceChangeListener(preferenceListener) }
         scope.launch {
-            while (isActive) { delay(30_000); syncNow() }
+            while (isActive) { delay(AccountSyncCadence.INTERVAL_MS); syncNow(automatic = true) }
         }
         requestSync()
     }
 
-    @Synchronized fun requestSync() {
+    fun requestSync() {
         if (suspended) return
-        pending?.cancel()
-        pending = scope.launch {
-            delay(2_000)
-            // Only debounce waiting jobs. Preference changes must not cancel
-            // an upload that might already have committed on the server.
-            synchronized(this@AccountSyncManager) { pending = null }
-            syncNow()
-        }
+        cadence.markDirty()
     }
 
-    suspend fun syncNow(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun syncNow(automatic: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
             if (!auth.hasSession || suspended) return@withLock false
+            if (!cadence.beginAttempt(SystemClock.elapsedRealtime(), automatic)) return@withLock true
             try {
                 _status.value = "Syncing…"
                 profiles.saveActiveRuntimeState()
@@ -158,6 +154,7 @@ class AccountSyncManager @Inject constructor(
                 true
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
+                cadence.markDirty()
                 _status.value = e.message?.take(200) ?: "Sync failed. Local data is safe."
                 false
             }
@@ -167,15 +164,24 @@ class AccountSyncManager @Inject constructor(
     suspend fun resolveConflict(useCloud: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
             suspended = true
-            pending?.cancel()
             try {
                 if (useCloud) cloud.useCloudCopy() else { profiles.saveActiveRuntimeState(); cloud.keepLocalCopy() }
                 _status.value = "Synced"
+            } catch (e: Exception) {
+                // A failed restore must not leave routine sync disabled forever.
+                suspended = false
+                cadence.markDirty()
+                throw e
             } finally { if (!useCloud) suspended = false }
         }
     }
 
-    fun stop() { suspended = true; scope.cancel() }
+    fun stop() {
+        suspended = true
+        db.invalidationTracker.removeObserver(databaseObserver)
+        preferenceStores.forEach { it.unregisterOnSharedPreferenceChangeListener(preferenceListener) }
+        scope.cancel()
+    }
 
     companion object {
         suspend fun prepareBeforeOpeningApp(context: Context, auth: AccountAuthManager) = withContext(Dispatchers.IO) {
