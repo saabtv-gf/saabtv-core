@@ -5,22 +5,6 @@ A feature-rich Android TV streaming application built with Kotlin and Jetpack Co
 Browse, discover, and stream content from Stremio-compatible addons.
 Connect your Stremio account to instantly import your existing addon collection.
 
-![Saab TV](screenshots/saabtv_logo.svg)
-
-## Screenshots
-
-| Profiles | Hero Carousel | Home Screen |
-|----------|---------------|-------------|
-| ![Profiles](screenshots/1_profile_screen.png) | ![Hero Carousel](screenshots/2_hero_carrousel.png) | ![Home Screen](screenshots/3_home_screen.png) |
-
-| Movies | Series (Hub Row) | Details |
-|--------|------------------|---------|
-| ![Movies](screenshots/4_movies_screen.png) | ![Series](screenshots/5_series_screen.png) | ![Details](screenshots/6_details_screen.png) |
-
-| Search & Discover | Grid View |
-|-------------------|-----------|
-| ![Search](screenshots/7_search_discover_screen.png) | ![Grid View](screenshots/8_gridview_screen.png) |
-
 ## Features
 
 ### Stremio Addon Ecosystem
