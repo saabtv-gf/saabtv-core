@@ -169,7 +169,7 @@ kapt {
 
 dependencies {
     // 0. ASS/SSA subtitle renderer
-    implementation(project(":assrender"))
+    implementation("com.github.LumeraD3v:assrender:1.0.2")
 
     // 1. Android TV UI (Compose)
     implementation(platform(libs.androidx.compose.bom))

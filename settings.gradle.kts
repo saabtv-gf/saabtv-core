@@ -10,12 +10,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven("https://jitpack.io")
     }
 }
 
 rootProject.name = "SaabTv"
 include(":app")
 include(":playbackcore")
-include(":assrender")
 include(":benchmark")
-project(":assrender").projectDir = file("../assrender/assrender")
