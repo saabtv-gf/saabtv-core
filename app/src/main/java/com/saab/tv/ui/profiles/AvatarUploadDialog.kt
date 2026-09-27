@@ -36,7 +36,7 @@ import java.util.UUID
 
 /**
  * Dialog that displays a QR code for remote avatar upload.
- * Starts a local web server and shows QR code pointing to it.
+ * Uses GitHub Pages and a short-lived encrypted relay; no local listener.
  * When the user uploads and crops an image, it's saved locally
  * and the path is returned via onAvatarReceived.
  */
@@ -51,6 +51,7 @@ fun AvatarUploadDialog(
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     
     val serverManager = remember { AvatarServerManager() }
+    com.saab.tv.remote_input.RemoteDialogLifecycle { serverManager.stopServer(); onDismissRequest() }
     val focusRequester = remember { FocusRequester() }
 
     // Start server when dialog opens
@@ -71,7 +72,15 @@ fun AvatarUploadDialog(
             serverInfo = info
             qrBitmap = generateQrCode(info.url)
         } else {
-            error = "Could not start server. Check your network connection."
+            error = "Secure pairing unavailable. Check your internet connection and try again."
+        }
+    }
+
+    LaunchedEffect(serverInfo) {
+        if (serverInfo != null) {
+            delay(5 * 60_000L)
+            serverManager.stopServer()
+            error = "Pairing expired. Close and reopen for a new QR code."
         }
     }
 
@@ -151,7 +160,7 @@ fun AvatarUploadDialog(
                             color = Color.Gray
                         )
                         Text(
-                            currentServerInfo.url,
+                            com.saab.tv.remote_input.CloudPairingSession.PAGE_URL,
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold,
                                 letterSpacing = 0.5.sp
@@ -168,7 +177,7 @@ fun AvatarUploadDialog(
                         )
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            "Starting server...",
+                            "Connecting securely…",
                             color = Color.Gray
                         )
                     }

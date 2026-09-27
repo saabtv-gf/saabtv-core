@@ -23,13 +23,15 @@
         </intent>
     </queries>
 
+    <!-- Fire OS may load ApplicationInfo rather than the enabled alias artwork.
+         Use the full TV tile here; StandardLauncher retains its adaptive icon. -->
     <application
         android:name=".SaabTvApplication"
         android:networkSecurityConfig="@xml/network_security_config"
         android:allowBackup="false"
         android:banner="@drawable/banner_saab_new"
-        android:icon="@mipmap/ic_launcher_saab_new"
-        android:roundIcon="@mipmap/ic_launcher_saab_new_round"
+        android:icon="@drawable/banner_saab_new"
+        android:roundIcon="@drawable/banner_saab_new"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.SaabTv">
@@ -40,6 +42,8 @@
 
         <activity
             android:name=".ui.account.AccountEntryActivity"
+            android:icon="@drawable/banner_saab_new"
+            android:banner="@drawable/banner_saab_new"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.SaabTv">

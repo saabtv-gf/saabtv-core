@@ -28,3 +28,12 @@ The availability RPC returns only a boolean. Account snapshots are protected by 
 Local validation: 134 unit tests passed; release lint reported no errors; the 32-bit release APK signature and package metadata verified. The Android snapshot round-trip/isolation instrumentation test compiles, but was not executed because no Android device/emulator was connected. Account UI, legacy import, multi-TV restore and process restart still need physical-TV validation before calling the release production-proven.
 
 Rotate any database-owner credential previously shared in chat. Never put it into source, Android resources, Gradle properties or an APK.
+
+## Phone pairing
+
+`003_pairing_relay.sql` adds separate private, encrypted five-minute relay storage
+and capability-restricted RPCs for the GitHub Pages phone tools. It does not change
+account tables, identity helpers or existing account policies. The approved
+migration is applied to production. See `web/remote/README.md` for protocol,
+limits, expiry/cleanup semantics and relay-only QA instructions. The exact Pages
+origin `https://saabtv-gf.github.io` is configured in Neon Auth.

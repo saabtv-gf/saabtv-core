@@ -1,58 +1,44 @@
 package com.saab.tv.remote_input
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.net.BindException
+import android.graphics.BitmapFactory
+import kotlinx.coroutines.CancellationException
+
+internal fun pairingImage(encoded: String): ByteArray {
+    require(encoded.length <= 700000)
+    val bytes = PairingCrypto.decode(encoded)
+    require(bytes.size in 1..524288)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    require(bounds.outWidth in 1..1024 && bounds.outHeight in 1..1024)
+    require(bounds.outMimeType in listOf("image/jpeg", "image/png", "image/webp"))
+    return bytes
+}
 
 /**
- * Manages the AvatarUploadServer lifecycle with port hunting.
- * Similar to ServerManager but for avatar image uploads.
+ * Compatibility facade for encrypted profile-photo pairing. No local listener.
  */
 class AvatarServerManager {
 
-    private var server: AvatarUploadServer? = null
-
-    companion object {
-        private const val PORT_START = 8080
-        private const val PORT_END = 8090
-    }
+    private var session: CloudPairingSession? = null
 
     /**
-     * Attempts to start the avatar upload server on an available port.
+     * Creates a short-lived encrypted photo pairing session.
      * Returns ServerInfo on success, null on failure.
      */
-    suspend fun startServer(onImageReceived: (ByteArray) -> Unit): ServerInfo? = withContext(Dispatchers.IO) {
-        // First, get the local IP
-        val ip = NetworkUtils.getLocalIpAddress()
-        if (ip == null) {
-            return@withContext null
-        }
-
-        // Try ports in range
-        for (port in PORT_START..PORT_END) {
-            try {
-                val avatarServer = AvatarUploadServer(port, onImageReceived)
-                avatarServer.start()
-                server = avatarServer
-                return@withContext ServerInfo(ip, port)
-            } catch (e: BindException) {
-                // Port in use, try next
-                continue
-            } catch (e: Exception) {
-                if (com.saab.tv.BuildConfig.DEBUG) android.util.Log.w("AvatarServerManager", "Port binding failed", e)
-                continue
-            }
-        }
-
-        // All ports failed
-        null
+    suspend fun startServer(onImageReceived: (ByteArray) -> Unit): ServerInfo? {
+        stopServer()
+        val pairing = CloudPairingSession("avatar") { onImageReceived(pairingImage(it.get("image").asString)) }
+        session = pairing
+        return try { pairing.open(); ServerInfo(pairing.url) }
+        catch (e: CancellationException) { pairing.close(); throw e }
+        catch (_: Exception) { pairing.close(); null }
     }
 
     /**
      * Stops the running server if any.
      */
     fun stopServer() {
-        server?.stop()
-        server = null
+        session?.close()
+        session = null
     }
 }

@@ -1,72 +1,47 @@
 package com.saab.tv.remote_input
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.net.BindException
+import android.net.Uri
+import kotlinx.coroutines.CancellationException
 
 /**
- * Holds information about the running server.
+ * Holds the private, short-lived GitHub Pages pairing link.
  */
-data class ServerInfo(
-    val ip: String,
-    val port: Int,
-    val fragment: String? = null
-) {
-    val url: String get() = "http://$ip:$port" + (fragment?.let { "#$it" } ?: "")
-}
+data class ServerInfo(val url: String)
 
 /**
- * Manages the LinkServer lifecycle with port hunting.
- * Tries ports 8080-8090 until one is available.
+ * Compatibility facade for text-input dialogs. Opens no local server or port.
  */
 class ServerManager {
 
-    private var server: LinkServer? = null
-
-    companion object {
-        private const val PORT_START = 8080
-        private const val PORT_END = 8090
-    }
+    private var session: CloudPairingSession? = null
 
     /**
-     * Attempts to start the server on an available port.
+     * Creates an encrypted cloud pairing session.
      * Returns ServerInfo on success, null on failure.
      */
     suspend fun startServer(
         mode: RemoteInputMode = RemoteInputMode.URL,
         onInputReceived: (String) -> Unit
-    ): ServerInfo? = withContext(Dispatchers.IO) {
-        // First, get the local IP
-        val ip = NetworkUtils.getLocalIpAddress()
-        if (ip == null) {
-            return@withContext null
+    ): ServerInfo? {
+        stopServer()
+        val tool = if (mode == RemoteInputMode.SEARCH) "search" else "paste"
+        val pairing = CloudPairingSession(tool) { message ->
+            val value = message.get("value").asString.trim()
+            require(value.isNotEmpty() && value.length <= if (tool == "search") 200 else 2048)
+            if (tool == "paste") require(Uri.parse(value).scheme?.lowercase() in listOf("http", "https"))
+            onInputReceived(value)
         }
-
-        // Try ports in range
-        for (port in PORT_START..PORT_END) {
-            try {
-                val linkServer = LinkServer(port, mode, onInputReceived)
-                linkServer.start()
-                server = linkServer
-                return@withContext ServerInfo(ip, port)
-            } catch (e: BindException) {
-                // Port in use, try next
-                continue
-            } catch (e: Exception) {
-                if (com.saab.tv.BuildConfig.DEBUG) android.util.Log.w("ServerManager", "Port binding failed", e)
-                continue
-            }
-        }
-
-        // All ports failed
-        null
+        session = pairing
+        return try { pairing.open(); ServerInfo(pairing.url) }
+        catch (e: CancellationException) { pairing.close(); throw e }
+        catch (_: Exception) { pairing.close(); null }
     }
 
     /**
-     * Stops the running server if any.
+     * Cancels polling and closes the pairing session.
      */
     fun stopServer() {
-        server?.stop()
-        server = null
+        session?.close()
+        session = null
     }
 }

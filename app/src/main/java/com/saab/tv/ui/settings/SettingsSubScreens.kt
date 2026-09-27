@@ -1990,7 +1990,9 @@ fun AboutSettings(
     onGoBack: () -> Unit,
     updateManager: AppUpdateManager = hiltViewModel<AboutViewModel>().updateManager
 ) {
-    val updateState by updateManager.state.collectAsStateWithLifecycle()
+    // Callbacks retain this rendered snapshot, rather than reading a different
+    // state when a coroutine finally runs (which could invalidate a cast).
+    val updateState = updateManager.state.collectAsStateWithLifecycle().value
     val scope = rememberCoroutineScope()
     val accentColor = MaterialTheme.colorScheme.primary
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -2133,14 +2135,15 @@ fun AboutSettings(
         }
 
         // READY TO INSTALL
-        if (updateState is UpdateState.ReadyToInstall) {
+        val readyToInstall = updateState as? UpdateState.ReadyToInstall
+        if (readyToInstall != null) {
             Spacer(Modifier.height(16.dp))
             Text(
                 "Update Verified. Confirm Installation On Your TV.",
                 color = accentColor,
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
             )
-            SetupButton("Install Update", { scope.launch { updateManager.installDownloaded((updateState as UpdateState.ReadyToInstall).file) } },
+            SetupButton("Install Update", { scope.launch { updateManager.installDownloaded(readyToInstall.file) } },
                 primary = true, modifier = Modifier.padding(top = 12.dp))
         }
         if (updateState is UpdateState.InstallError) {

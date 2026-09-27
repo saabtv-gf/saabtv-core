@@ -12,6 +12,7 @@ import androidx.core.content.FileProvider
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import com.saab.tv.BuildConfig
+import com.saab.tv.AppHealthMonitor
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -142,11 +143,13 @@ class AppUpdateManager @Inject constructor(
         try {
             pendingDownload = apkUrl to expectedSha256
             if (!canInstallUpdates()) {
+                withContext(Dispatchers.IO) { AppHealthMonitor.recordUpdateStage(context, "permission-required") }
                 _state.value = UpdateState.AwaitingInstallPermission
                 openInstallPermissionSettings()
                 return
             }
             pendingDownload = null
+            withContext(Dispatchers.IO) { AppHealthMonitor.recordUpdateStage(context, "download-start") }
             var apkFile: File? = null
             repeat(3) { attempt ->
                 if (apkFile == null) {
@@ -164,17 +167,20 @@ class AppUpdateManager @Inject constructor(
             val verifiedFile = requireNotNull(apkFile)
             _state.value = UpdateState.Verifying
             val verification = withContext(Dispatchers.IO) {
+                AppHealthMonitor.recordUpdateStage(context, "verify-start")
                 ApkPackageVerifier.verify(context, verifiedFile)
             }
             if (!verification.valid) {
                 verifiedFile.delete()
                 throw SecurityException(verification.message)
             }
+            withContext(Dispatchers.IO) { AppHealthMonitor.recordUpdateStage(context, "installer-start") }
             launchInstaller(verifiedFile)
         } catch (e: CancellationException) {
             _state.value = offeredUpdate?.let { UpdateState.UpdateAvailable(it) } ?: UpdateState.Idle
             throw e
         } catch (e: Exception) {
+            withContext(Dispatchers.IO) { AppHealthMonitor.recordUpdateStage(context, "failed", e) }
             _state.value = UpdateState.Error("Download failed: ${e.message}")
         } finally { operation.unlock() }
     }

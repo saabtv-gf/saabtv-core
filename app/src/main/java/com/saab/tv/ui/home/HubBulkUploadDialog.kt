@@ -47,8 +47,10 @@ fun HubBulkUploadDialog(
     onImageDeleted: ((String) -> Unit)? = null // callback(configUniqueId)
 ) {
     var serverUrl by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val focusRequester = remember { FocusRequester() }
+    com.saab.tv.remote_input.RemoteDialogLifecycle { HubServerManager.stopServer(); onDismiss() }
 
     // Start Server
     LaunchedEffect(Unit) {
@@ -62,6 +64,7 @@ fun HubBulkUploadDialog(
             onImageDeleted = onImageDeleted
         )
         serverUrl = url
+        if (url == null) error = "Secure pairing unavailable. Check your internet connection and try again."
         
         // Generate QR
         if (url != null) {
@@ -82,6 +85,15 @@ fun HubBulkUploadDialog(
                     if (com.saab.tv.BuildConfig.DEBUG) android.util.Log.w("HubBulkUploadDialog", "QR generation error", e)
                 }
             }
+        }
+    }
+
+    LaunchedEffect(serverUrl) {
+        if (serverUrl != null) {
+            kotlinx.coroutines.delay(5 * 60_000L)
+            HubServerManager.stopServer()
+            qrBitmap = null
+            error = "Pairing expired. Close and reopen for a new QR code."
         }
     }
 
@@ -167,7 +179,7 @@ fun HubBulkUploadDialog(
                         modifier = Modifier.size(48.dp)
                     )
                     Spacer(Modifier.height(16.dp))
-                    Text("Starting server...", color = Color.Gray)
+                    Text(error ?: "Connecting securely…", color = Color.Gray)
                 }
 
                 Spacer(modifier = Modifier.height(32.dp))

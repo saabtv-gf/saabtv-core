@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,15 +18,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.saab.tv.MainActivity
+import com.saab.tv.ExitConfirmationDialog
 import com.saab.tv.data.account.*
 import com.saab.tv.di.DatabaseModule
 import com.saab.tv.ui.components.SetupButton
@@ -54,7 +49,8 @@ class AccountEntryActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             SaabTvTheme {
-                BackHandler { finish() }
+                var showExit by rememberSaveable { mutableStateOf(false) }
+                BackHandler { showExit = true }
                 Box(Modifier.fillMaxSize().background(Color(0xFF07101F)), contentAlignment = Alignment.Center) {
                     when {
                         busy -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -89,6 +85,7 @@ class AccountEntryActivity : ComponentActivity() {
                         })
                     }
                 }
+                if (showExit) ExitConfirmationDialog(onConfirm = { finishAffinity() }, onDismiss = { showExit = false })
             }
         }
         lifecycleScope.launch {
@@ -191,7 +188,7 @@ private fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boo
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp)).padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SetupHeader(if (signup) "Create Your Account" else "Welcome Back",
-                        if (signup) "One account for all your profiles." else "Sign in to continue your story.", if (wide) "ACCOUNT" else "SAAB TV · ACCOUNT")
+                        if (signup) "One account for all your profiles." else "Sign in to continue your story.", "")
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         SetupButton("Sign In", { signup = false; confirm = ""; passwordVisible = false; confirmVisible = false },
                             Modifier.weight(1f), primary = !signup, enabled = !busy)
@@ -200,36 +197,23 @@ private fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boo
                     }
                     SetupButton(if (signup) "Create Account With Phone" else "Sign In With Phone", { remote = true },
                         modifier = Modifier.fillMaxWidth(), enabled = !busy, compact = true)
-                    OutlinedTextField(value = username, onValueChange = { username = it.take(32) }, label = { Text("Username") },
-                        enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(usernameFocus),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
+                    AccountCredentialField(value = username, onValueChange = { username = it.take(32) }, label = "Username",
+                        enabled = !busy, focusRequester = usernameFocus, onNext = { passwordFocus.requestFocus() },
                         supportingText = { Text(availability ?: if (signup) "3–32 letters, numbers or underscores" else "Usernames are not case-sensitive",
                             color = if (available && signup) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) })
                     if (availability == "Could not check availability") SetupButton("Retry Username Check", { availabilityRetry++ }, enabled = !busy, compact = true)
-                    OutlinedTextField(value = password, onValueChange = { password = it.take(128) }, label = { Text("Password") },
-                        enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(passwordFocus),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = if (signup) ImeAction.Next else ImeAction.Done),
-                        keyboardActions = KeyboardActions(onNext = { confirmFocus.requestFocus() }, onDone = { submit() }))
-                    // An independent focus target: text fields/TV IMEs can consume
-                    // D-pad events aimed at a nested trailing button.
-                    SetupButton(if (passwordVisible) "Hide Password" else "Show Password", { passwordVisible = !passwordVisible },
-                        enabled = !busy, compact = true, modifier = Modifier.fillMaxWidth())
+                    AccountCredentialField(value = password, onValueChange = { password = it.take(128) }, label = "Password",
+                        enabled = !busy, focusRequester = passwordFocus, password = true, visible = passwordVisible,
+                        onToggleVisibility = { passwordVisible = !passwordVisible },
+                        onNext = if (signup) ({ confirmFocus.requestFocus() }) else null, onDone = submit)
                     if (signup) {
                         Text("8+ characters · uppercase · lowercase · number · symbol", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        OutlinedTextField(value = confirm, onValueChange = { confirm = it.take(128) }, label = { Text("Confirm Password") },
-                            enabled = !busy, singleLine = true, modifier = Modifier.fillMaxWidth().focusRequester(confirmFocus),
-                            textStyle = MaterialTheme.typography.bodyMedium,
+                        AccountCredentialField(value = confirm, onValueChange = { confirm = it.take(128) }, label = "Confirm Password",
+                            enabled = !busy, focusRequester = confirmFocus, password = true, visible = confirmVisible,
+                            onToggleVisibility = { confirmVisible = !confirmVisible },
                             isError = confirm.isNotEmpty() && confirm != password,
                             supportingText = if (confirm.isNotEmpty() && confirm != password) {{ Text("Passwords do not match") }} else null,
-                            visualTransformation = if (confirmVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = { if (valid) submitFocus.requestFocus(); submit() }))
-                        SetupButton(if (confirmVisible) "Hide Confirmation" else "Show Confirmation", { confirmVisible = !confirmVisible },
-                            enabled = !busy, compact = true, modifier = Modifier.fillMaxWidth())
+                            onDone = { if (valid) submitFocus.requestFocus(); submit() })
                     }
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
                     SetupButton(if (busy) "Please Wait…" else if (signup) "Create Account" else "Sign In", submit,

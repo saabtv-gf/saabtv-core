@@ -68,8 +68,10 @@ fun SetupButton(
 
 @Composable
 fun SetupHeader(title: String, description: String, stage: String) {
-    Text(stage, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-    Spacer(Modifier.height(8.dp))
+    if (stage.isNotBlank()) {
+        Text(stage, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(8.dp))
+    }
     Text(title, color = MaterialTheme.colorScheme.onBackground,
         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold))
     Spacer(Modifier.height(10.dp))

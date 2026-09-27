@@ -384,7 +384,7 @@ private fun PlayerChoiceDialog(
 }
 
 @Composable
-private fun ExitConfirmationDialog(
+internal fun ExitConfirmationDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -838,6 +838,9 @@ class MainActivity : ComponentActivity() {
                     LocalHubRoundCorners provides hubRoundCorners
                 ) {
                 SaabTvBackground {
+                    // Last-resort guard for every route. Screen/dialog handlers
+                    // registered below still handle ordinary back navigation first.
+                    BackHandler { showExitConfirmation = true }
                     if (currentProfile == null) {
                         BackHandler {
                             showExitConfirmation = true

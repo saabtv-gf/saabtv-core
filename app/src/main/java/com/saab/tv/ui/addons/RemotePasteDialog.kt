@@ -32,7 +32,7 @@ import kotlinx.coroutines.delay
 
 /**
  * Dialog that displays a QR code for remote URL pasting.
- * Starts a local web server and shows QR code pointing to it.
+ * Uses GitHub Pages and a short-lived encrypted relay; no local listener.
  */
 @Composable
 fun RemotePasteDialog(
@@ -47,6 +47,7 @@ fun RemotePasteDialog(
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     
     val serverManager = remember { ServerManager() }
+    com.saab.tv.remote_input.RemoteDialogLifecycle { serverManager.stopServer(); onDismissRequest() }
     val focusRequester = remember { FocusRequester() }
 
     // Start server when dialog opens
@@ -63,7 +64,15 @@ fun RemotePasteDialog(
             serverInfo = info
             qrBitmap = generateQrCode(info.url)
         } else {
-            error = "Could not start server. Check your network connection."
+            error = "Secure pairing unavailable. Check your internet connection and try again."
+        }
+    }
+
+    LaunchedEffect(serverInfo) {
+        if (serverInfo != null) {
+            delay(5 * 60_000L)
+            serverManager.stopServer()
+            error = "Pairing expired. Close and reopen for a new QR code."
         }
     }
 
@@ -138,12 +147,12 @@ fun RemotePasteDialog(
                         
                         // Manual URL
                         Text(
-                            "Or visit:",
+                            "Private QR · expires in 5 minutes",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Gray
                         )
                         Text(
-                            currentServerInfo.url,
+                            com.saab.tv.remote_input.CloudPairingSession.PAGE_URL,
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold,
                                 letterSpacing = 0.5.sp
@@ -160,7 +169,7 @@ fun RemotePasteDialog(
                         )
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            "Starting server...",
+                            "Connecting securely…",
                             color = Color.Gray
                         )
                     }

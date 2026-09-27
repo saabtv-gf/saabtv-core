@@ -1,0 +1,30 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #080d16; color: #edf2f9; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 620px; margin: auto; padding: 32px 20px; }
+header { margin-bottom: 28px; }
+.brand { font-size: 30px; font-weight: 750; letter-spacing: -.8px; }
+.brand span { color: #62ceff; }
+p { color: #afbdd0; line-height: 1.6; margin: 8px 0 0; }
+aside { padding: 16px; border: 1px solid #786333; border-radius: 12px; background: #211d13; }
+aside p { color: #ddcfad; font-size: 14px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; color: #dce7f7; border: 1px solid #344158; background: #121d2d; border-radius: 10px; min-height: 46px; padding: 10px 14px; }
+button[aria-pressed="true"] { border-color: #62ceff; color: #79d7ff; background: #142d40; }
+section { padding: 24px; border: 1px solid #29354a; border-radius: 16px; background: #0f1826; }
+h1 { font-size: 25px; line-height: 1.25; margin: 0; }
+form { margin-top: 24px; }
+label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.field { margin-bottom: 20px; }
+input, textarea, select { width: 100%; min-height: 48px; border: 1px solid #455269; border-radius: 8px; background: #090f19; color: #edf2f9; padding: 12px; }
+textarea { min-height: 100px; resize: vertical; }
+.password { display: flex; gap: 8px; }
+.password input { flex: 1; min-width: 0; }
+.help { font-size: 13px; margin-top: 6px; }
+.primary { width: 100%; font-weight: 650; margin-top: 4px; }
+button:disabled { cursor: not-allowed; color: #a9b5c5; background: #253043; }
+:focus-visible { outline: 3px solid #79d7ff; outline-offset: 3px; }
+footer { font-size: 12px; line-height: 1.6; color: #93a4bc; margin-top: 24px; }
+canvas { display: block; width: 100%; height: auto; max-height: 300px; object-fit: contain; background: #090f19; margin: 16px 0; border-radius: 10px; }
+@media (max-width: 380px) { section { padding: 18px; } main { padding: 24px 14px; } }

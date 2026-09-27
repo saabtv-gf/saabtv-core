@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src https://ep-gentle-voice-azd9if2p.neonauth.c-3.ap-southeast-1.aws.neon.tech https://ep-gentle-voice-azd9if2p.apirest.c-3.ap-southeast-1.aws.neon.tech; form-action 'none'; base-uri 'none'; object-src 'none'">
+  <title>Saab TV · Phone Companion</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" type="module"></script>
+</head>
+<body>
+  <main>
+    <header><span class="brand">Saab <span>TV</span></span><p>Your TV. Your Phone. Connected.</p></header>
+    <aside role="status" aria-live="polite"><strong id="status-title">Scan Your TV’s QR Code</strong><p id="status">Open a phone tool on your TV and scan its QR. Pairing links expire in five minutes.</p></aside>
+    <nav aria-label="Phone Tools">
+      <button type="button" data-mode="signin" aria-pressed="true">Sign In</button>
+      <button type="button" data-mode="signup" aria-pressed="false">Create Account</button>
+      <button type="button" data-mode="paste" aria-pressed="false">Paste Link</button>
+      <button type="button" data-mode="search" aria-pressed="false">Search</button>
+      <button type="button" data-mode="avatar" aria-pressed="false">Profile Photo</button>
+      <button type="button" data-mode="hub" aria-pressed="false">Upload Artwork</button>
+    </nav>
+    <section aria-labelledby="title">
+      <h1 id="title">Sign In To Saab TV</h1>
+      <p id="description">Use your phone keyboard, then confirm on your TV.</p>
+      <form id="form" autocomplete="off">
+        <div id="fields"></div>
+        <button class="primary" type="submit" disabled>Pairing Required</button>
+      </form>
+    </section>
+    <footer>No advertising, analytics, browser storage or local-network requests. This preview sends no data.</footer>
+  </main>
+</body>
+</html>

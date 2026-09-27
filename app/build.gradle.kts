@@ -53,8 +53,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 60
-        versionName = "0.1.59-beta"
+        versionCode = 62
+        versionName = "0.1.61-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -222,7 +222,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // --- LOCAL WEB SERVER (used by remote input hub) ---
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
 
     // --- QR CODE GENERATION ---
     implementation("com.google.zxing:core:3.5.2")

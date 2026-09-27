@@ -18,7 +18,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
-import com.saab.tv.remote_input.AccountPairingServer
+import com.saab.tv.remote_input.CloudPairingSession
+import com.saab.tv.data.account.AccountCredentials
 import com.saab.tv.data.account.AccountAuthManager
 import com.saab.tv.ui.components.SetupButton
 import kotlinx.coroutines.*
@@ -40,10 +41,16 @@ internal fun AccountRemoteDialog(auth: AccountAuthManager, signup: Boolean, onDi
         onDispose { lifecycle.removeObserver(observer) }
     }
     val server = remember {
-        AccountPairingServer(signup) { username, password, _ ->
+        CloudPairingSession(if (signup) "signup" else "signin") { message ->
+            val username = message.get("username").asString
+            val password = message.get("password").asString
+            require(AccountCredentials.usernameError(username) == null)
+            require(password.length in 1..128)
+            if (signup) require(AccountCredentials.passwordError(password) == null)
             pending = username to password
         }
     }
+    val connectionStatus by server.status.collectAsState()
     DisposableEffect(server) { onDispose { pending = null; server.close(); qr?.recycle() } }
     LaunchedEffect(pending) {
         usernameAvailable = !signup
@@ -74,7 +81,7 @@ internal fun AccountRemoteDialog(auth: AccountAuthManager, signup: Boolean, onDi
             delay(5 * 60_000L)
             if (pending == null) { ready = false; error = "This QR code has expired. Close and reopen to try again." }
         } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { error = "Secure phone sign-in could not start. Check your local network or use the TV form." }
+        catch (_: Exception) { error = server.status.value }
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(shape = MaterialTheme.shapes.large, modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(24.dp)) {
@@ -94,13 +101,13 @@ internal fun AccountRemoteDialog(auth: AccountAuthManager, signup: Boolean, onDi
                     Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
                         qr?.let { Image(it.asImageBitmap(), "Secure account sign-in QR code", Modifier.size(210.dp)) }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text("1. Connect your phone to the same Wi-Fi.\n2. Scan the QR code.\n3. Before trusting the temporary certificate, verify its SHA-256 fingerprint against the value below.\n4. Enter your details and confirm on the TV.")
-                            Text("If your browser cannot show the certificate fingerprint, cancel and use the TV form.", color = MaterialTheme.colorScheme.primary)
+                            Text("1. Connect your phone and TV to the internet.\n2. Scan the QR code to open Saab TV on GitHub Pages.\n3. Enter your details.\n4. Confirm on the TV.")
+                            Text("No local certificates or same-Wi-Fi connection required. Keep this QR private.", color = MaterialTheme.colorScheme.primary)
                         }
                     }
-                    Text(server.url, style = MaterialTheme.typography.bodySmall)
-                    Text("Certificate SHA-256\n${server.fingerprint}", style = MaterialTheme.typography.bodySmall)
-                    Text("Private HTTPS link · expires in 5 minutes · no password logging", style = MaterialTheme.typography.bodySmall)
+                    Text(CloudPairingSession.PAGE_URL, style = MaterialTheme.typography.bodySmall)
+                    Text("Encrypted pairing · expires in 5 minutes · no password logging", style = MaterialTheme.typography.bodySmall)
+                    Text(connectionStatus, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 } else if (error == null) CircularProgressIndicator()
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 SetupButton("Cancel", { pending = null; onDismiss() }, modifier = Modifier.fillMaxWidth())

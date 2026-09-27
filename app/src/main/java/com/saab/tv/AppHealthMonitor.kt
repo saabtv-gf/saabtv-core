@@ -29,6 +29,12 @@ object AppHealthMonitor {
         append(context, "memory-pressure level=$level ${memorySummary()}")
     }
 
+    /** Only fixed stage identifiers and exception types; never URLs or account data. */
+    fun recordUpdateStage(context: Context, stage: String, failure: Throwable? = null) {
+        val type = failure?.javaClass?.simpleName.orEmpty()
+        append(context, "update-stage=$stage exception=$type ${memorySummary()}")
+    }
+
     fun latestSummary(context: Context): List<String> =
         healthFile(context).takeIf(File::isFile)?.readLines()?.takeLast(180).orEmpty()
 
