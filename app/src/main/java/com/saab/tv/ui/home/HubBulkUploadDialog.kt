@@ -159,12 +159,12 @@ fun HubBulkUploadDialog(
                     
                     if (currentServerUrl != null) {
                         Text(
-                            "Or visit:",
+                            "Private QR · expires in 5 minutes",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Gray
                         )
                         Text(
-                            currentServerUrl,
+                            com.saab.tv.remote_input.CloudPairingSession.PAGE_URL,
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = FontWeight.SemiBold,
                                 letterSpacing = 0.5.sp
@@ -174,7 +174,7 @@ fun HubBulkUploadDialog(
                         )
                     }
                 } else {
-                    CircularProgressIndicator(
+                    if (error == null) CircularProgressIndicator(
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(48.dp)
                     )

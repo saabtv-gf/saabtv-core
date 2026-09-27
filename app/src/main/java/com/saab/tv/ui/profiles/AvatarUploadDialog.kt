@@ -155,7 +155,7 @@ fun AvatarUploadDialog(
                         
                         // Manual URL
                         Text(
-                            "Or visit:",
+                            "Private QR · expires in 5 minutes",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Gray
                         )
