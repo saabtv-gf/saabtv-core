@@ -33,7 +33,26 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
     private fun hash(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
         .joinToString("") { "%02x".format(it) }
     private suspend fun remote(): JsonObject? = JsonParser.parseString(auth.dataRequest(
-        "saabtv_account_state?select=revision,ciphertext&limit=1")).asJsonArray.firstOrNull()?.asJsonObject
+        "saabtv_account_state?select=revision,ciphertext,updated_at&limit=1")).asJsonArray.firstOrNull()?.asJsonObject
+
+    private fun payload(cloud: JsonObject): JsonObject = JsonParser.parseString(
+        AccountSnapshotCrypto.decrypt(Base64.decode(cloud.get("ciphertext").asString, Base64.NO_WRAP),
+            auth.syncKey, requireNotNull(auth.userId)).toString(Charsets.UTF_8)).asJsonObject
+
+    private fun contentBytes(snapshot: JsonObject): ByteArray = snapshot.deepCopy().apply {
+        remove("changedAt")
+    }.toString().toByteArray(Charsets.UTF_8)
+
+    private fun cloudChangedAt(cloud: JsonObject, snapshot: JsonObject): Long =
+        snapshot.get("changedAt")?.asLong?.takeIf { it > 0 } ?: runCatching {
+            java.time.Instant.parse(cloud.get("updated_at").asString).toEpochMilli()
+        }.getOrDefault(0)
+
+    fun noteLocalChange() {
+        // No baseline means an uninitialized device, not an independently newer copy.
+        if (!metadata.contains("hash")) return
+        check(metadata.edit().putLong("local_changed_at", System.currentTimeMillis()).commit())
+    }
 
     suspend fun initialize() {
         if (restoreJournal.baseFile.exists()) {
@@ -48,17 +67,26 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
             val current = snapshots.capture()
             // Recover a successful server write whose response was lost before
             // local metadata committed (network loss/process termination).
-            val remoteBytes = AccountSnapshotCrypto.decrypt(Base64.decode(cloud.get("ciphertext").asString, Base64.NO_WRAP),
-                auth.syncKey, requireNotNull(auth.userId))
+            val remoteSnapshot = payload(cloud)
+            val remoteBytes = contentBytes(remoteSnapshot)
             if (hash(current) == hash(remoteBytes)) {
                 saveMetadata(revision, hash(current))
                 return
             }
             val dirty = hasLocalProfiles && metadata.getString("hash", null) != hash(current)
-            if (dirty) throw IOException("This TV and another device both have changes. Your local data is safe. Use Account settings to choose which copy to keep.")
+            if (dirty && localSnapshotIsNewer(metadata.getLong("local_changed_at", 0), cloudChangedAt(cloud, remoteSnapshot))) {
+                try { upload() } catch (_: AccountSyncConflict) {
+                    restoreCloud(remote() ?: throw IOException("Cloud backup is unavailable. Please retry."))
+                }
+                return
+            }
             restoreCloud(cloud)
         } else if (cloud == null && localRevision > 0) {
             throw IOException("Cloud account data is missing. Local data has been preserved.")
+        } else if (cloud != null) {
+            try { upload() } catch (_: AccountSyncConflict) {
+                restoreCloud(remote() ?: throw IOException("Cloud backup is unavailable. Please retry."))
+            }
         }
     }
 
@@ -66,13 +94,31 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
         val bytes = snapshots.capture()
         val digest = hash(bytes)
         if (metadata.getString("hash", null) == digest) return false
+        val changedAt = metadata.getLong("local_changed_at", 0).takeIf { it > 0 } ?: System.currentTimeMillis()
+        val snapshot = JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject.apply {
+            addProperty("changedAt", changedAt)
+        }.toString().toByteArray(Charsets.UTF_8)
         val body = JsonObject().apply {
             addProperty("expected_revision", metadata.getLong("revision", 0))
-            addProperty("encrypted_state", Base64.encodeToString(AccountSnapshotCrypto.encrypt(bytes, auth.syncKey,
+            addProperty("encrypted_state", Base64.encodeToString(AccountSnapshotCrypto.encrypt(snapshot, auth.syncKey,
                 requireNotNull(auth.userId)), Base64.NO_WRAP))
         }
         val result = JsonParser.parseString(auth.dataRequest("rpc/saabtv_save_account", body)).asJsonObject
-        if (result.get("conflict").asBoolean) throw AccountSyncConflict("Sync conflict: another device has newer data. Local changes were not overwritten. Choose which copy to keep in Account settings.")
+        if (result.get("conflict").asBoolean) {
+            val latest = remote() ?: throw IOException("Cloud backup changed during sync. Please retry.")
+            val latestSnapshot = payload(latest)
+            if (hash(bytes) == hash(contentBytes(latestSnapshot))) {
+                saveMetadata(latest.get("revision").asLong, digest)
+                return false
+            }
+            if (!localSnapshotIsNewer(changedAt, cloudChangedAt(latest, latestSnapshot)))
+                throw AccountSyncConflict("A newer cloud copy is available. Reopen Saab TV to load it automatically.")
+            body.addProperty("expected_revision", latest.get("revision").asLong)
+            val retry = JsonParser.parseString(auth.dataRequest("rpc/saabtv_save_account", body)).asJsonObject
+            if (retry.get("conflict").asBoolean) throw IOException("Cloud backup changed again. Please retry.")
+            saveMetadata(retry.get("revision").asLong, digest)
+            return true
+        }
         saveMetadata(result.get("revision").asLong, digest)
         return true
     }
@@ -82,11 +128,12 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
         restoreCloud(cloud)
     }
 
-    /** Read-only probe. Never replace dirty local state during a foreground refresh. */
+    /** Read-only probe; the launcher performs any replacement before opening repositories. */
     suspend fun hasNewerCleanBackup(): Boolean {
         val cloud = remote() ?: return false
         if (cloud.get("revision").asLong <= metadata.getLong("revision", 0)) return false
-        return metadata.getString("hash", null) == hash(snapshots.capture())
+        return metadata.getString("hash", null) == hash(snapshots.capture()) ||
+            !localSnapshotIsNewer(metadata.getLong("local_changed_at", 0), cloudChangedAt(cloud, payload(cloud)))
     }
 
     private fun restoreCloud(cloud: JsonObject) {
@@ -97,6 +144,8 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
         try { stream.write(cloud.toString().toByteArray()); restoreJournal.finishWrite(stream) }
         catch (e: Exception) { restoreJournal.failWrite(stream); throw e }
         snapshots.restore(bytes)
+        check(metadata.edit().putLong("local_changed_at", cloudChangedAt(cloud,
+            JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject)).commit())
         saveMetadata(cloud.get("revision").asLong, hash(snapshots.capture()))
         restoreJournal.delete()
     }
@@ -137,9 +186,9 @@ class AccountSyncManager @Inject constructor(
     @Volatile private var suspended = false
     @Volatile private var conflictPending = false
     private val preferenceStores = AccountSnapshotStore(context, db).preferenceStores()
-    private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> requestSync() }
+    private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> cloud.noteLocalChange(); requestSync() }
     private val databaseObserver = object : InvalidationTracker.Observer(AccountSnapshotStore.TABLES.toTypedArray()) {
-        override fun onInvalidated(tables: Set<String>) { requestSync(progressOnly = tables.all { it == "watch_history" || it == "series_next_up" }) }
+        override fun onInvalidated(tables: Set<String>) { cloud.noteLocalChange(); requestSync(progressOnly = tables.all { it == "watch_history" || it == "series_next_up" }) }
     }
 
     fun start() {
