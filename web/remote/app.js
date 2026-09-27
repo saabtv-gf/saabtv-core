@@ -100,19 +100,23 @@ function showMode(mode) {
       slider.min = min; slider.max = max; slider.step = .1; slider.value = value; slider.addEventListener('input', drawCrop); fields.append(wrapper);
     }
     input.addEventListener('change', async () => {
+      const imageGeneration = generation;
+      const canvas = cropCanvas;
       try {
         const file = input.files[0]; if (!file) return;
         if (file.size > 5 * 1024 * 1024 || !['image/jpeg','image/png','image/webp'].includes(file.type)) throw new Error('Choose a JPEG, PNG or WebP up to 5 MB.');
-        image?.close(); image = await createImageBitmap(file);
+        const decoded = await createImageBitmap(file);
+        if (imageGeneration !== generation || !relay || canvas !== cropCanvas) { decoded.close(); return; }
+        image?.close(); image = decoded;
         if (image.width * image.height > 25000000) { image.close(); image = undefined; throw new Error('Choose an image smaller than 25 megapixels.'); }
         drawCrop();
-      } catch (error) { status('Image Unavailable', error.message); }
+      } catch (error) { if (imageGeneration === generation && relay) status('Image Unavailable', error.message); }
     });
   }
   submit.disabled = !relay; submit.textContent = relay ? 'Send To TV' : 'Pairing Required';
 }
 function drawCrop() {
-  if (!image || !cropCanvas) return;
+  if (!image || !cropCanvas || !document.querySelector('#zoom')) return;
   const context = cropCanvas.getContext('2d');
   const scale = Math.max(cropCanvas.width / image.width, cropCanvas.height / image.height) * Number(document.querySelector('#zoom').value);
   const width = image.width * scale, height = image.height * scale;
@@ -198,7 +202,8 @@ async function connect() {
     relay = candidate; showMode(manifest.mode); status('TV Connected', 'Pairing expires in five minutes. Keep the TV dialog open.');
     const ttl = Math.max(0, candidate.expires - Date.now());
     expiryTimer = setTimeout(() => {
-      relay = undefined; token = undefined; image?.close(); image = undefined; fields.replaceChildren();
+      generation++; busy = false;
+      relay = undefined; token = undefined; image?.close(); image = undefined; cropCanvas = undefined; fields.replaceChildren();
       submit.disabled = true; submit.textContent = 'Pairing Expired'; status('Pairing Expired', 'Reopen the QR code on your TV.');
     }, ttl);
   } catch (error) { if (activeGeneration === generation) { relay = undefined; status('Connection Unavailable', error.message); } }
@@ -206,6 +211,7 @@ async function connect() {
 connect();
 window.addEventListener('hashchange', connect);
 window.addEventListener('pagehide', () => {
+  generation++; clearTimeout(expiryTimer); busy = false;
   form.reset(); fields.replaceChildren(); image?.close(); image = undefined;
   relay = undefined; token = undefined;
 });
