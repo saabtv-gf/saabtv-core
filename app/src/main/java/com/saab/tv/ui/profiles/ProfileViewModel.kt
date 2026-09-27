@@ -47,7 +47,6 @@ class ProfileViewModel @Inject constructor(
     var tempName = ""
     var tempAvatarRef = "avatar_1"
     var tempThemeId = "void"  // Changed from tempColor
-    var tempIs4kTv = true
     var tempLanguages = listOf("en", "te", "hi")
         private set
     private var createdProfileId: Int? = null
@@ -79,7 +78,6 @@ class ProfileViewModel @Inject constructor(
         tempName = ""
         tempAvatarRef = "avatar_1"
         tempThemeId = "void"
-        tempIs4kTv = true
         tempLanguages = listOf("en", "te", "hi")
         createdProfileId = null
         copySourceId = null
@@ -114,23 +112,18 @@ class ProfileViewModel @Inject constructor(
     fun setWizardTheme(themeId: String) {
         tempThemeId = themeId
         if (editingProfileId != null) finishWizard()
-        else _wizardStep.value = if (setupSources().isNotEmpty()) 4 else 5
+        else _wizardStep.value = if (setupSources().isNotEmpty()) 4 else 6
     }
 
     fun chooseManualSetup() {
         copySourceId = null
-        _wizardStep.value = 5
+        _wizardStep.value = 6
     }
 
     fun chooseCopySetup(sourceId: Int) {
         if (setupSources().none { it.id == sourceId }) return
         copySourceId = sourceId
         finishWizard()
-    }
-
-    fun setWizardTv(is4k: Boolean) {
-        tempIs4kTv = is4k
-        _wizardStep.value = 6
     }
 
     fun setWizardLanguage(priority: Int, language: String) {
@@ -164,7 +157,7 @@ class ProfileViewModel @Inject constructor(
                 } else {
                     val newProfile = ProfileEntity(
                         name = tempName, avatarRef = tempAvatarRef, themeId = tempThemeId
-                    ).withOnboardingPreferences(tempIs4kTv, tempLanguages)
+                    ).withOnboardingPreferences(tempLanguages)
                     val profileId = createdProfileId?.also {
                         // A retry may follow changes to setup; keep the pending profile in sync.
                         dao.updateProfile(newProfile.copy(id = it))
@@ -276,7 +269,7 @@ class ProfileViewModel @Inject constructor(
     fun goBackStep() {
         if (_isInitializingProfile.value) return
         _wizardError.value = null
-        if (_wizardStep.value == 5 && setupSources().isEmpty()) _wizardStep.value = 3
+        if (_wizardStep.value == 6) _wizardStep.value = if (setupSources().isEmpty()) 3 else 4
         else if (_wizardStep.value > 0) _wizardStep.value -= 1
     }
 }

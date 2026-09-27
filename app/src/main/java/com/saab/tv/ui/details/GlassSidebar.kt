@@ -688,6 +688,16 @@ fun EpisodeItem(
         ?: "Episode ${episode.episode}"
     val overview = enrichment?.overview ?: episode.overview
     val thumbnail = enrichment?.thumbnail ?: episode.thumbnail
+    val protectSpoilers = com.saab.tv.data.profile.shouldHideEpisodeSpoilers(rememberEpisodeSpoilers(), isWatched)
+    var descriptionExpanded by remember(episode.id, protectSpoilers) { mutableStateOf(false) }
+    val descriptionRequester = remember { FocusRequester() }
+    val hasHiddenDescription = protectSpoilers && !overview.isNullOrBlank()
+    val imageContext = androidx.compose.ui.platform.LocalContext.current
+    val imageRequest = remember(thumbnail, protectSpoilers, imageContext) {
+        coil.request.ImageRequest.Builder(imageContext).data(thumbnail).allowHardware(false).apply {
+            if (protectSpoilers) transformations(EpisodeSpoilerBlur())
+        }.build()
+    }
     val runtime = enrichment?.runtimeMinutes
     val releaseDate = remember(enrichment?.airDate, episode.released) {
         enrichment?.airDate ?: episode.released?.take(10)
@@ -711,14 +721,14 @@ fun EpisodeItem(
                     RoundedCornerShape(6.dp)
                 )
                 .focusRequester(thumbnailRequester)
-                .focusProperties { left = FocusRequester.Cancel; right = buttonRequester }
+                .focusProperties { left = FocusRequester.Cancel; right = if (hasHiddenDescription) descriptionRequester else buttonRequester }
                 .onFocusChanged { thumbnailFocused = it.isFocused }
                 .clickable(onClick = onClick)
                 .focusable()
         ) {
             if (thumbnail != null) {
                 AsyncImage(
-                    thumbnail, null,
+                    imageRequest, null,
                     Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
@@ -787,7 +797,15 @@ fun EpisodeItem(
                 )
 
                 // Synopsis
-                if (!overview.isNullOrBlank()) {
+                if (hasHiddenDescription) {
+                    com.saab.tv.ui.components.SetupButton(
+                        if (descriptionExpanded) "Hide Description" else "Show Description",
+                        { descriptionExpanded = !descriptionExpanded }, compact = true,
+                        focusRequester = descriptionRequester,
+                        modifier = Modifier.padding(top = 4.dp).focusProperties { left = thumbnailRequester; right = buttonRequester }
+                    )
+                }
+                if (!overview.isNullOrBlank() && (!protectSpoilers || descriptionExpanded)) {
                     Text(
                         overview,
                         color = Color.White.copy(0.5f),

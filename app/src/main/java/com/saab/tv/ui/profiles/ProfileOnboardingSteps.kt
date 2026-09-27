@@ -43,20 +43,6 @@ internal fun ProfileSetupChoiceStep(profiles: List<ProfileEntity>, onCopy: (Int)
 }
 
 @Composable
-internal fun ProfileTvStep(onSelect: (Boolean) -> Unit, onBack: () -> Unit) {
-    val requester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { withFrameNanos { }; runCatching { requester.requestFocus() } }
-    ProfileSetupLayout("Choose Your TV", "Match streams to your display. You can change playback and quality preferences later in Settings.", "PROFILE SETUP · DISPLAY", onBack) {
-        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            SetupButton(text = "4K / Ultra HD", onClick = { onSelect(true) }, primary = true, focusRequester = requester, modifier = Modifier.weight(1f))
-            SetupButton(text = "HD / Full HD", onClick = { onSelect(false) }, modifier = Modifier.weight(1f))
-        }
-        Text("4K enables Ultra HD streams and tunneled playback. HD / Full HD excludes Ultra HD streams and disables tunneling.",
-            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
 internal fun ProfileLanguageStep(priority: Int, languages: List<String>, onSelect: (String) -> Unit, onBack: () -> Unit) {
     val options = remember(priority, languages) { AUDIO_LANGUAGE_OPTIONS.filter { it.second.isNotBlank() && it.second !in languages.take(priority) } }
     var code by remember(priority, languages) { mutableStateOf(languages[priority].takeIf { candidate -> options.any { it.second == candidate } } ?: options.first().second) }

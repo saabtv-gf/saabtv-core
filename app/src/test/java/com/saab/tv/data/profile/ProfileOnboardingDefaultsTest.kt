@@ -19,15 +19,18 @@ class ProfileOnboardingDefaultsTest {
         assertEquals("en", profile.preferredSubtitleLanguage)
     }
 
-    @Test fun tvChoiceAndLanguagePriorityAreApplied() {
+    @Test fun deviceChoiceAndLanguagePriorityAreIndependent() {
         val base = ProfileEntity(name = "New", themeId = "custom")
-        val fourK = base.withOnboardingPreferences(true, listOf("te", "hi", "en"))
+        val languages = base.withOnboardingPreferences(listOf("ml", "kn", "en"))
+        assertEquals(listOf("ml", "kn", "en"), listOf(languages.sourceLanguagePriority1, languages.sourceLanguagePriority2, languages.sourceLanguagePriority3))
+        assertEquals(base.tunnelingEnabled, languages.tunnelingEnabled)
+        val fourK = base.withOnboardingPreferences(listOf("te", "hi", "en")).forDeviceDisplay(true)
         assertTrue(fourK.tunnelingEnabled)
         assertTrue(fourK.sourceEnabledQualities.split(",").contains("4k"))
         assertEquals("3d", fourK.sourceExcludedFormats)
         assertEquals(listOf("te", "hi", "en"), listOf(fourK.sourceLanguagePriority1, fourK.sourceLanguagePriority2, fourK.sourceLanguagePriority3))
         assertEquals("custom", fourK.themeId)
-        val hd = base.withOnboardingPreferences(false, listOf("en", "fr", "de"))
+        val hd = base.withOnboardingPreferences(listOf("en", "fr", "de")).forDeviceDisplay(false)
         assertFalse(hd.tunnelingEnabled)
         assertEquals("1080p,720p,unknown", hd.sourceEnabledQualities)
         assertEquals(setOf("dv", "hdr", "dts", "dolby", "hevc", "av1", "3d"), hd.sourceExcludedFormats.split(",").toSet())
@@ -35,6 +38,21 @@ class ProfileOnboardingDefaultsTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun duplicateLanguagesAreRejected() {
-        ProfileEntity(name = "New").withOnboardingPreferences(true, listOf("en", "en", "te"))
+        ProfileEntity(name = "New").withOnboardingPreferences(listOf("en", "en", "te"))
+    }
+
+    @Test fun cloudDisplayValuesCannotOverrideTheLocalDeviceDefaults() {
+        val fromHdDevice = ProfileEntity(name = "Shared", tunnelingEnabled = false, sourceEnabledQualities = "720p", sourceExcludedFormats = "hdr")
+        val on4kDevice = fromHdDevice.forDeviceDisplay(true)
+        assertTrue(on4kDevice.tunnelingEnabled)
+        assertTrue(on4kDevice.sourceEnabledQualities.contains("4k"))
+        assertEquals("3d", on4kDevice.sourceExcludedFormats)
+        assertEquals("720p", fromHdDevice.sourceEnabledQualities)
+    }
+
+    @Test fun onlyUnwatchedEpisodesAreProtectedWhenEnabled() {
+        assertTrue(shouldHideEpisodeSpoilers(true, false))
+        assertFalse(shouldHideEpisodeSpoilers(true, true))
+        assertFalse(shouldHideEpisodeSpoilers(false, false))
     }
 }

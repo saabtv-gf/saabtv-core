@@ -126,7 +126,6 @@ fun ProfileScreen(
                         onManual = viewModel::chooseManualSetup,
                         onBack = viewModel::goBackStep
                     )
-                    5 -> ProfileTvStep(onSelect = viewModel::setWizardTv, onBack = viewModel::goBackStep)
                     6, 7, 8 -> ProfileLanguageStep(
                         priority = step - 6,
                         languages = viewModel.tempLanguages,

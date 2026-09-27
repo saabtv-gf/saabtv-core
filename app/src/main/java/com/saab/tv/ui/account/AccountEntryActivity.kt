@@ -38,6 +38,8 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class AccountEntryActivity : ComponentActivity() {
     @Inject lateinit var auth: AccountAuthManager
+    @Inject lateinit var deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences
+    private var displaySetup by mutableStateOf(false)
     private var busy by mutableStateOf(true)
     private var error by mutableStateOf<String?>(null)
     private var importOffered by mutableStateOf(false)
@@ -53,6 +55,13 @@ class AccountEntryActivity : ComponentActivity() {
                 BackHandler { showExit = true }
                 Box(Modifier.fillMaxSize().background(Color(0xFF07101F)), contentAlignment = Alignment.Center) {
                     when {
+                        displaySetup -> Column(Modifier.widthIn(max = 560.dp).padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                            val displayFocus = remember { FocusRequester() }
+                            LaunchedEffect(Unit) { withFrameNanos { }; displayFocus.requestFocus() }
+                            SetupHeader("Set Up This Device", "Is the display connected to this device 4K? This choice stays on this device and applies to all your profiles.", "DISPLAY")
+                            SetupButton("4K / Ultra HD", { deviceDisplay.configure(true); openApp() }, primary = true, modifier = Modifier.fillMaxWidth(), focusRequester = displayFocus)
+                            SetupButton("HD / Full HD", { deviceDisplay.configure(false); openApp() }, modifier = Modifier.fillMaxWidth())
+                        }
                         busy -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(); Spacer(Modifier.height(20.dp))
                             Text("Opening Your Account…", color = Color.White)
@@ -132,7 +141,10 @@ class AccountEntryActivity : ComponentActivity() {
         }
     }
 
-    private fun openApp() { startActivity(Intent(this, MainActivity::class.java)); finish() }
+    private fun openApp() {
+        if (!deviceDisplay.isConfigured()) { busy = false; importOffered = false; displaySetup = true; return }
+        startActivity(Intent(this, MainActivity::class.java)); finish()
+    }
     private fun friendlyError(e: Exception): String = when (e) {
         is AccountApiException -> e.message.orEmpty()
         is IOException -> "${e.message?.takeIf { !it.contains("http") }?.take(180) ?: "Unable to connect to Neon. Please try again."}"

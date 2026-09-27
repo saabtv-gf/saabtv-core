@@ -245,6 +245,7 @@ fun PlaybackSettings(
 ) {
     if (currentProfile == null) return
 
+    val spoilerContext = androidx.compose.ui.platform.LocalContext.current
     var activeLanguageField by remember { mutableStateOf<LanguageField?>(null) }
     val sidebarFocusRequester = remember { FocusRequester() }
     val audioPrimaryFR = remember { FocusRequester() }
@@ -300,12 +301,25 @@ fun PlaybackSettings(
 
             // TUNNELED PLAYBACK
             SettingToggleRow(
+                label = "This Device Has A 4K Display",
+                subtitle = "Device-only. Changing this resets local display-quality defaults for your profiles, not your other TVs.",
+                isChecked = viewModel.deviceDisplay.is4k(),
+                onCheckedChange = { viewModel.deviceDisplay.configure(it) }, onBack = onGoBack, blockUp = true
+            )
+            val hideSpoilers = com.saab.tv.ui.details.rememberEpisodeSpoilers(currentProfile.id)
+            SettingToggleRow(
+                label = "Hide Unwatched Episode Spoilers",
+                subtitle = "Blur episode artwork and collapse descriptions until the episode is watched.",
+                isChecked = hideSpoilers,
+                onCheckedChange = { com.saab.tv.data.profile.EpisodeSpoilerPreferences.set(spoilerContext, currentProfile.id, it) },
+                onBack = onGoBack
+            )
+            SettingToggleRow(
                 label = "Tunneled Playback",
                 subtitle = "Better 4K/HDR support, may not work on all devices",
                 isChecked = currentProfile.tunnelingEnabled,
                 onCheckedChange = { viewModel.updateTunnelingEnabled(currentProfile.id, it) },
-                onBack = onGoBack,
-                blockUp = true
+                onBack = onGoBack
             )
 
             // DV7 → HEVC FALLBACK
@@ -1105,7 +1119,9 @@ internal val AUDIO_LANGUAGE_OPTIONS: List<Pair<String, String>> = listOf(
     "Persian" to "fa",
     "Bengali" to "bn",
     "Tamil" to "ta",
-    "Telugu" to "te"
+    "Telugu" to "te",
+    "Malayalam" to "ml",
+    "Kannada" to "kn"
 )
 
 // --- SUBTITLE STYLE COLORS ---
@@ -1780,8 +1796,8 @@ fun SourcePreferencesSettings(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SettingToggleChip(label = "4K / UHD", isChecked = "4k" in enabledKeys, onCheckedChange = { toggleQuality("4k") }, onBack = onGoBack)
-                SettingToggleChip(label = "1080p", isChecked = "1080p" in enabledKeys, onCheckedChange = { toggleQuality("1080p") })
+                if (viewModel.deviceDisplay.is4k()) SettingToggleChip(label = "4K / UHD", isChecked = "4k" in enabledKeys, onCheckedChange = { toggleQuality("4k") }, onBack = onGoBack)
+                SettingToggleChip(label = "1080p", isChecked = "1080p" in enabledKeys, onCheckedChange = { toggleQuality("1080p") }, onBack = onGoBack)
                 SettingToggleChip(label = "720p", isChecked = "720p" in enabledKeys, onCheckedChange = { toggleQuality("720p") })
                 SettingToggleChip(label = "480p / SD", isChecked = "sd" in enabledKeys, onCheckedChange = { toggleQuality("sd") })
                 SettingToggleChip(label = "CAM", isChecked = "cam" in enabledKeys, onCheckedChange = { toggleQuality("cam") })
@@ -2114,8 +2130,7 @@ fun AboutSettings(
             val progress = download.progress
             Spacer(Modifier.height(16.dp))
             Text(
-                if (progress < 0) "Downloading… %.1f MB".format(download.downloadedMb)
-                else "Downloading… ${(progress * 100).toInt()}% · %.1f / %.1f MB".format(download.downloadedMb, download.totalMb),
+                com.saab.tv.data.update.updateProgressLabel(progress, download.downloadedMb, download.totalMb),
                 color = accentColor,
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
             )

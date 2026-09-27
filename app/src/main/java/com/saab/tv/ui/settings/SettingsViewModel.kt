@@ -22,7 +22,8 @@ class SettingsViewModel @Inject constructor(
     private val dao: AddonDao,
     private val profileConfigurationManager: ProfileConfigurationManager,
     private val seekThumbnailCache: SeekThumbnailCache,
-    @ApplicationContext private val appContext: Context
+    @ApplicationContext private val appContext: Context,
+    val deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences
 ) : ViewModel() {
 
     // All profile mutations are serialized so rapid slider/toggle changes cannot
@@ -66,10 +67,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateTunnelingEnabled(profileId: Int, enabled: Boolean) {
-        viewModelScope.launch(mutationDispatcher + NonCancellable) {
-            val profile = dao.getProfileById(profileId)
-            if (profile != null) dao.insertProfile(profile.copy(tunnelingEnabled = enabled))
-        }
+        deviceDisplay.setTunneling(profileId, enabled)
     }
 
     fun updateMapDV7ToHevc(profileId: Int, enabled: Boolean) {
@@ -274,10 +272,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateSourceEnabledQualities(profileId: Int, qualities: String) {
-        viewModelScope.launch(mutationDispatcher + NonCancellable) {
-            val profile = dao.getProfileById(profileId)
-            if (profile != null) dao.insertProfile(profile.copy(sourceEnabledQualities = qualities))
-        }
+        deviceDisplay.setQualities(profileId, qualities)
     }
 
     fun updateSourceExcludePhrases(profileId: Int, phrases: String) {
@@ -302,10 +297,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateSourceExcludedFormats(profileId: Int, formats: String) {
-        viewModelScope.launch(mutationDispatcher + NonCancellable) {
-            val profile = dao.getProfileById(profileId)
-            if (profile != null) dao.insertProfile(profile.copy(sourceExcludedFormats = formats))
-        }
+        deviceDisplay.setFormats(profileId, formats)
     }
 
     fun updateSourceSeasonPacksOnly(profileId: Int, enabled: Boolean) {

@@ -18,13 +18,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
+import kotlinx.coroutines.flow.combine
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val dao: AddonDao,
     private val profileConfigurationManager: ProfileConfigurationManager,
     private val traktAuthManager: TraktAuthManager,
-    private val traktSyncManager: TraktSyncManager
+    private val traktSyncManager: TraktSyncManager,
+    private val deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences
 ) : ViewModel() {
 
     private val _activeProfile = MutableStateFlow<ProfileEntity?>(null)
@@ -69,7 +71,7 @@ class MainViewModel @Inject constructor(
 
                 profileJob?.cancel()
                 profileJob = viewModelScope.launch {
-                    dao.getProfileFlow(id).collect { profile ->
+                    combine(dao.getProfileFlow(id), deviceDisplay.revision) { profile, _ -> deviceDisplay.effective(profile) }.collect { profile ->
                         _activeProfile.value = profile
                         profile?.let {
                             profileConfigurationManager.cacheSplashEnabled(it.id, it.splashEnabled)

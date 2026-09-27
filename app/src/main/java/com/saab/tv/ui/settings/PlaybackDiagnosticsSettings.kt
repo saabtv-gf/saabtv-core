@@ -30,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +42,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -84,6 +86,25 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         val currentReport = report
         val canFocusEvents = currentReport?.events?.isNotEmpty() == true
+        val focusFirstEvent: (() -> Unit)? = if (canFocusEvents) {
+            {
+                scope.launch {
+                    try {
+                        // Lazy rows are detached when off-screen. Compose the target before focusing it.
+                        listState.scrollToItem(0)
+                        withFrameNanos { }
+                        if (listState.layoutInfo.visibleItemsInfo.any { it.index == 0 }) {
+                            firstEventRequester.requestFocus()
+                        }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (failure: IllegalStateException) {
+                        com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Focus Target Unavailable", failure)
+                    }
+                }
+                Unit
+            }
+        } else null
         val eventKeys = remember(currentReport?.events) {
             val occurrences = mutableMapOf<String, Int>()
             currentReport?.events.orEmpty().map { item ->
@@ -149,7 +170,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
                 label = "Refresh",
                 modifier = Modifier.focusRequester(firstButtonRequester).focusProperties { up = detailedRequester; right = exportRequester },
                 onLeft = onGoBack,
-                downRequester = firstEventRequester.takeIf { canFocusEvents }
+                onDown = focusFirstEvent
             ) {
                 refreshToken++
                 status = "Updated"
@@ -157,7 +178,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             DiagnosticsButton(
                 label = "Export Report",
                 modifier = Modifier.focusRequester(exportRequester).focusProperties { left = firstButtonRequester; right = clearRequester; up = detailedRequester },
-                downRequester = firstEventRequester.takeIf { canFocusEvents }
+                onDown = focusFirstEvent
             ) {
                 scope.launch {
                     val file = withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.export(context) }
@@ -190,7 +211,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             DiagnosticsButton(
                 label = "Clear Logs",
                 modifier = Modifier.focusRequester(clearRequester).focusProperties { left = exportRequester; up = detailedRequester },
-                downRequester = firstEventRequester.takeIf { canFocusEvents }
+                onDown = focusFirstEvent
             ) {
                 scope.launch {
                     withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.clear(context) }
@@ -271,7 +292,7 @@ private fun DiagnosticsButton(
     label: String,
     modifier: Modifier = Modifier,
     onLeft: (() -> Unit)? = null,
-    downRequester: FocusRequester? = null,
+    onDown: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     com.saab.tv.ui.components.SetupButton(
@@ -279,15 +300,11 @@ private fun DiagnosticsButton(
         onClick = onClick,
         compact = true,
         modifier = modifier
-            .then(
-                if (downRequester != null) {
-                    Modifier.focusProperties { down = downRequester }
-                } else {
-                    Modifier
-                }
-            )
             .onPreviewKeyEvent {
-                if (onLeft != null && it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
+                if (onDown != null && it.key == Key.DirectionDown) {
+                    if (it.type == KeyEventType.KeyDown) onDown()
+                    true
+                } else if (onLeft != null && it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
                     onLeft()
                     true
                 } else {
@@ -317,7 +334,10 @@ private fun DiagnosticEventCard(
         modifier = modifier
             .fillMaxWidth()
             .onPreviewKeyEvent {
-                if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
+                if (isDiagnosticActivationKey(it.key.nativeKeyCode)) {
+                    // Read-only log rows have no child/action to enter. Consume down AND up.
+                    true
+                } else if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
                     onLeft()
                     true
                 } else {

@@ -61,7 +61,8 @@ class DetailsViewModel @Inject constructor(
     private val tmdbService: TmdbService,
     private val tmdbMetadataService: TmdbMetadataService,
     private val traktSyncManager: TraktSyncManager,
-    private val seekThumbnailCache: SeekThumbnailCache
+    private val seekThumbnailCache: SeekThumbnailCache,
+    private val deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences
 ) : ViewModel() {
 
     /** Per-episode watch progress for the episodes sidebar. */
@@ -792,7 +793,7 @@ class DetailsViewModel @Inject constructor(
 
                 // Read sorting preferences from the active profile
                 val activeProfileId = profileConfigurationManager.getLastActiveProfileId()
-                val profile = activeProfileId?.let { dao.getProfileById(it) }
+                val profile = activeProfileId?.let { dao.getProfileById(it) }?.let(deviceDisplay::effective)
                 val sourceLanguagePreferences = StreamSortingService.smartLanguagePreferences(
                     profile?.sourceLanguagePriority1,
                     profile?.sourceLanguagePriority2,

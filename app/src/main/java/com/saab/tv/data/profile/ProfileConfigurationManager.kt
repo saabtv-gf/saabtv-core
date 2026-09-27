@@ -36,7 +36,8 @@ class ProfileConfigurationManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val dao: AddonDao,
     private val stremioAuthManager: StremioAuthManager,
-    private val addonRepository: AddonRepository
+    private val addonRepository: AddonRepository,
+    private val deviceDisplay: DeviceDisplayPreferences
 ) {
     companion object {
         private const val PREFS_FILE = "profile_configuration_prefs"
@@ -147,6 +148,8 @@ class ProfileConfigurationManager @Inject constructor(
                 writeSnapshot(targetProfileId, sourceSnapshot)
                 stremioAuthManager.copyCredentialsBetweenProfiles(sourceProfileId, targetProfileId)
                 copyProfileDisplayAndDashboardConfig(targetProfileId, sourceProfileId)
+                deviceDisplay.copyProfile(sourceProfileId, targetProfileId)
+                EpisodeSpoilerPreferences.copy(context, sourceProfileId, targetProfileId)
                 clearPendingSetup(targetProfileId)
             }
         }
@@ -156,6 +159,7 @@ class ProfileConfigurationManager @Inject constructor(
         com.saab.tv.AppDiagnostics.event(context, "Profile", "Delete Settings")
         clearPendingSetup(profileId)
         prefs.edit().remove("$KEY_SPLASH_ENABLED_PREFIX$profileId").apply()
+        prefs.edit().remove("hide_episode_spoilers_$profileId").apply()
         snapshotFile(profileId).delete()
         stremioAuthManager.clearCredentialsForProfile(profileId)
 
