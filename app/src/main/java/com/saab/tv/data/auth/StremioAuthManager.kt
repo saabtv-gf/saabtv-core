@@ -87,6 +87,12 @@ class StremioAuthManager @Inject constructor(
         val authProfileKey = profileScopedAuthKey(profileId)
         val emailProfileKey = profileScopedEmail(profileId)
 
+        // EncryptedSharedPreferences re-encrypts identical writes and notifies
+        // listeners. Avoid turning snapshot capture into another sync event.
+        if (encryptedPrefs.getInt(KEY_ACTIVE_PROFILE_ID, -1) == profileId &&
+            encryptedPrefs.getString(authProfileKey, null) == authKey &&
+            encryptedPrefs.getString(emailProfileKey, null) == email) return
+
         encryptedPrefs.edit().apply {
             putInt(KEY_ACTIVE_PROFILE_ID, profileId)
             if (authKey != null && email != null) {

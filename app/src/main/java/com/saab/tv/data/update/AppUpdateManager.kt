@@ -21,6 +21,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.sync.Mutex
 import kotlin.coroutines.coroutineContext
 import okhttp3.OkHttpClient
@@ -77,6 +82,13 @@ class AppUpdateManager @Inject constructor(
     private var offeredUpdate: UpdateInfo? = null
     private var pendingDownload: Pair<String, String>? = null
     private var pendingInstall: File? = null
+    init {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            state.map { it.javaClass.simpleName }.distinctUntilChanged().collect { type ->
+                com.saab.tv.AppDiagnostics.event(context, "Updater", "State Changed", "state=$type", true)
+            }
+        }
+    }
     // Large APKs must not consume the metadata disk cache or its short timeout.
     private val downloadClient = okHttpClient.newBuilder().cache(null)
         .readTimeout(60, TimeUnit.SECONDS).callTimeout(10, TimeUnit.MINUTES)
@@ -88,6 +100,7 @@ class AppUpdateManager @Inject constructor(
         }.build()
 
     suspend fun checkForUpdate() {
+        recordDiagnostic("check-clicked")
         if (!operation.tryLock()) return
         offeredUpdate = null
         _state.value = UpdateState.Checking
@@ -135,6 +148,7 @@ class AppUpdateManager @Inject constructor(
     }
 
     suspend fun downloadAndInstall(apkUrl: String, expectedSha256: String) {
+        recordDiagnostic("download-clicked")
         if (!isAllowedDownloadUrl(apkUrl) || !UpdateDownloadPolicy.validHash(expectedSha256)) {
             _state.value = UpdateState.Error("Download URL is not from a trusted source.")
             return
@@ -188,13 +202,21 @@ class AppUpdateManager @Inject constructor(
     fun canInstallUpdates(): Boolean = runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
 
     fun openInstallPermissionSettings() {
+        recordDiagnostic("permission-settings-open")
         val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try { context.startActivity(intent) }
-        catch (_: android.content.ActivityNotFoundException) {
+        catch (failure: android.content.ActivityNotFoundException) {
+            com.saab.tv.AppDiagnostics.failure(context, "Updater", "Permission Activity Unavailable", failure)
             try { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            catch (_: Exception) { _state.value = UpdateState.Error("Open TV Settings and allow Saab TV to install unknown apps, then retry.") }
-        } catch (_: Exception) { _state.value = UpdateState.Error("Installation permission is blocked. Allow Saab TV in your TV’s security settings.") }
+            catch (fallbackFailure: Exception) {
+                com.saab.tv.AppDiagnostics.failure(context, "Updater", "Permission Fallback Failed", fallbackFailure)
+                _state.value = UpdateState.Error("Open TV Settings and allow Saab TV to install unknown apps, then retry.")
+            }
+        } catch (failure: Exception) {
+            com.saab.tv.AppDiagnostics.failure(context, "Updater", "Permission Launch Failed", failure)
+            _state.value = UpdateState.Error("Installation permission is blocked. Allow Saab TV in your TV’s security settings.")
+        }
     }
 
     /** Called on resume; permission denial never starts a network download. */
@@ -218,11 +240,15 @@ class AppUpdateManager @Inject constructor(
             if (!verification.valid) { _state.value = UpdateState.Error(verification.message); return }
             launchInstaller(file)
         } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { _state.value = UpdateState.InstallError(file, "The downloaded APK could not be opened. Try downloading it again.") }
+        catch (failure: Exception) {
+            com.saab.tv.AppDiagnostics.failure(context, "Updater", "Install Retry Failed", failure)
+            _state.value = UpdateState.InstallError(file, "The downloaded APK could not be opened. Try downloading it again.")
+        }
         finally { operation.unlock() }
     }
 
     private fun launchInstaller(file: File) {
+        recordDiagnostic("installer-handoff")
         if (!canInstallUpdates()) {
             pendingInstall = file
             _state.value = UpdateState.AwaitingInstallPermission
@@ -232,7 +258,8 @@ class AppUpdateManager @Inject constructor(
         pendingInstall = null
         _state.value = UpdateState.ReadyToInstall(file)
         try { installApk(file) }
-        catch (_: Exception) {
+        catch (failure: Exception) {
+            com.saab.tv.AppDiagnostics.failure(context, "Updater", "Installer Launch Failed", failure)
             _state.value = UpdateState.InstallError(file, "The TV could not open its installer. The verified APK is saved; retry installation or check your TV’s security settings.")
         }
     }
@@ -319,6 +346,10 @@ class AppUpdateManager @Inject constructor(
             clipData = ClipData.newRawUri("Saab TV Update", uri)
         }
         context.startActivity(intent)
+    }
+
+    private fun recordDiagnostic(stage: String) {
+        com.saab.tv.AppDiagnostics.event(context, "Updater", stage, important = true)
     }
 
     companion object {

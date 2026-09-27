@@ -1044,37 +1044,7 @@ private fun DialogButton(
     modifier: Modifier = Modifier,
     isDestructive: Boolean = false
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "dlgBtnScale")
-    val activeColor = if (isDestructive) Color(0xFFD32F2F) else MaterialTheme.colorScheme.primary
-
-    Box(
-        modifier = modifier
-            .height(50.dp)
-            .scale(scale)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (isFocused) activeColor else Color.White.copy(0.08f))
-            .border(
-                if (isFocused) 3.dp else 1.dp,
-                if (isFocused) Color.White else if (isDestructive) activeColor.copy(0.75f) else Color.White.copy(0.2f),
-                RoundedCornerShape(8.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusable(interactionSource = interactionSource),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-            color = when {
-                isFocused && isDestructive -> Color.White
-                isFocused -> MaterialTheme.colorScheme.onPrimary
-                isDestructive -> activeColor.copy(0.95f)
-                else -> Color.White
-            }
-        )
-    }
+    com.saab.tv.ui.components.SetupButton(text, onClick, modifier.height(50.dp), destructive = isDestructive)
 }
 
 @Composable

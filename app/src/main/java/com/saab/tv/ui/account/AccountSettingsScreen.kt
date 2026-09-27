@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -56,15 +57,16 @@ fun AccountSettingsScreen(onBack: () -> Unit, viewModel: AccountSettingsViewMode
     val status by viewModel.sync.status.collectAsStateWithLifecycle()
     var confirmation by remember { mutableStateOf<String?>(null) }
     val syncFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { withFrameNanos { }; syncFocus.requestFocus() }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
+    Column(Modifier.fillMaxSize().onPreviewKeyEvent {
+        if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) { onBack(); true } else false
+    }.verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
         SetupHeader("Your Account", "Signed in as ${viewModel.auth.username}", "SAAB TV")
         Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Encrypted Cloud Backup", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
             Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-            Text("Changes sync every 60 seconds while Saab TV is open. Profiles, settings, watchlists and playback progress are encrypted before upload.",
+            Text("Meaningful changes sync automatically. Playback progress is batched; pausing, leaving playback and leaving the app flush pending changes. Backups are encrypted before upload.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             SetupButton(text = if (viewModel.busy) "Please Wait…" else "Sync Now", enabled = !viewModel.busy,
                 onClick = { viewModel.run { viewModel.sync.syncNow() } }, primary = true, focusRequester = syncFocus,

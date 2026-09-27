@@ -551,49 +551,8 @@ fun VoidButton(
     enabled: Boolean = true,
     focusRequester: FocusRequester? = null
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    val scale by animateFloatAsState(if (isFocused && enabled) 1.05f else 1f)
-
-    val activeColor = if (isDestructive) Color.Red else MaterialTheme.colorScheme.primary
-
-    val bgColor = when {
-        !enabled -> Color.White.copy(0.05f)
-        isFocused -> activeColor
-        else -> Color.White.copy(0.08f)
-    }
-    val textColor = when {
-        !enabled -> Color.White.copy(0.3f)
-        isFocused -> if (isDestructive) Color.White else MaterialTheme.colorScheme.onPrimary
-        isDestructive || isPrimary -> activeColor.copy(alpha = 0.95f)
-        else -> Color.White
-    }
-    val borderColor = when {
-        !enabled -> Color.White.copy(0.1f)
-        isFocused -> Color.White
-        isDestructive || isPrimary -> activeColor.copy(alpha = 0.75f)
-        else -> Color.White.copy(0.2f)
-    }
-
-    Box(
-        modifier = modifier
-            .height(50.dp)
-            .scale(scale)
-            .clip(RoundedCornerShape(8.dp))
-            .background(bgColor)
-            .border(if (isFocused) 3.dp else 1.dp, borderColor, RoundedCornerShape(8.dp))
-            .then(if (enabled) Modifier.clickable(interactionSource = interactionSource, indication = null) { onClick() } else Modifier)
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .then(if (enabled) Modifier.focusable(interactionSource = interactionSource) else Modifier),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-            color = textColor
-        )
-    }
+    com.saab.tv.ui.components.SetupButton(text, onClick, modifier.height(50.dp),
+        primary = isPrimary, destructive = isDestructive, enabled = enabled, focusRequester = focusRequester)
 }
 
 @Composable

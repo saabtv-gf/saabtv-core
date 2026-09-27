@@ -63,6 +63,7 @@ class AccountAuthManager @Inject constructor(@ApplicationContext private val con
     }
 
     suspend fun authenticate(username: String, password: String, signup: Boolean) = withContext(Dispatchers.IO) {
+        com.saab.tv.AppDiagnostics.event(context, "Account", "Authentication Started", "signup=$signup")
         mutex.withLock {
             require(AccountCredentials.usernameError(username) == null)
             if (signup) require(AccountCredentials.passwordError(password) == null)
@@ -79,6 +80,7 @@ class AccountAuthManager @Inject constructor(@ApplicationContext private val con
                 .header("Origin", AUTH_ORIGIN)
                 .post(body.toString().toRequestBody("application/json".toMediaType())).build()
             client.newCall(request).execute().use { response ->
+                com.saab.tv.AppDiagnostics.event(context, "Account", "Authentication Response", "code=${response.code}")
                 val data = parseResponse(response.code, response.body?.string().orEmpty())
                 val id = data.getAsJsonObject("user")?.get("id")?.asString
                     ?: throw IOException("Neon did not return an account ID.")
@@ -93,6 +95,7 @@ class AccountAuthManager @Inject constructor(@ApplicationContext private val con
                 key.fill(0)
                 AccountStorage.setUserId(context, id)
                 accountToken = null
+                com.saab.tv.AppDiagnostics.event(context, "Account", "Authentication Completed")
             }
         }
     }

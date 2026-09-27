@@ -16,27 +16,38 @@ object AppHealthMonitor {
         capturePreviousExits(context.applicationContext)
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            AppDiagnostics.failure(context, "Application", "Uncaught Exception", throwable)
             append(
                 context,
                 "uncaught thread=${thread.name} type=${throwable.javaClass.name} " +
-                    "message=${throwable.message.orEmpty()}\n${throwable.stackTraceToString().take(32_000)}"
+                    "${DiagnosticPrivacy.stack(throwable)}"
             )
             previous?.uncaughtException(thread, throwable)
         }
     }
 
     fun recordMemoryPressure(context: Context, level: Int) {
+        if (!AppDiagnostics.recordsEvents(context)) return
+        AppDiagnostics.event(context, "Memory", "Pressure", "level=$level ${memorySummary()}", true)
         append(context, "memory-pressure level=$level ${memorySummary()}")
     }
 
     /** Only fixed stage identifiers and exception types; never URLs or account data. */
     fun recordUpdateStage(context: Context, stage: String, failure: Throwable? = null) {
+        AppDiagnostics.event(context, "Updater", stage, "${memorySummary()}", true)
+        if (failure != null) AppDiagnostics.failure(context, "Updater", stage, failure)
+        if (failure == null && !AppDiagnostics.recordsEvents(context)) return
         val type = failure?.javaClass?.simpleName.orEmpty()
         append(context, "update-stage=$stage exception=$type ${memorySummary()}")
     }
 
     fun latestSummary(context: Context): List<String> =
         healthFile(context).takeIf(File::isFile)?.readLines()?.takeLast(180).orEmpty()
+
+    fun clear(context: Context) = synchronized(this) {
+        healthFile(context).delete()
+        File(healthFile(context).parentFile, "previous.txt").delete()
+    }
 
     private fun capturePreviousExits(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
@@ -46,6 +57,9 @@ object AppHealthMonitor {
                 manager.getHistoricalProcessExitReasons(context.packageName, 0, 5)
             }.getOrDefault(emptyList())
             exits.forEach { exit ->
+                if (exit.reason !in setOf(ApplicationExitInfo.REASON_CRASH, ApplicationExitInfo.REASON_CRASH_NATIVE,
+                        ApplicationExitInfo.REASON_ANR, ApplicationExitInfo.REASON_LOW_MEMORY,
+                        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE) && !AppDiagnostics.recordsEvents(context)) return@forEach
                 val reason = when (exit.reason) {
                     ApplicationExitInfo.REASON_ANR -> "ANR"
                     ApplicationExitInfo.REASON_CRASH -> "CRASH"
@@ -63,7 +77,8 @@ object AppHealthMonitor {
                         lines.take(MAX_TRACE_LINES).joinToString("\n")
                     }.orEmpty()
                 }.getOrDefault("")
-                append(context, if (trace.isBlank()) header else "$header\n$trace")
+                append(context, if (trace.isBlank()) header else "$header\n${DiagnosticPrivacy.redact(trace)}")
+                AppDiagnostics.event(context, "Application", "Previous Exit", "reason=$reason status=${exit.status} pssKb=${exit.pss} rssKb=${exit.rss}", true)
             }
         }, "app-health-history").apply {
             priority = Thread.MIN_PRIORITY

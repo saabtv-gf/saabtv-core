@@ -86,7 +86,8 @@ jobs:
             :app:testDebugUnitTest \
             :app:lintRelease \
             :app:assembleRelease \
-            -Psaab32BitOnly=true
+            -Psaab32BitOnly=true \
+            -Dorg.gradle.jvmargs=-Xmx4g
 
       - name: Prepare Release Files
         id: prepare

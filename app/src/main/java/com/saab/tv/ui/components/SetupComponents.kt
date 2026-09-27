@@ -51,11 +51,11 @@ fun SetupButton(
         modifier = modifier
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .heightIn(min = if (compact) 40.dp else 48.dp).scale(scale),
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(if (focused) 2.dp else 1.dp, if (focused) Color.White else accent.copy(alpha = if (primary) 0.8f else 0.25f)),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(if (focused) 3.dp else 1.dp, if (focused) Color.White else accent.copy(alpha = 0.25f)),
         colors = ButtonDefaults.buttonColors(
-            containerColor = when { focused -> Color.White; primary -> accent; else -> MaterialTheme.colorScheme.surfaceVariant },
-            contentColor = when { focused -> Color(0xFF101725); primary -> if (accent.luminance() > 0.4f) Color.Black else Color.White; else -> MaterialTheme.colorScheme.onSurface },
+            containerColor = when { focused -> accent; primary -> accent.copy(alpha = 0.15f); else -> MaterialTheme.colorScheme.surfaceVariant },
+            contentColor = when { focused && destructive -> MaterialTheme.colorScheme.onError; focused -> MaterialTheme.colorScheme.onPrimary; else -> MaterialTheme.colorScheme.onSurface },
             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
         ),

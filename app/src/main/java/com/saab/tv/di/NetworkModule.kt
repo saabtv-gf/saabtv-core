@@ -45,6 +45,18 @@ object NetworkModule {
             maxRequestsPerHost = 8
         }
         return OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val started = android.os.SystemClock.elapsedRealtime()
+                try {
+                    val response = chain.proceed(chain.request())
+                    com.saab.tv.AppDiagnostics.event(context, "Network", "Request Completed",
+                        "method=${chain.request().method} code=${response.code} ms=${android.os.SystemClock.elapsedRealtime() - started}")
+                    response
+                } catch (failure: java.io.IOException) {
+                    com.saab.tv.AppDiagnostics.failure(context, "Network", "Request Failed", failure)
+                    throw failure
+                }
+            }
             .cache(Cache(context.cacheDir.resolve("http_metadata/${com.saab.tv.data.account.AccountStorage.scope(context)}"), 50L * 1024L * 1024L))
             .dispatcher(dispatcher)
             .retryOnConnectionFailure(true)

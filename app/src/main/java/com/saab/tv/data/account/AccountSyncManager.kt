@@ -24,6 +24,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /** Safe whole-account sync: CAS prevents silent overwrites between TVs. */
+private class AccountSyncConflict(message: String) : IOException(message)
+
 class AccountCloudStore(private val context: Context, private val auth: AccountAuthManager, private val db: SaabTvDatabase) {
     private val metadata = AccountStorage.preferences(context, "account_sync_metadata")
     private val snapshots = AccountSnapshotStore(context, db)
@@ -70,7 +72,7 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
                 requireNotNull(auth.userId)), Base64.NO_WRAP))
         }
         val result = JsonParser.parseString(auth.dataRequest("rpc/saabtv_save_account", body)).asJsonObject
-        if (result.get("conflict").asBoolean) throw IOException("Sync conflict: another device has newer data. Local changes were not overwritten.")
+        if (result.get("conflict").asBoolean) throw AccountSyncConflict("Sync conflict: another device has newer data. Local changes were not overwritten. Choose which copy to keep in Account settings.")
         saveMetadata(result.get("revision").asLong, digest)
         return true
     }
@@ -78,6 +80,13 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
     suspend fun useCloudCopy() {
         val cloud = remote() ?: throw IOException("No cloud backup is available.")
         restoreCloud(cloud)
+    }
+
+    /** Read-only probe. Never replace dirty local state during a foreground refresh. */
+    suspend fun hasNewerCleanBackup(): Boolean {
+        val cloud = remote() ?: return false
+        if (cloud.get("revision").asLong <= metadata.getLong("revision", 0)) return false
+        return metadata.getString("hash", null) == hash(snapshots.capture())
     }
 
     private fun restoreCloud(cloud: JsonObject) {
@@ -119,42 +128,82 @@ class AccountSyncManager @Inject constructor(
     val status: StateFlow<String> = _status
     private var started = false
     private val cadence = AccountSyncCadence(SystemClock.elapsedRealtime())
+    private val wakeups = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+    @Volatile private var failures = 0
+    private val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
+    private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) { requestSync(urgent = true) }
+    }
     @Volatile private var suspended = false
+    @Volatile private var conflictPending = false
     private val preferenceStores = AccountSnapshotStore(context, db).preferenceStores()
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> requestSync() }
     private val databaseObserver = object : InvalidationTracker.Observer(AccountSnapshotStore.TABLES.toTypedArray()) {
-        override fun onInvalidated(tables: Set<String>) { requestSync() }
+        override fun onInvalidated(tables: Set<String>) { requestSync(progressOnly = tables.all { it == "watch_history" || it == "series_next_up" }) }
     }
 
     fun start() {
         if (started || !auth.hasSession) return
         started = true
+        runCatching { connectivity?.registerDefaultNetworkCallback(networkCallback) }
         db.invalidationTracker.addObserver(databaseObserver)
         preferenceStores.forEach { it.registerOnSharedPreferenceChangeListener(preferenceListener) }
         scope.launch {
-            while (isActive) { delay(AccountSyncCadence.INTERVAL_MS); syncNow(automatic = true) }
+            for (signal in wakeups) {
+                while (isActive) {
+                    if (suspended || !auth.hasSession) break
+                    val wait = cadence.waitMs(SystemClock.elapsedRealtime()) ?: break
+                    val changed = withTimeoutOrNull(wait.coerceAtLeast(1)) { wakeups.receive(); true } ?: false
+                    if (!changed) syncNow(automatic = true)
+                }
+            }
         }
         requestSync()
     }
 
-    fun requestSync() {
-        if (suspended) return
-        cadence.markDirty()
+    fun requestSync(progressOnly: Boolean = false, urgent: Boolean = false) {
+        if (suspended || conflictPending || !auth.hasSession) return
+        if (urgent) failures = 0
+        cadence.markDirty(SystemClock.elapsedRealtime(), progressOnly, urgent)
+        wakeups.trySend(Unit)
+    }
+
+    /** Process-lifetime scope survives Activity destruction long enough to flush local saves. */
+    fun flushAfterBackground() { requestSync(urgent = true) }
+
+    suspend fun newerCloudBackupAvailable(): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (!auth.hasSession || suspended) return@withLock false
+            profiles.saveActiveRuntimeState()
+            cloud.hasNewerCleanBackup()
+        }
     }
 
     suspend fun syncNow(automatic: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
             if (!auth.hasSession || suspended) return@withLock false
+            if (conflictPending) return@withLock false
             if (!cadence.beginAttempt(SystemClock.elapsedRealtime(), automatic)) return@withLock true
             try {
                 _status.value = "Syncing…"
+                com.saab.tv.AppDiagnostics.event(context, "Cloud Sync", "Started", "automatic=$automatic")
                 profiles.saveActiveRuntimeState()
                 cloud.upload()
+                failures = 0
                 _status.value = "Synced"
+                com.saab.tv.AppDiagnostics.event(context, "Cloud Sync", "Completed")
                 true
-            } catch (e: CancellationException) { throw e }
+            } catch (e: CancellationException) { cadence.markDirty(SystemClock.elapsedRealtime()); throw e }
             catch (e: Exception) {
-                cadence.markDirty()
+                com.saab.tv.AppDiagnostics.failure("Cloud Sync", "Failed", e)
+                failures++
+                if (e is AccountSyncConflict) {
+                    conflictPending = true
+                    cadence.deferUntilEvent(SystemClock.elapsedRealtime())
+                } else if (failures <= 3) {
+                    cadence.retryAt(SystemClock.elapsedRealtime(), 15_000L * (1L shl (failures - 1)))
+                    wakeups.trySend(Unit)
+                } else cadence.deferUntilEvent(SystemClock.elapsedRealtime())
                 _status.value = e.message?.take(200) ?: "Sync failed. Local data is safe."
                 false
             }
@@ -166,11 +215,13 @@ class AccountSyncManager @Inject constructor(
             suspended = true
             try {
                 if (useCloud) cloud.useCloudCopy() else { profiles.saveActiveRuntimeState(); cloud.keepLocalCopy() }
+                conflictPending = false
+                failures = 0
                 _status.value = "Synced"
             } catch (e: Exception) {
                 // A failed restore must not leave routine sync disabled forever.
                 suspended = false
-                cadence.markDirty()
+                requestSync()
                 throw e
             } finally { if (!useCloud) suspended = false }
         }
@@ -178,6 +229,7 @@ class AccountSyncManager @Inject constructor(
 
     fun stop() {
         suspended = true
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
         db.invalidationTracker.removeObserver(databaseObserver)
         preferenceStores.forEach { it.unregisterOnSharedPreferenceChangeListener(preferenceListener) }
         scope.cancel()

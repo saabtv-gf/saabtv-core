@@ -371,6 +371,7 @@ fun PlayerScreen(
         if (uiState.isPlaying) {
             viewModel.scrobbleStart(movieId, mediaType, uiState.positionMs, uiState.durationMs)
         } else if (uiState.isReady) {
+            viewModel.saveProgress(movieId, mediaType, title, poster, uiState.positionMs, uiState.durationMs, syncBoundary = true)
             viewModel.scrobblePause(movieId, mediaType, uiState.positionMs, uiState.durationMs)
         }
     }
@@ -393,7 +394,8 @@ fun PlayerScreen(
                     title = title,
                     poster = poster,
                     position = state.positionMs,
-                    duration = state.durationMs.takeIf { it > 0L }
+                    duration = state.durationMs.takeIf { it > 0L },
+                    syncBoundary = true
                 )
             }
             playbackController.release()
@@ -413,7 +415,8 @@ fun PlayerScreen(
                     title = title,
                     poster = poster,
                     position = pos,
-                    duration = dur
+                    duration = dur,
+                    syncBoundary = true
                 )
             }
         }

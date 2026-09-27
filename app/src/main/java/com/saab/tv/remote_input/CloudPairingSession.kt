@@ -32,6 +32,7 @@ internal class CloudPairingSession(private val mode: String, private val manifes
     val url: String get() = "$PAGE_URL#id=$id&cap=$writer&key=${PairingCrypto.encode(key)}"
 
     suspend fun open(): Unit = withContext(Dispatchers.IO) {
+        com.saab.tv.AppDiagnostics.event("Pairing", "Opening", "mode=$mode")
         try {
             val authOrigin = AccountAuthManager.AUTH_URL.substringBefore("/neondb/")
             token = JsonParser.parseString(request("${AccountAuthManager.AUTH_URL}/token/anonymous", origin = authOrigin))
@@ -46,8 +47,10 @@ internal class CloudPairingSession(private val mode: String, private val manifes
             currentCoroutineContext().ensureActive()
             check(!closed)
             status.value = "Ready · QR expires in five minutes"
+            com.saab.tv.AppDiagnostics.event("Pairing", "Ready", "mode=$mode")
             job = scope.launch { poll() }
         } catch (e: Exception) {
+            if (e !is CancellationException) com.saab.tv.AppDiagnostics.failure("Pairing", "Open Failed", e)
             status.value = "Secure pairing unavailable. Check your internet connection and try again."
             withContext(NonCancellable + Dispatchers.IO) { closeRemote() }
             key.fill(0)
@@ -82,11 +85,13 @@ internal class CloudPairingSession(private val mode: String, private val manifes
                             rpc("read", owner().apply { addProperty("ack", ack) })
                         }
                         status.value = "Received securely"
+                        com.saab.tv.AppDiagnostics.event("Pairing", "Message Received", "mode=$mode")
                         if (mode != "hub") break
                     }
                     failures = 0
                 } catch (e: CancellationException) { throw e }
-                catch (_: Exception) {
+                catch (failure: Exception) {
+                    com.saab.tv.AppDiagnostics.failure("Pairing", "Poll Failed", failure)
                     failures++
                     status.value = "Connection interrupted · retrying…"
                     if (failures >= 5) break
@@ -94,6 +99,7 @@ internal class CloudPairingSession(private val mode: String, private val manifes
                 delay(if (failures == 0) 2500 else 5000)
             }
         } finally {
+            com.saab.tv.AppDiagnostics.event("Pairing", "Closed", "mode=$mode")
             status.value = "Pairing closed. Reopen for a new QR code."
             withContext(NonCancellable + Dispatchers.IO) { closeRemote() }
             key.fill(0)

@@ -23,7 +23,8 @@ class PlayerViewModel @Inject constructor(
     private val dao: AddonDao,
     private val traktScrobbleManager: TraktScrobbleManager,
     private val subtitleRepository: com.saab.tv.data.repository.SubtitleRepository,
-    private val seekThumbnailCache: SeekThumbnailCache
+    private val seekThumbnailCache: SeekThumbnailCache,
+    private val accountSync: com.saab.tv.data.account.AccountSyncManager
 ) : ViewModel() {
     private val completedThisSession = ConcurrentHashMap.newKeySet<String>()
     private val historyWriteMutex = Mutex()
@@ -53,7 +54,8 @@ class PlayerViewModel @Inject constructor(
         title: String,
         poster: String?,
         position: Long,
-        duration: Long?
+        duration: Long?,
+        syncBoundary: Boolean = false
     ) {
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             if (id.startsWith("trailer_")) return@launch
@@ -84,6 +86,7 @@ class PlayerViewModel @Inject constructor(
                     scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
                 )
                 dao.upsertHistory(entry)
+                accountSync.requestSync(progressOnly = !syncBoundary, urgent = syncBoundary || progress.isCompleted)
                 if (progress.isCompleted) {
                     dao.getActiveProfileId()?.let { profileId ->
                         seekThumbnailCache.clearContent(profileId, id)
@@ -129,6 +132,7 @@ class PlayerViewModel @Inject constructor(
                         scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
                     )
                 )
+                accountSync.requestSync(urgent = true)
                 if (progress.isCompleted) {
                     dao.getActiveProfileId()?.let { profileId ->
                         seekThumbnailCache.clearContent(profileId, id)

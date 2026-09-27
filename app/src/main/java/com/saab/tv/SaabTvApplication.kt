@@ -52,8 +52,9 @@ class SaabTvApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         if (isHelperProcess()) return
-        TvLauncherManager.configure(this)
         AppHealthMonitor.install(this)
+        AppDiagnostics.install(this)
+        TvLauncherManager.configure(this)
     }
 
     override fun onTrimMemory(level: Int) {

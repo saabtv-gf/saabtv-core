@@ -103,6 +103,7 @@ class ProfileConfigurationManager @Inject constructor(
     }
 
     suspend fun loadRuntimeState(profileId: Int) = withContext(Dispatchers.IO) {
+        com.saab.tv.AppDiagnostics.event(context, "Profile", "Load Settings")
         runtimeMutex.withLock {
             dao.activateProfile(profileId)
             val existingSnapshot = readSnapshot(profileId)
@@ -126,6 +127,7 @@ class ProfileConfigurationManager @Inject constructor(
     }
 
     suspend fun initializeFromScratch(profileId: Int) = withContext(Dispatchers.IO) {
+        com.saab.tv.AppDiagnostics.event(context, "Profile", "Initialize Defaults")
         runtimeMutex.withLock {
             writeSnapshot(profileId, createDefaultRuntimeSnapshot())
             stremioAuthManager.clearCredentialsForProfile(profileId)
@@ -134,6 +136,7 @@ class ProfileConfigurationManager @Inject constructor(
     }
 
     suspend fun initializeByCopying(targetProfileId: Int, sourceProfileId: Int) {
+        com.saab.tv.AppDiagnostics.event(context, "Profile", "Copy Settings")
         captureStartupRuntimeIfNeeded()
         withContext(Dispatchers.IO) {
             runtimeMutex.withLock {
@@ -150,6 +153,7 @@ class ProfileConfigurationManager @Inject constructor(
     }
 
     fun deleteProfileState(profileId: Int) {
+        com.saab.tv.AppDiagnostics.event(context, "Profile", "Delete Settings")
         clearPendingSetup(profileId)
         prefs.edit().remove("$KEY_SPLASH_ENABLED_PREFIX$profileId").apply()
         snapshotFile(profileId).delete()

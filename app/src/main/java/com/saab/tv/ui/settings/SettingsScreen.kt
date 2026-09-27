@@ -54,7 +54,7 @@ enum class SettingsSection(val label: String, @DrawableRes val iconRes: Int) {
     SourcePreferences("Sort & Filter", R.drawable.source_preferences_icon),
     Addons("Addons", R.drawable.puzzle_icon),
     Integrations("Integrations", R.drawable.integrations_icon),
-    PlaybackDiagnostics("Playback Diagnostics", R.drawable.info_icon),
+    PlaybackDiagnostics("App Diagnostics", R.drawable.info_icon),
     About("About", R.drawable.info_icon)
 }
 
@@ -69,6 +69,7 @@ fun SettingsScreen(
     onContentFocusChanged: (Boolean) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var selectedSection by remember { mutableStateOf(SettingsSection.Personalization) }
     var displayedSection by remember { mutableStateOf(SettingsSection.Personalization) }
     var isContentFocused by remember { mutableStateOf(false) }
@@ -83,6 +84,7 @@ fun SettingsScreen(
 
     // DEBOUNCE LOGIC (Only for Scrolling)
     LaunchedEffect(selectedSection) {
+        com.saab.tv.AppDiagnostics.event(context, "Navigation", "Settings Section", "section=${selectedSection.name}")
         delay(300)
         displayedSection = selectedSection
     }
@@ -245,11 +247,6 @@ fun SettingsScreen(
             modifier = Modifier
                 .weight(0.72f) // Expanded content area
                 .fillMaxHeight()
-                .focusProperties {
-                    if (isTopNav) {
-                        up = FocusRequester.Cancel
-                    }
-                }
                 .focusGroup()
                 .focusRequester(contentPaneRequester)
                 .rememberLastFocus()

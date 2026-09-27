@@ -60,6 +60,10 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val firstButtonRequester = remember { FocusRequester() }
+    val exportRequester = remember { FocusRequester() }
+    val clearRequester = remember { FocusRequester() }
+    val basicRequester = remember { FocusRequester() }
+    val detailedRequester = remember { FocusRequester() }
     val firstEventRequester = remember { FocusRequester() }
     val listState = rememberLazyListState()
     var refreshToken by remember { mutableIntStateOf(0) }
@@ -68,10 +72,11 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
     var diagnosticsEnabled by remember {
         mutableStateOf(PlaybackDiagnostics.isEnabled(context))
     }
+    var basicEnabled by remember { mutableStateOf(com.saab.tv.AppDiagnostics.isBasicEnabled(context)) }
 
     LaunchedEffect(refreshToken) {
         while (true) {
-            report = withContext(Dispatchers.IO) { PlaybackDiagnostics.latestReport(context) }
+            report = withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.report(context) }
             delay(2_000L)
         }
     }
@@ -79,9 +84,18 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         val currentReport = report
         val canFocusEvents = currentReport?.events?.isNotEmpty() == true
+        val eventKeys = remember(currentReport?.events) {
+            val occurrences = mutableMapOf<String, Int>()
+            currentReport?.events.orEmpty().map { item ->
+                val base = "${item.timestampMs}-${item.component}-${item.event}-${item.details.hashCode()}"
+                val occurrence = occurrences.getOrDefault(base, 0)
+                occurrences[base] = occurrence + 1
+                "$base-$occurrence"
+            }
+        }
 
         Text(
-            "Playback Diagnostics",
+            "App Diagnostics",
             style = MaterialTheme.typography.titleMedium.copy(
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 20.sp
@@ -89,7 +103,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             color = androidx.compose.ui.graphics.Color.White
         )
         Text(
-            "Optional local technical information for playback, buffering and thumbnail generation.",
+            "Local app, update, lifecycle, network and playback events. No passwords, tokens or request bodies are recorded.",
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f),
             modifier = Modifier.padding(top = 4.dp)
@@ -98,24 +112,34 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
         Spacer(Modifier.height(16.dp))
 
         SettingToggleRow(
-            label = "Diagnostic Logging",
+            label = "Basic Logging",
+            subtitle = "Off by default. Records navigation, lifecycle, sync and update stages when enabled.",
+            isChecked = basicEnabled,
+            onCheckedChange = { basicEnabled = it; com.saab.tv.AppDiagnostics.setBasicEnabled(context, it) },
+            onBack = onGoBack, blockUp = true,
+            modifier = Modifier.focusRequester(basicRequester).focusProperties { down = detailedRequester }
+        )
+        Spacer(Modifier.height(8.dp))
+        SettingToggleRow(
+            label = "Detailed Logging",
             subtitle = if (diagnosticsEnabled) {
                 "Recording is enabled. Disable it after troubleshooting for maximum performance."
             } else {
-                "Off by default. Enable only when collecting a playback report."
+                "Off by default. Crashes and exceptions are captured independently of both toggles."
             },
             isChecked = diagnosticsEnabled,
             onCheckedChange = { enabled ->
                 PlaybackDiagnostics.setEnabled(context, enabled)
                 diagnosticsEnabled = enabled
+                com.saab.tv.AppDiagnostics.event(context, "Diagnostics", "Logging Changed", "enabled=$enabled", true)
                 status = if (enabled) {
-                    "Diagnostic logging enabled for the next playback session."
+                    "App logging enabled now. Start a new video for detailed playback logging."
                 } else {
                     "Diagnostic logging disabled. Existing reports were kept."
                 }
             },
             onBack = onGoBack,
-            blockUp = true
+            modifier = Modifier.focusRequester(detailedRequester).focusProperties { up = basicRequester; down = firstButtonRequester }
         )
 
         Spacer(Modifier.height(12.dp))
@@ -123,7 +147,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             DiagnosticsButton(
                 label = "Refresh",
-                modifier = Modifier.focusRequester(firstButtonRequester),
+                modifier = Modifier.focusRequester(firstButtonRequester).focusProperties { up = detailedRequester; right = exportRequester },
                 onLeft = onGoBack,
                 downRequester = firstEventRequester.takeIf { canFocusEvents }
             ) {
@@ -132,14 +156,15 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             }
             DiagnosticsButton(
                 label = "Export Report",
-                onLeft = onGoBack,
+                modifier = Modifier.focusRequester(exportRequester).focusProperties { left = firstButtonRequester; right = clearRequester; up = detailedRequester },
                 downRequester = firstEventRequester.takeIf { canFocusEvents }
             ) {
                 scope.launch {
-                    val file = withContext(Dispatchers.IO) { PlaybackDiagnostics.exportLatest(context) }
+                    val file = withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.export(context) }
                     if (file == null) {
-                        status = "No playback report is available yet."
+                        status = "Could not create the app report. Check available storage."
                     } else {
+                        runCatching {
                         val uri = FileProvider.getUriForFile(
                             context,
                             "${context.packageName}.fileprovider",
@@ -151,24 +176,26 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        runCatching {
                             context.startActivity(
-                                Intent.createChooser(intent, "Export Playback Diagnostics")
+                                Intent.createChooser(intent, "Export App Diagnostics")
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             )
-                        }.onFailure { status = "No compatible export app was found." }
+                        }.onFailure {
+                            com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Export Failed", it)
+                            status = "Could not share the report. Check for a compatible export app."
+                        }
                     }
                 }
             }
             DiagnosticsButton(
                 label = "Clear Logs",
-                onLeft = onGoBack,
+                modifier = Modifier.focusRequester(clearRequester).focusProperties { left = exportRequester; up = detailedRequester },
                 downRequester = firstEventRequester.takeIf { canFocusEvents }
             ) {
                 scope.launch {
-                    withContext(Dispatchers.IO) { PlaybackDiagnostics.clear(context) }
+                    withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.clear(context) }
                     report = null
-                    status = "Playback logs cleared."
+                    status = "App and playback logs cleared."
                 }
             }
         }
@@ -187,7 +214,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
         if (currentReport == null) {
             Text(
                 if (diagnosticsEnabled) {
-                    "No playback session has been recorded yet. Start a video, then return here."
+                    "No app events have been recorded yet. Reproduce the issue, then return here."
                 } else {
                     "Diagnostic logging is off. Existing reports will remain available until cleared."
                 },
@@ -218,15 +245,13 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             ) {
                 itemsIndexed(
                     items = currentReport.events,
-                    key = { index, item ->
-                        "$index-${item.timestampMs}-${item.component}-${item.event}"
-                    }
+                    key = { index, _ -> eventKeys[index] }
                 ) { index, item ->
                     DiagnosticEventCard(
                         item = item,
                         index = index,
                         modifier = if (index == 0) {
-                            Modifier.focusRequester(firstEventRequester)
+                            Modifier.focusRequester(firstEventRequester).focusProperties { up = firstButtonRequester }
                         } else {
                             Modifier
                         },
@@ -245,18 +270,14 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
 private fun DiagnosticsButton(
     label: String,
     modifier: Modifier = Modifier,
-    onLeft: () -> Unit,
+    onLeft: (() -> Unit)? = null,
     downRequester: FocusRequester? = null,
     onClick: () -> Unit
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    val accent = MaterialTheme.colorScheme.primary
-    Text(
+    com.saab.tv.ui.components.SetupButton(
         text = label,
-        color = androidx.compose.ui.graphics.Color.White,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 13.sp,
+        onClick = onClick,
+        compact = true,
         modifier = modifier
             .then(
                 if (downRequester != null) {
@@ -266,26 +287,13 @@ private fun DiagnosticsButton(
                 }
             )
             .onPreviewKeyEvent {
-                if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
+                if (onLeft != null && it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
                     onLeft()
                     true
                 } else {
                     false
                 }
             }
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (focused) accent.copy(alpha = 0.28f)
-                else androidx.compose.ui.graphics.Color.White.copy(alpha = 0.06f)
-            )
-            .border(
-                width = if (focused) 2.dp else 1.dp,
-                color = if (focused) accent else androidx.compose.ui.graphics.Color.White.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(8.dp)
-            )
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .focusable(interactionSource = interaction)
-            .padding(horizontal = 18.dp, vertical = 11.dp)
     )
 }
 
@@ -318,12 +326,12 @@ private fun DiagnosticEventCard(
             }
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (focused) accent.copy(alpha = 0.18f)
+                if (focused) accent
                 else androidx.compose.ui.graphics.Color.White.copy(alpha = 0.045f)
             )
             .border(
-                width = if (focused) 2.dp else 1.dp,
-                color = if (focused) accent else androidx.compose.ui.graphics.Color.Transparent,
+                width = if (focused) 3.dp else 1.dp,
+                color = if (focused) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Transparent,
                 shape = RoundedCornerShape(8.dp)
             )
             .focusable(interactionSource = interaction)

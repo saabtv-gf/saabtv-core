@@ -651,16 +651,32 @@ class MainActivity : ComponentActivity() {
     private var splashAppReady = false
     private var splashIntroFinished = false
     private val _splashFinished = mutableStateOf(false)
+    private var backgroundedAt = 0L
+    private var allowAccountRefresh = false
+
+    override fun onResume() {
+        super.onResume()
+        val checkCloud = backgroundedAt > 0 && SystemClock.elapsedRealtime() - backgroundedAt >= 5_000L && allowAccountRefresh
+        backgroundedAt = 0L
+        if (checkCloud && accountAuth.hasSession) lifecycleScope.launch {
+            try {
+                if (accountSync.newerCloudBackupAvailable() && allowAccountRefresh &&
+                    lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    accountSync.stop()
+                    com.saab.tv.ui.account.AccountRestart.restart(this@MainActivity)
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                AppDiagnostics.failure(this@MainActivity, "Cloud Sync", "Foreground Check Failed", failure)
+            }
+        }
+    }
 
     override fun onStop() {
         super.onStop()
+        backgroundedAt = SystemClock.elapsedRealtime()
         if (!accountAuth.hasSession) return
-        lifecycleScope.launch(Dispatchers.IO) {
-            profileConfigurationManager.saveActiveRuntimeState()
-            // Opening keyboards, permission settings or the installer must not
-            // force another cloud write. The 60-second scheduler coalesces changes.
-            accountSync.requestSync()
-        }
+        accountSync.flushAfterBackground()
     }
 
     override fun onDestroy() {
@@ -867,6 +883,10 @@ class MainActivity : ComponentActivity() {
                     } else {
                         // MAIN APP CONTENT
                         var currentNav by remember { mutableStateOf(NavDestination.Home) }
+                        SideEffect { allowAccountRefresh = activeView in listOf("menu", "details", "grid") && currentNav != NavDestination.Settings && currentNav != NavDestination.Profile }
+                        LaunchedEffect(currentNav) {
+                            AppDiagnostics.event(this@MainActivity, "Navigation", "Main Section", "section=$currentNav")
+                        }
                         
                         // Grid view state
                         var gridViewTitle by rememberSaveable { mutableStateOf("") }

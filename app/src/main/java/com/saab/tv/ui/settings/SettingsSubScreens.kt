@@ -632,7 +632,8 @@ fun SettingToggleRow(
     onCheckedChange: (Boolean) -> Unit,
     onBack: (() -> Unit)? = null,
     blockUp: Boolean = false,
-    onFocus: () -> Unit = {}
+    onFocus: () -> Unit = {},
+    modifier: Modifier = Modifier
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -667,7 +668,7 @@ fun SettingToggleRow(
     } else Modifier
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(48.dp)
             .then(backModifier)
@@ -683,7 +684,6 @@ fun SettingToggleRow(
             .clickable(interactionSource = interactionSource, indication = null) {
                 onCheckedChange(!isChecked)
             }
-            .focusable(interactionSource = interactionSource)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -1993,6 +1993,7 @@ fun AboutSettings(
     // Callbacks retain this rendered snapshot, rather than reading a different
     // state when a coroutine finally runs (which could invalidate a cast).
     val updateState = updateManager.state.collectAsStateWithLifecycle().value
+    val diagnosticsContext = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val accentColor = MaterialTheme.colorScheme.primary
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -2100,7 +2101,10 @@ fun AboutSettings(
             Spacer(Modifier.height(12.dp))
 
             // DOWNLOAD BUTTON
-            SetupButton("Download And Install", { scope.launch { updateManager.downloadAndInstall(info.apkUrl, info.sha256) } },
+            SetupButton("Download And Install", {
+                com.saab.tv.AppDiagnostics.event(diagnosticsContext, "Updater", "Button Activated", important = true)
+                scope.launch { updateManager.downloadAndInstall(info.apkUrl, info.sha256) }
+            },
                 modifier = Modifier.fillMaxWidth(), primary = true)
         }
 

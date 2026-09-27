@@ -43,10 +43,12 @@ class SearchViewModel @Inject constructor(private val repository: AddonRepositor
         searchJob = viewModelScope.launch {
             delay(350)
             try {
+                com.saab.tv.AppDiagnostics.event("Search", "Request Started")
                 val results = repository.searchMovies(newQuery.trim())
                     .filter { it.type == "movie" || it.type == "series" }
                     .distinctBy { it.type to it.id }
                 if (_state.value.query != newQuery) return@launch
+                com.saab.tv.AppDiagnostics.event("Search", "Request Completed", "results=${results.size}")
                 _state.value = SearchState(
                     query = newQuery, results = results,
                     movies = results.filter { it.type == "movie" },
@@ -54,7 +56,8 @@ class SearchViewModel @Inject constructor(private val repository: AddonRepositor
                 )
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
+                com.saab.tv.AppDiagnostics.failure("Search", "Request Failed", failure)
                 if (_state.value.query == newQuery) _state.value = SearchState(
                     query = newQuery, error = "Search Failed. Please Try Again."
                 )

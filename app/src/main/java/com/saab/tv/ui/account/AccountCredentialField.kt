@@ -1,6 +1,7 @@
 package com.saab.tv.ui.account
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
@@ -36,6 +37,7 @@ internal fun AccountCredentialField(
 ) {
     var editing by remember { mutableStateOf(false) }
     var eyeFocused by remember { mutableStateOf(false) }
+    var fieldFocused by remember { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(editing, enabled) {
         if (editing && enabled) { withFrameNanos { }; keyboard?.show() }
@@ -45,7 +47,9 @@ internal fun AccountCredentialField(
         OutlinedTextField(value = value, onValueChange = onValueChange,
             label = { Text(label) }, enabled = enabled, singleLine = true,
             readOnly = !editing, isError = isError, supportingText = supportingText,
-            modifier = Modifier.weight(1f).onFocusChanged {
+            modifier = Modifier.weight(1f).border(if (fieldFocused) 3.dp else 0.dp,
+                if (fieldFocused) Color.White else Color.Transparent, RoundedCornerShape(8.dp)).onFocusChanged {
+                fieldFocused = it.isFocused
                 if (!it.isFocused) { editing = false }
             }.focusRequester(focusRequester).onPreviewKeyEvent {
                 if (enabled && it.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter)) {
@@ -59,6 +63,9 @@ internal fun AccountCredentialField(
                 }
             },
             textStyle = MaterialTheme.typography.bodyMedium,
+            shape = RoundedCornerShape(8.dp),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Transparent,
+                focusedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
             visualTransformation = if (password && !visible) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else KeyboardType.Text,
                 imeAction = if (onNext != null) ImeAction.Next else ImeAction.Done),
@@ -67,10 +74,10 @@ internal fun AccountCredentialField(
         if (password) OutlinedIconButton(onClick = onToggleVisibility, enabled = enabled,
             modifier = Modifier.padding(top = 8.dp).size(48.dp).onFocusChanged { eyeFocused = it.isFocused },
             shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(if (eyeFocused) 2.dp else 1.dp, if (eyeFocused) Color.White else MaterialTheme.colorScheme.outline),
+            border = BorderStroke(if (eyeFocused) 3.dp else 1.dp, if (eyeFocused) Color.White else MaterialTheme.colorScheme.outline),
             colors = IconButtonDefaults.outlinedIconButtonColors(
-                containerColor = if (eyeFocused) Color.White else MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = if (eyeFocused) Color(0xFF101725) else MaterialTheme.colorScheme.onSurface)) {
+                containerColor = if (eyeFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (eyeFocused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)) {
             Icon(if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                 if (visible) "Hide $label" else "Show $label", modifier = Modifier.size(22.dp))
         }
