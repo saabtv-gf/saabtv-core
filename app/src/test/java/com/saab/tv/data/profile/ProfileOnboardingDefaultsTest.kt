@@ -7,6 +7,7 @@ import org.junit.Test
 class ProfileOnboardingDefaultsTest {
     @Test fun newProfilesUseRequestedDefaults() {
         val profile = ProfileEntity(name = "New")
+        assertEquals(95, profile.watchedThreshold)
         assertEquals(30, profile.seekTimeIntervalSeconds)
         assertEquals(30, profile.seekThumbnailIntervalSeconds)
         assertTrue(profile.seekThumbnailsEnabled && profile.rememberSourceSelection && profile.autoSelectSource)

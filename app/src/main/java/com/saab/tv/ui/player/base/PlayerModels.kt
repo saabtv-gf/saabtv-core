@@ -82,7 +82,7 @@ data class PlaybackSettings(
     val autoplayThresholdMode: String = "introdb",
     val autoplayThresholdPercent: Int = 95,
     val autoplayThresholdSeconds: Int = 30,
-    val watchedThresholdPercent: Int = 85,
+    val watchedThresholdPercent: Int = 95,
     val preferredAudioLanguage: String = "en",
     val preferredAudioLanguageSecondary: String = "",
     val preferredSubtitleLanguage: String = "en",

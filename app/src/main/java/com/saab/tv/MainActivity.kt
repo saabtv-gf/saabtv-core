@@ -132,7 +132,7 @@ private fun FocusRequester.requestFocusSafely(): Boolean =
 private fun isPlaybackSnapshotCompleted(
     positionMs: Long,
     durationMs: Long?,
-    watchedThresholdPercent: Int = 85
+    watchedThresholdPercent: Int = 95
 ): Boolean {
     val duration = durationMs?.takeIf { it > 0L } ?: return false
     val position = positionMs.coerceIn(0L, duration)
@@ -1715,7 +1715,7 @@ class MainActivity : ComponentActivity() {
                                     autoplayThresholdMode = currentProfile?.autoplayThresholdMode ?: "percentage",
                                     autoplayThresholdPercent = currentProfile?.autoplayThresholdPercent ?: 95,
                                     autoplayThresholdSeconds = currentProfile?.autoplayThresholdSeconds ?: 30,
-                                    watchedThresholdPercent = currentProfile?.watchedThreshold ?: 85,
+                                    watchedThresholdPercent = currentProfile?.watchedThreshold ?: 95,
                                     preferredAudioLanguage = currentProfile?.preferredAudioLanguage ?: "",
                                     preferredAudioLanguageSecondary = currentProfile?.preferredAudioLanguageSecondary ?: "",
                                     preferredSubtitleLanguage = currentProfile?.preferredSubtitleLanguage ?: "",
@@ -1737,7 +1737,7 @@ class MainActivity : ComponentActivity() {
                                                 isCompleted = isPlaybackSnapshotCompleted(
                                                     currentPositionMs,
                                                     currentDurationMs,
-                                                    currentProfile?.watchedThreshold ?: 85
+                                                    currentProfile?.watchedThreshold ?: 95
                                                 ),
                                                 selectedSourceUrl = playerCurrentSourceUrl ?: selectedVideoUrl,
                                                 selectedAudioTrackId = null,
@@ -2113,7 +2113,7 @@ class MainActivity : ComponentActivity() {
                                                     isCompleted = isPlaybackSnapshotCompleted(
                                                         currentPositionMs,
                                                         currentDurationMs,
-                                                        currentProfile?.watchedThreshold ?: 85
+                                                        currentProfile?.watchedThreshold ?: 95
                                                     ),
                                                     selectedSourceUrl = playerCurrentSourceUrl ?: selectedVideoUrl,
                                                     selectedAudioTrackId = null,
@@ -2225,7 +2225,7 @@ class MainActivity : ComponentActivity() {
                                                 isCompleted = isPlaybackSnapshotCompleted(
                                                     pending.currentPositionMs,
                                                     pending.currentDurationMs,
-                                                    currentProfile?.watchedThreshold ?: 85
+                                                    currentProfile?.watchedThreshold ?: 95
                                                 ),
                                                 selectedSourceUrl = pending.playerCurrentSourceUrl ?: selectedVideoUrl,
                                                 selectedAudioTrackId = null,

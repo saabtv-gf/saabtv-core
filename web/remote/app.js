@@ -20,6 +20,9 @@ function field(labelText, type, id, help) {
   const label = document.createElement('label'); label.htmlFor = id; label.textContent = labelText;
   const input = document.createElement('input'); input.id = id; input.type = type;
   input.autocomplete = 'off'; input.spellcheck = false; input.disabled = !relay;
+  if (id === 'username' || type === 'password') {
+    label.className = 'visually-hidden'; input.placeholder = labelText;
+  }
   wrapper.append(label);
   if (type === 'password') {
     input.maxLength = 128;
@@ -46,6 +49,7 @@ function showMode(mode) {
   document.querySelectorAll('[data-mode]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
     button.disabled = !!relay && button.dataset.mode !== manifest.mode;
+    button.hidden = true;
   });
   fields.replaceChildren(); image?.close(); image = undefined; cropCanvas = undefined;
   if (mode === 'signin' || mode === 'signup') {
@@ -178,16 +182,17 @@ form.addEventListener('submit', async event => {
     await send(message);
   } catch (error) { status('Check Your Details', error.message); }
 });
-document.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => { if (!relay) showMode(button.dataset.mode); }));
+document.querySelector('nav').hidden = true; // The authenticated QR manifest, not tabs, selects the only tool.
 document.querySelector('footer').textContent = 'End-to-end encrypted to your TV. No analytics or browser storage. Keep the pairing QR private. Requires internet on both devices.';
-showMode('signin');
+document.querySelector('section').hidden = true;
 async function connect() {
   const params = new URLSearchParams(location.hash.slice(1));
   const activeGeneration = ++generation;
   clearTimeout(expiryTimer);
   relay = undefined; token = undefined; busy = false; form.reset(); fields.replaceChildren(); submit.disabled = true;
+  document.querySelector('section').hidden = true;
   history.replaceState(null, '', location.pathname); // Do not leave pairing secrets in browser history.
-  if (!params.has('id')) { showMode('signin'); return; }
+  if (!params.has('id')) { status('Scan Your TV’s QR Code', 'Open the required tool on your TV and scan its QR.'); return; }
   try {
     const id = params.get('id'), cap = params.get('cap'), rawKey = decode(params.get('key') || '');
     if (!/^[0-9a-f-]{36}$/.test(id) || !/^[A-Za-z0-9_-]{43}$/.test(cap) || rawKey.length !== 32) throw new Error('Invalid QR code. Scan again from your TV.');
@@ -199,7 +204,7 @@ async function connect() {
     if (activeGeneration !== generation) return;
     token = authToken; manifest = fetchedManifest;
     if (manifest.version !== 1 || !Object.hasOwn(modes, manifest.mode)) throw new Error('Unsupported pairing. Update your TV app.');
-    relay = candidate; showMode(manifest.mode); status('TV Connected', 'Pairing expires in five minutes. Keep the TV dialog open.');
+    relay = candidate; showMode(manifest.mode); document.querySelector('section').hidden = false; status('TV Connected', 'Pairing expires in five minutes. Keep the TV dialog open.');
     const ttl = Math.max(0, candidate.expires - Date.now());
     expiryTimer = setTimeout(() => {
       generation++; busy = false;

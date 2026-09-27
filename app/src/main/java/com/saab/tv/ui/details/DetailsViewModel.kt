@@ -78,6 +78,7 @@ class DetailsViewModel @Inject constructor(
         val isLoading: Boolean = true,
         val isLoadingStreams: Boolean = false,
         val resumePlaybackId: String? = null,
+        val resumeIsNextEpisode: Boolean = false,
         val lastPlayedEpisodeId: String? = null,
         val isMovieWatched: Boolean = false,
         val autoPlayStream: Stream? = null,
@@ -120,6 +121,13 @@ class DetailsViewModel @Inject constructor(
     private var cinemetaRecommendationsJob: Job? = null
     private var loadRequestVersion: Long = 0L
     private var loadedContentKey: String? = null
+    private var resumeRefreshJob: Job? = null
+
+    init {
+        viewModelScope.launch {
+            dao.getWatchHistory().collect { refreshResumeStateIfNeeded(_state.value.meta) }
+        }
+    }
 
     // Prefetched streams cache
     private var prefetchStreamsJob: Job? = null
@@ -176,11 +184,13 @@ class DetailsViewModel @Inject constructor(
                 loadedContentKey = requestKey
                 // Use resolved ID for streams — guarantees IMDb format for stream addons
                 val streamFetchId = if (details.id.startsWith("tt")) details.id else resolvedId
+                if (details.type == "series") computeAndStoreNextUp(streamFetchId, details.name, details.poster, details.videos)
+                val episodeProgressMap = if (details.type == "series") buildEpisodeProgressMap(streamFetchId) else emptyMap()
                 val lastPlayedEpisodeId = if (details.type == "series")
                     dao.getLatestSeriesEpisodeHistory("${streamFetchId}:%")?.id else null
                 val resumePlaybackId = if (details.type == "series") {
                     val latest = dao.getLatestSeriesEpisodeHistory("${streamFetchId}:%")
-                    if (latest != null && !latest.watched) {
+                    if (latest != null && !latest.watched && !episodeHistoryIsWatched(streamFetchId, latest.id, episodeProgressMap)) {
                         latest.id // In-progress episode — resume it
                     } else {
                         // All episodes watched or no history — use next-up if aired
@@ -199,10 +209,6 @@ class DetailsViewModel @Inject constructor(
                 val isMovieWatched = if (details.type != "series") {
                     dao.getHistoryItem(streamFetchId)?.watched == true
                 } else false
-                // Build per-episode progress map for the episodes sidebar
-                val episodeProgressMap = if (details.type == "series") {
-                    buildEpisodeProgressMap(streamFetchId)
-                } else emptyMap()
 
                 _state.value = _state.value.copy(
                     meta = details,
@@ -210,6 +216,7 @@ class DetailsViewModel @Inject constructor(
                     contentKey = requestKey,
                     isLoading = false,
                     resumePlaybackId = resumePlaybackId,
+                    resumeIsNextEpisode = details.type == "series" && resumePlaybackId != null && dao.getHistoryItem(resumePlaybackId)?.let { !it.watched && it.position > 0 } != true,
                     lastPlayedEpisodeId = lastPlayedEpisodeId,
                     isMovieWatched = isMovieWatched,
                     episodeProgressMap = episodeProgressMap,
@@ -274,50 +281,54 @@ class DetailsViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch {
+        resumeRefreshJob?.cancel()
+        resumeRefreshJob = viewModelScope.launch {
+            val seriesId = _state.value.resolvedId ?: meta.id
+            if (meta.type == "series") computeAndStoreNextUp(seriesId, meta.name, meta.poster, meta.videos)
+            val episodeProgressMap = if (meta.type == "series") buildEpisodeProgressMap(seriesId) else emptyMap()
             val lastPlayedEpisodeId = if (meta.type == "series")
-                dao.getLatestSeriesEpisodeHistory("${_state.value.resolvedId ?: meta.id}:%")?.id else null
+                dao.getLatestSeriesEpisodeHistory("$seriesId:%")?.id else null
             val resumePlaybackId = if (meta.type == "series") {
-                val latest = dao.getLatestSeriesEpisodeHistory("${meta.id}:%")
-                if (latest != null && !latest.watched) {
+                val latest = dao.getLatestSeriesEpisodeHistory("$seriesId:%")
+                if (latest != null && !latest.watched && !episodeHistoryIsWatched(seriesId, latest.id, episodeProgressMap)) {
                     latest.id
                 } else {
-                    val nextUp = dao.getSeriesNextUp(meta.id)
+                    val nextUp = dao.getSeriesNextUp(seriesId)
                     val today = java.time.LocalDate.now().toString()
                     val hasAired = nextUp != null && !nextUp.isComplete &&
                         (nextUp.nextReleased == null || nextUp.nextReleased <= today)
                     if (hasAired && nextUp != null) {
-                        "${meta.id}:${nextUp.nextSeason}:${nextUp.nextEpisode}"
+                        "$seriesId:${nextUp.nextSeason}:${nextUp.nextEpisode}"
                     } else null
                 }
             } else {
-                val movieHistory = dao.getHistoryItem(meta.id)
+                val movieHistory = dao.getHistoryItem(seriesId)
                 if (movieHistory?.watched == true) null else movieHistory?.id
             }
             val isMovieWatched = if (meta.type != "series") {
-                dao.getHistoryItem(meta.id)?.watched == true
+                dao.getHistoryItem(seriesId)?.watched == true
             } else false
             if (_state.value.meta?.id == meta.id && _state.value.meta?.type == meta.type) {
-                val episodeProgressMap = if (meta.type == "series") {
-                    buildEpisodeProgressMap(meta.id)
-                } else emptyMap()
                 _state.value = _state.value.copy(
                     resumePlaybackId = resumePlaybackId,
+                    resumeIsNextEpisode = meta.type == "series" && resumePlaybackId != null && dao.getHistoryItem(resumePlaybackId)?.let { !it.watched && it.position > 0 } != true,
                     lastPlayedEpisodeId = lastPlayedEpisodeId,
                     isMovieWatched = isMovieWatched,
                     autoPlayStream = null,
                     episodeProgressMap = episodeProgressMap
                 )
-                // Update next-up after returning from player
-                if (meta.type == "series") {
-                    computeAndStoreNextUp(meta.id, meta.name, meta.poster, meta.videos)
-                }
             }
         }
     }
 
     fun refreshResumeState() {
         refreshResumeStateIfNeeded(_state.value.meta)
+    }
+
+    private fun episodeHistoryIsWatched(seriesId: String, playbackId: String, progress: Map<String, EpisodeProgress>): Boolean {
+        val parts = playbackId.removePrefix("$seriesId:").split(":")
+        if (parts.size < 2) return false
+        return progress["S${parts[0]}:E${parts[1]}"]?.watched == true
     }
 
     /**

@@ -124,7 +124,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             color = androidx.compose.ui.graphics.Color.White
         )
         Text(
-            "Local app, update, lifecycle, network and playback events. No passwords, tokens or request bodies are recorded.",
+            "Caught request failures are not crash reports. Look for Uncaught Exception or abnormal process exits. No passwords, tokens or request bodies are recorded.",
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f),
             modifier = Modifier.padding(top = 4.dp)
@@ -377,7 +377,7 @@ private fun DiagnosticEventCard(
             Spacer(Modifier.width(10.dp))
             Text(
                 item.component,
-                color = accent,
+                color = if (focused) androidx.compose.ui.graphics.Color.White else accent,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 12.sp
             )

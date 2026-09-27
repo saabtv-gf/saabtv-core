@@ -24,6 +24,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 
 /** Focus highlights the field. OK explicitly enables editing; focus alone cannot open the IME. */
 @Composable
@@ -45,9 +47,9 @@ internal fun AccountCredentialField(
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(value = value, onValueChange = onValueChange,
-            label = { Text(label) }, enabled = enabled, singleLine = true,
+            placeholder = { Text(label) }, enabled = enabled, singleLine = true,
             readOnly = !editing, isError = isError, supportingText = supportingText,
-            modifier = Modifier.weight(1f).border(if (fieldFocused) 3.dp else 0.dp,
+            modifier = Modifier.weight(1f).semantics { contentDescription = label }.border(if (fieldFocused) 3.dp else 0.dp,
                 if (fieldFocused) Color.White else Color.Transparent, RoundedCornerShape(8.dp)).onFocusChanged {
                 fieldFocused = it.isFocused
                 if (!it.isFocused) { editing = false }
@@ -72,7 +74,7 @@ internal fun AccountCredentialField(
             keyboardActions = KeyboardActions(onNext = { editing = false; keyboard?.hide(); onNext?.invoke() },
                 onDone = { editing = false; keyboard?.hide(); onDone() }))
         if (password) OutlinedIconButton(onClick = onToggleVisibility, enabled = enabled,
-            modifier = Modifier.padding(top = 8.dp).size(48.dp).onFocusChanged { eyeFocused = it.isFocused },
+            modifier = Modifier.padding(top = 4.dp).size(48.dp).onFocusChanged { eyeFocused = it.isFocused },
             shape = RoundedCornerShape(10.dp),
             border = BorderStroke(if (eyeFocused) 3.dp else 1.dp, if (eyeFocused) Color.White else MaterialTheme.colorScheme.outline),
             colors = IconButtonDefaults.outlinedIconButtonColors(

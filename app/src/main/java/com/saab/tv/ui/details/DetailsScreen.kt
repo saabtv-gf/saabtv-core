@@ -455,10 +455,15 @@ fun DetailsScreen(
                 val firstEpisode = remember(currentMovie.id, currentMovie.videos) {
                     findFirstEpisode(currentMovie.videos)
                 }
-                val hintedResumePlaybackId = remember(type, id, resumePlaybackHint) {
+                val hintedResumePlaybackId = remember(type, id, resumePlaybackHint, state.resumeIsNextEpisode, state.episodeProgressMap, state.isMovieWatched) {
                     when (type) {
-                        "series" -> resumePlaybackHint?.takeIf { playbackIdBelongsToSeries(id, it) }
-                        else -> resumePlaybackHint?.takeIf { it == id }
+                        "series" -> resumePlaybackHint?.takeIf { candidate ->
+                            playbackIdBelongsToSeries(id, candidate) && !state.resumeIsNextEpisode &&
+                                parseSeasonEpisodeFromPlaybackId(candidate)?.let { (season, episode) ->
+                                    state.episodeProgressMap["S${season}:E${episode}"]?.watched != true
+                                } != false
+                        }
+                        else -> resumePlaybackHint?.takeIf { it == id && !state.isMovieWatched }
                     }
                 }
                 val resumePlaybackId = hintedResumePlaybackId ?: state.resumePlaybackId
@@ -484,11 +489,7 @@ fun DetailsScreen(
                     val playLabel = if (resumePlaybackId != null) {
                         val resumeSeason = resumeEpisode?.season?.takeIf { it > 0 } ?: parsedResumeSeasonEpisode?.first
                         val resumeNumber = resumeEpisode?.episode?.takeIf { it > 0 } ?: parsedResumeSeasonEpisode?.second
-                        if (resumeSeason != null && resumeNumber != null) {
-                            "Resume S${resumeSeason} E${resumeNumber}"
-                        } else {
-                            "Resume"
-                        }
+                        seriesResumeActionLabel(resumeSeason, resumeNumber, state.resumeIsNextEpisode && hintedResumePlaybackId == null)
                     } else {
                         "Play S${firstEpisodeSeason} E${firstEpisodeNumber}"
                     }

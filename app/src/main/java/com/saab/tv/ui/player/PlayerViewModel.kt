@@ -82,7 +82,7 @@ class PlayerViewModel @Inject constructor(
                     duration = progress.storedDurationMs,
                     lastWatched = System.currentTimeMillis(),
                     type = type.ifBlank { "movie" },
-                    watched = progress.isCompleted,
+                    watched = progress.isCompleted || existing?.watched == true,
                     scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
                 )
                 dao.upsertHistory(entry)
@@ -215,8 +215,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     private suspend fun watchedThresholdRatio(): Double {
-        val profileId = dao.getActiveProfileId() ?: return 0.85
-        val percent = dao.getProfileById(profileId)?.watchedThreshold ?: 85
+        val profileId = dao.getActiveProfileId() ?: return 0.95
+        val percent = dao.getProfileById(profileId)?.watchedThreshold ?: 95
         return percent.coerceIn(50, 99) / 100.0
     }
 }

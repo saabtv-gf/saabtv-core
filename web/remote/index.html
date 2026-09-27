@@ -7,13 +7,13 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src https://ep-gentle-voice-azd9if2p.neonauth.c-3.ap-southeast-1.aws.neon.tech https://ep-gentle-voice-azd9if2p.apirest.c-3.ap-southeast-1.aws.neon.tech; form-action 'none'; base-uri 'none'; object-src 'none'">
   <title>Saab TV · Phone Companion</title>
   <link rel="stylesheet" href="style.css">
-  <script src="app.js?v=0.1.61.1" type="module"></script>
+  <script src="app.js?v=0.1.66" type="module"></script>
 </head>
 <body>
   <main>
     <header><span class="brand">Saab <span>TV</span></span><p>Your TV. Your Phone. Connected.</p></header>
     <aside role="status" aria-live="polite"><strong id="status-title">Scan Your TV’s QR Code</strong><p id="status">Open a phone tool on your TV and scan its QR. Pairing links expire in five minutes.</p></aside>
-    <nav aria-label="Phone Tools">
+    <nav aria-label="Phone Tools" hidden>
       <button type="button" data-mode="signin" aria-pressed="true">Sign In</button>
       <button type="button" data-mode="signup" aria-pressed="false">Create Account</button>
       <button type="button" data-mode="paste" aria-pressed="false">Paste Link</button>
@@ -21,8 +21,8 @@
       <button type="button" data-mode="avatar" aria-pressed="false">Profile Photo</button>
       <button type="button" data-mode="hub" aria-pressed="false">Upload Artwork</button>
     </nav>
-    <section aria-labelledby="title">
-      <h1 id="title">Sign In To Saab TV</h1>
+    <section aria-labelledby="title" hidden>
+      <h1 id="title">Connect Your TV</h1>
       <p id="description">Use your phone keyboard, then confirm on your TV.</p>
       <form id="form" autocomplete="off">
         <div id="fields"></div>

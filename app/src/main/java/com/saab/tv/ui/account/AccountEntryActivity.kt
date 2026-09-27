@@ -46,6 +46,7 @@ class AccountEntryActivity : ComponentActivity() {
     private var offlineAllowed by mutableStateOf(false)
     private var authenticated by mutableStateOf(false)
     private var signingIn by mutableStateOf(false)
+    private var openingApp = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -115,6 +116,7 @@ class AccountEntryActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 AccountSyncManager.prepareBeforeOpeningApp(applicationContext, auth)
+                withContext(Dispatchers.IO) { com.saab.tv.data.profile.WatchThresholdUpgrade.apply(applicationContext) }
                 importOffered = withContext(Dispatchers.IO) { !localProfilesExist() && AccountLegacyImport.isAvailable(applicationContext) }
                 if (!importOffered) openApp() else busy = false
             } catch (e: CancellationException) { throw e }
@@ -135,7 +137,7 @@ class AccountEntryActivity : ComponentActivity() {
     private fun importLegacy() {
         busy = true
         lifecycleScope.launch {
-            try { withContext(Dispatchers.IO) { AccountLegacyImport.import(applicationContext) }; openApp() }
+            try { withContext(Dispatchers.IO) { AccountLegacyImport.import(applicationContext); com.saab.tv.data.profile.WatchThresholdUpgrade.apply(applicationContext, force = true) }; openApp() }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { busy = false; error = "Import failed. Your original local profiles are still safe." }
         }
@@ -143,7 +145,18 @@ class AccountEntryActivity : ComponentActivity() {
 
     private fun openApp() {
         if (!deviceDisplay.isConfigured()) { busy = false; importOffered = false; displaySetup = true; return }
-        startActivity(Intent(this, MainActivity::class.java)); finish()
+        if (openingApp) return
+        openingApp = true; displaySetup = false; busy = true
+        lifecycleScope.launch {
+            try {
+                // Also apply the upgrade when a returning account continues offline.
+                withContext(Dispatchers.IO) { com.saab.tv.data.profile.WatchThresholdUpgrade.apply(applicationContext) }
+                startActivity(Intent(this@AccountEntryActivity, MainActivity::class.java)); finish()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                openingApp = false; busy = false; authenticated = true; error = friendlyError(failure)
+            }
+        }
     }
     private fun friendlyError(e: Exception): String = when (e) {
         is AccountApiException -> e.message.orEmpty()

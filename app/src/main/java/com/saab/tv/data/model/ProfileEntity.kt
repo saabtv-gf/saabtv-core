@@ -83,7 +83,7 @@ data class ProfileEntity(
     val assRendererEnabled: Boolean = false,          // Styled ASS/SSA subtitles via libass
 
     // Watch thresholds
-    val watchedThreshold: Int = 85,                  // 50-99%, marks as watched when exceeded
+    val watchedThreshold: Int = 95,                  // 50-99%, marks as watched when exceeded
 
     // TMDB integration
     val tmdbEnabled: Boolean = false,
