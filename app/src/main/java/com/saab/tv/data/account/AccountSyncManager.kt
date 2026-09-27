@@ -217,6 +217,11 @@ class AccountSyncManager @Inject constructor(
         wakeups.trySend(Unit)
     }
 
+    fun historyChanged(progressOnly: Boolean = true, urgent: Boolean = false) {
+        cloud.noteLocalChange()
+        requestSync(progressOnly = progressOnly, urgent = urgent)
+    }
+
     /** Process-lifetime scope survives Activity destruction long enough to flush local saves. */
     fun flushAfterBackground() { requestSync(urgent = true) }
 

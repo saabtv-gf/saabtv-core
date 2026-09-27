@@ -34,10 +34,15 @@ object StreamScoreCalculator {
         // non-overlapping, preserving the higher-resolution-first contract.
         val requiresSeeders = StreamSourceProviderResolver.requiresSeederMetadata(stream)
         val tierPosition = when {
-            !requiresSeeders -> normalizedSecondary
-            info.seeds != null -> KNOWN_SEEDER_BAND_START +
-                normalizedSecondary * (1.0 - KNOWN_SEEDER_BAND_START)
-            else -> normalizedSecondary * UNKNOWN_SEEDER_BAND_END
+            stream.torBoxCached == true -> 0.90 + normalizedSecondary * 0.10
+            stream.torBoxChecked -> when {
+                info.seeds != null -> 0.45 + normalizedSecondary * 0.44
+                else -> normalizedSecondary * 0.44
+            }
+            !requiresSeeders -> normalizedSecondary * 0.89
+            info.seeds != null -> (KNOWN_SEEDER_BAND_START +
+                normalizedSecondary * (1.0 - KNOWN_SEEDER_BAND_START)) * 0.89
+            else -> normalizedSecondary * UNKNOWN_SEEDER_BAND_END * 0.89
         }
         val score = qualityTierBase(info.quality) +
             tierPosition * qualityTierWidth(info.quality)

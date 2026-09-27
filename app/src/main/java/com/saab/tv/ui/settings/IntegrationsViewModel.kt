@@ -42,7 +42,8 @@ data class IntegrationsUiState(
     val tmdbApiKeyConfigured: Boolean = false,
     val traktConnected: Boolean = false,
     val traktCredentialsConfigured: Boolean = false,
-    val traktAuthState: DeviceAuthState = DeviceAuthState.Idle
+    val traktAuthState: DeviceAuthState = DeviceAuthState.Idle,
+    val torBoxConfigured: Boolean = false
 )
 
 @HiltViewModel
@@ -53,10 +54,21 @@ class IntegrationsViewModel @Inject constructor(
     private val dao: AddonDao,
     private val tmdbService: TmdbService,
     private val traktAuthManager: TraktAuthManager,
-    private val traktSyncManager: TraktSyncManager
+    private val traktSyncManager: TraktSyncManager,
+    private val torBox: com.saab.tv.data.stream.TorBoxAvailabilityService
 ) : ViewModel() {
 
     private var traktAuthJob: Job? = null
+
+    fun saveTorBoxKey(key: String): Boolean {
+        if (!torBox.save(key)) return false
+        _uiState.value = _uiState.value.copy(torBoxConfigured = true)
+        return true
+    }
+    fun clearTorBoxKey() {
+        torBox.clear()
+        _uiState.value = _uiState.value.copy(torBoxConfigured = false)
+    }
 
     private val _uiState = MutableStateFlow(IntegrationsUiState())
     val uiState: StateFlow<IntegrationsUiState> = _uiState.asStateFlow()
@@ -67,7 +79,8 @@ class IntegrationsViewModel @Inject constructor(
     init {
         _uiState.value = _uiState.value.copy(
             traktCredentialsConfigured = traktAuthManager.hasClientCredentials(),
-            tmdbApiKeyConfigured = tmdbService.hasApiKey()
+            tmdbApiKeyConfigured = tmdbService.hasApiKey(),
+            torBoxConfigured = torBox.configured()
         )
         // Observe connection state
         viewModelScope.launch {

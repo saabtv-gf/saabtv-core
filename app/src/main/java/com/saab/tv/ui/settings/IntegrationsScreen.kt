@@ -73,6 +73,7 @@ fun IntegrationsScreen(
     var showConnectDialog by remember { mutableStateOf(false) }
     var showManagementDialog by remember { mutableStateOf(false) }
     var showDisconnectConfirm by remember { mutableStateOf(false) }
+    var showTorBox by remember { mutableStateOf(false) }
 
     // Handle events
     LaunchedEffect(Unit) {
@@ -150,6 +151,15 @@ fun IntegrationsScreen(
             modifier = goBackModifier.then(upBlockModifier)
         )
 
+        Spacer(Modifier.height(12.dp))
+
+        IntegrationItem(
+            title = "TorBox",
+            subtitle = if (state.torBoxConfigured) "Availability Checks Enabled" else "API Key Required",
+            isConnected = state.torBoxConfigured,
+            onClick = { showTorBox = true },
+            modifier = goBackModifier
+        )
         Spacer(Modifier.height(12.dp))
 
         // TMDB Integration Item
@@ -231,6 +241,28 @@ fun IntegrationsScreen(
                 viewModel.importAddons(selectedAddons)
             }
         )
+    }
+
+    if (showTorBox) {
+        var key by remember { mutableStateOf("") }
+        var visible by remember { mutableStateOf(false) }
+        var error by remember { mutableStateOf(false) }
+        val keyFocus = remember { FocusRequester() }
+        com.saab.tv.ui.addons.VoidDialog(onDismissRequest = { showTorBox = false }, title = "TorBox Availability") {
+            Text("Enter your TorBox API key to verify cached torrents and recent tracker seeder counts. The key is stored encrypted and synced with your account. Failed checks remain unknown.")
+            Spacer(Modifier.height(16.dp))
+            com.saab.tv.ui.account.AccountCredentialField(key, { key = it; error = false }, "TorBox API Key",
+                keyFocus, true, password = true, visible = visible, onToggleVisibility = { visible = !visible }, isError = error)
+            Spacer(Modifier.height(16.dp))
+            com.saab.tv.ui.components.SetupButton("Save", {
+                if (viewModel.saveTorBoxKey(key.trim())) showTorBox = false else error = true
+            }, enabled = key.isNotBlank(), primary = true, modifier = Modifier.fillMaxWidth())
+            if (state.torBoxConfigured) com.saab.tv.ui.components.SetupButton("Remove API Key", {
+                viewModel.clearTorBoxKey(); showTorBox = false
+            }, modifier = Modifier.fillMaxWidth())
+            com.saab.tv.ui.components.SetupButton("Cancel", { showTorBox = false }, modifier = Modifier.fillMaxWidth())
+        }
+        LaunchedEffect(Unit) { withFrameNanos { }; keyFocus.requestFocus() }
     }
 
     // TMDB Settings Dialog

@@ -38,6 +38,8 @@ class AccountSnapshotStoreTest {
             val exactLong = 9_007_199_254_740_993L
             db.addonDao().insertHistory(WatchHistoryEntity(profileId = 1, id = "qa-title", title = "QA",
                 poster = null, position = 333_000, duration = 9_999_000, lastWatched = exactLong, type = "movie"))
+            db.addonDao().insertHistory(WatchHistoryEntity(profileId = 1, id = "tt123:1:2", title = "Episode",
+                poster = null, position = 950_000, duration = 1_000_000, lastWatched = exactLong, type = "series", watched = true))
             val prefs = AccountStorage.preferences(context, "source_selection_prefs")
             assertTrue(prefs.edit().putString("selected", "qa-source").commit())
             val store = AccountSnapshotStore(context, db)
@@ -47,6 +49,9 @@ class AccountSnapshotStoreTest {
             store.restore(bytes)
             assertEquals(profile, db.addonDao().getProfileById(1))
             assertEquals(exactLong, db.addonDao().getHistoryItem("qa-title")!!.lastWatched)
+            assertTrue(db.addonDao().getHistoryItemForProfile(1, "tt123:1:2")!!.watched)
+            assertEquals(950_000L, db.addonDao().getHistoryItemForProfile(1, "tt123:1:2")!!.position)
+            assertNull(db.addonDao().getHistoryItemForProfile(2, "tt123:1:2"))
             assertEquals("qa-source", prefs.getString("selected", null))
             assertArrayEquals(byteArrayOf(1, 2, 3), avatar.readBytes())
 

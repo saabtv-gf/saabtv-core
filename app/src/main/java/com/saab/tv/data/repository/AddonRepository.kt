@@ -26,7 +26,8 @@ import javax.inject.Singleton
 @Singleton
 class AddonRepository @Inject constructor(
     private val api: StremioApiService,
-    private val dao: AddonDao
+    private val dao: AddonDao,
+    private val torBox: com.saab.tv.data.stream.TorBoxAvailabilityService
 ) {
     private val gson = Gson()
     private val MAX_CATALOG_PAGES = 30
@@ -416,11 +417,12 @@ class AddonRepository @Inject constructor(
                             addonTransportUrl = addon.transportUrl
                         )
                     }
-                } catch (e: Exception) { emptyList<Stream>() }
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { emptyList<Stream>() }
             }
         }
 
-        jobs.awaitAll().flatten()
+        torBox.enrich(jobs.awaitAll().flatten())
     }
 
     suspend fun getAddonSortOrders(): Map<String, Int> = withContext(Dispatchers.IO) {

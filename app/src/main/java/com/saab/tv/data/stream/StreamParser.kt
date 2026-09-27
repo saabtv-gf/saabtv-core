@@ -91,9 +91,9 @@ object StreamParser {
         return ParsedStreamInfo(
             quality = extractQuality(stream),
             sizeBytes = stream.behaviorHints?.videoSize ?: extractSizeBytes(text),
-            seeds = stream.seeders?.takeIf { it >= 0 }
+            seeds = if (stream.torBoxChecked) stream.torBoxSeeders else (stream.seeders?.takeIf { it >= 0 }
                 ?: stream.behaviorHints?.seeders?.takeIf { it >= 0 }
-                ?: extractSeeds(text),
+                ?: extractSeeds(text)),
             formats = extractFormats(text)
         )
     }

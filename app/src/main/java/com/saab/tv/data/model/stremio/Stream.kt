@@ -22,7 +22,10 @@ data class Stream(
     val seeders: Int? = null,
     val subtitles: List<StreamSubtitle>? = null,
     val behaviorHints: StreamBehaviorHints? = null,
-    val addonTransportUrl: String? = null
+    val addonTransportUrl: String? = null,
+    val torBoxCached: Boolean? = null,
+    val torBoxSeeders: Int? = null,
+    val torBoxChecked: Boolean = false
 )
 
 data class StreamSubtitle(

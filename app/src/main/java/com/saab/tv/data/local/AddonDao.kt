@@ -94,6 +94,9 @@ interface AddonDao {
     @Query("SELECT * FROM watch_history WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1) AND id = :id")
     suspend fun getHistoryItem(id: String): WatchHistoryEntity?
 
+    @Query("SELECT * FROM watch_history WHERE profileId = :profileId AND id = :id")
+    suspend fun getHistoryItemForProfile(profileId: Int, id: String): WatchHistoryEntity?
+
     @Query("SELECT * FROM watch_history WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1) AND id LIKE :prefix || '%'")
     suspend fun getHistoryItemsByPrefix(prefix: String): List<WatchHistoryEntity>
 

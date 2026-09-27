@@ -8,6 +8,8 @@ internal data class WatchProgressEvaluation(
 internal object WatchProgressPolicy {
     const val MIN_WATCHED_POSITION_MS = 300_000L
 
+    fun preserveWatched(completedNow: Boolean, alreadyWatched: Boolean): Boolean = completedNow || alreadyWatched
+
     fun evaluate(
         positionMs: Long,
         reportedDurationMs: Long?,

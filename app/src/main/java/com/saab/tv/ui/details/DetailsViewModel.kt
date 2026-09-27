@@ -62,7 +62,8 @@ class DetailsViewModel @Inject constructor(
     private val tmdbMetadataService: TmdbMetadataService,
     private val traktSyncManager: TraktSyncManager,
     private val seekThumbnailCache: SeekThumbnailCache,
-    private val deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences
+    private val deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences,
+    private val accountSync: com.saab.tv.data.account.AccountSyncManager
 ) : ViewModel() {
 
     /** Per-episode watch progress for the episodes sidebar. */
@@ -352,9 +353,10 @@ class DetailsViewModel @Inject constructor(
             if (season <= 0 || episode <= 0) continue
             val key = "S${season}:E${episode}"
 
-            // Keep the most recent entry if there are duplicates
+            // Watched wins across stream variants; otherwise retain the highest progress.
             val existing = map[key]
-            if (existing == null || (!existing.watched && item.watched)) {
+            if (existing == null || (!existing.watched && item.watched) ||
+                (existing.watched == item.watched && item.progress() > existing.progress)) {
                 map[key] = EpisodeProgress(
                     progress = item.progress(),
                     watched = item.watched
@@ -645,6 +647,7 @@ class DetailsViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             if (isCurrentlyWatched) {
                 dao.deleteHistoryItem(itemId)
+                accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushMovieUnwatched(itemId)
             } else {
                 dao.upsertHistory(
@@ -660,6 +663,7 @@ class DetailsViewModel @Inject constructor(
                         scrobbled = true
                     )
                 )
+                accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushMovieWatched(itemId)
             }
             activeProfileId.value?.let { profileId ->
@@ -688,6 +692,7 @@ class DetailsViewModel @Inject constructor(
                 dao.getSeriesEpisodeHistory("$playbackId:%").forEach {
                     dao.deleteHistoryItem(it.id)
                 }
+                accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushEpisodeUnwatched(streamId, episode.season, episode.episode)
             } else {
                 // Mark as watched: create a watched history entry
@@ -705,6 +710,7 @@ class DetailsViewModel @Inject constructor(
                         scrobbled = true
                     )
                 )
+                accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushEpisodeWatched(streamId, episode.season, episode.episode)
             }
             activeProfileId.value?.let { profileId ->

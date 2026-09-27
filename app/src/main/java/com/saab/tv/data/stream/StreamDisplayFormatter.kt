@@ -29,12 +29,17 @@ object StreamDisplayFormatter {
         val parsed = StreamParser.parse(stream)
         val details = buildList {
             StreamSourceProviderResolver.detect(stream)?.label?.let(::add)
+            if (stream.torBoxChecked) add(when (stream.torBoxCached) {
+                true -> "TorBox Cached"
+                false -> "TorBox Not Cached"
+                null -> "TorBox Cache Unknown"
+            })
             add(languageSummary(stream))
             qualityLabel(parsed.quality)?.let(::add)
             addAll(dynamicRangeLabels(parsed.formats))
             parsed.sizeBytes?.let(::formatSize)?.let(::add)
             parsed.seeds?.let { seeds ->
-                add("$seeds ${if (seeds == 1) "Seeder" else "Seeders"}")
+                add("$seeds ${if (seeds == 1) "Seeder" else "Seeders"}${if (stream.torBoxChecked) " · TorBox" else ""}")
             } ?: if (StreamSourceProviderResolver.requiresSeederMetadata(stream)) {
                 add("Seeders Not Reported")
             } else Unit

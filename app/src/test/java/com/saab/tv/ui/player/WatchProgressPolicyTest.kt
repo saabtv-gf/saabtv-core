@@ -6,6 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WatchProgressPolicyTest {
+    @Test fun aReplayOrShortCompletionCannotClearWatchedState() {
+        assertTrue(WatchProgressPolicy.preserveWatched(false, true))
+        assertTrue(WatchProgressPolicy.preserveWatched(true, false))
+        assertFalse(WatchProgressPolicy.preserveWatched(false, false))
+    }
     @Test fun ninetyFivePercentIsTheNewCompletionBoundary() {
         assertFalse(WatchProgressPolicy.evaluate(900_000L, 1_000_000L, null, 0.95).isCompleted)
         assertTrue(WatchProgressPolicy.evaluate(950_000L, 1_000_000L, null, 0.95).isCompleted)
