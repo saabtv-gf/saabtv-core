@@ -349,6 +349,11 @@ class ExoPlayerBackend(
         }
 
         override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+            if (_uiState.value.selectedSubtitleTrackId == SUBTITLE_OFF_ID) {
+                lastCueGroup = null
+                playerView?.subtitleView?.setCues(emptyList())
+                return
+            }
             lastCueGroup = cueGroup
             applyTransformedCues()
         }
@@ -734,13 +739,16 @@ class ExoPlayerBackend(
         val lastPosition = player?.currentPosition ?: _uiState.value.positionMs
         val wasPlaying = player?.playWhenReady ?: _uiState.value.playWhenReady
         val currentSpeed = player?.playbackParameters?.speed ?: _uiState.value.playbackSpeed
+        val keepSubtitlesOff = SubtitleSelectionPolicy.preserveOffOnSourceChange(
+            manualSubtitleSelection, _uiState.value.selectedSubtitleTrackId
+        )
 
         loadToken++
         pendingAudioTrackId = null
-        pendingSubtitleTrackId = null
+        pendingSubtitleTrackId = if (keepSubtitlesOff) SUBTITLE_OFF_ID else null
         hasAppliedAudioLanguagePref = false
         hasAppliedSubtitleLanguagePref = false
-        manualSubtitleSelection = false
+        manualSubtitleSelection = keepSubtitlesOff
         currentSourceId = sourceId
         reliabilityStateMachine.begin(sourceId)
         transitionReliability(PlaybackReliabilityPhase.PREPARING)
@@ -801,6 +809,7 @@ class ExoPlayerBackend(
         val subtitle = externalSubtitleSources[id]
         if (id == SUBTITLE_OFF_ID || subtitle == null || mediaUrl == null || subtitleDelayChangedManually) {
             subtitleAutoSyncJob?.cancel()
+            subtitleAutoSyncJob = null
             autoSyncSubtitleId = null
             return
         }
@@ -857,15 +866,19 @@ class ExoPlayerBackend(
 
         if (id == SUBTITLE_OFF_ID) {
             forcedSubtitleTrackId = null
+            pendingSubtitleTrackId = null
+            lastCueGroup = null
+            _uiState.update { it.copy(selectedSubtitleTrackId = SUBTITLE_OFF_ID) }
+            playerView?.subtitleView?.setCues(emptyList())
+            playerView?.subtitleView?.visibility = android.view.View.GONE
+            assHandler?.clearOverlay()
             builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             player.trackSelectionParameters = builder.build()
-            pendingSubtitleTrackId = null
-            _uiState.update { it.copy(selectedSubtitleTrackId = SUBTITLE_OFF_ID) }
             refreshTrackOptions(player.currentTracks)
-            // Stop ASS rendering when subtitles are turned off
-            if (playbackSettings.assRendererEnabled) assHandler?.clearOverlay()
             return
         }
+
+        playerView?.subtitleView?.visibility = android.view.View.VISIBLE
 
         val locator = subtitleTrackLocators[id]
         if (locator != null) {
@@ -986,6 +999,7 @@ class ExoPlayerBackend(
     }
 
     private fun applyTransformedCues() {
+        if (_uiState.value.selectedSubtitleTrackId == SUBTITLE_OFF_ID) return
         val cueGroup = lastCueGroup ?: return
         val offset = subtitleVerticalOffsetPercent
         val sizeScale = subtitleSizePercent
@@ -1037,7 +1051,9 @@ class ExoPlayerBackend(
             builder?.build() ?: cue
         }
         // Use post to apply after PlayerView's internal cue handling
-        sv.post { sv.setCues(transformed) }
+        sv.post {
+            sv.setCues(if (_uiState.value.selectedSubtitleTrackId == SUBTITLE_OFF_ID) emptyList() else transformed)
+        }
     }
 
     override fun release() {
@@ -1970,16 +1986,18 @@ class ExoPlayerBackend(
         val subtitleId = pendingSubtitleTrackId?.takeIf { id ->
             id == SUBTITLE_OFF_ID || _subtitleTracks.value.any { it.id == id && it.supported }
         }
-        if (subtitleId == null) {
+        manualSubtitleSelection = SubtitleSelectionPolicy.retainManualSelection(
+            manualSubtitleSelection, pendingSubtitleTrackId, subtitleId
+        )
+        if (pendingSubtitleTrackId != null && subtitleId == null) {
             pendingSubtitleTrackId = null
-            manualSubtitleSelection = false
         }
         val preferredId = resolvePreferredSubtitleTrack()
         val preferred = _subtitleTracks.value.firstOrNull { it.id == preferredId }
         val current = _subtitleTracks.value.firstOrNull { it.id == _uiState.value.selectedSubtitleTrackId }
-        val upgradeToEmbedded = !manualSubtitleSelection && subtitleId != SUBTITLE_OFF_ID &&
-            preferred?.subtitleSourcePriority == SubtitleSourcePriority.EMBEDDED &&
-            preferred.id != current?.id
+        val upgradeToEmbedded = SubtitleSelectionPolicy.shouldUpgradeToEmbedded(
+            manualSubtitleSelection, subtitleId, current?.id, preferred
+        )
         when {
             upgradeToEmbedded -> {
                 pendingSubtitleTrackId = null

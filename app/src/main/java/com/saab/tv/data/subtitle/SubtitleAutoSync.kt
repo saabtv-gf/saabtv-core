@@ -56,7 +56,7 @@ internal object SubtitleAutoSync {
         }
     }
 
-    private fun readSubtitleSpans(url: String): List<Pair<Long, Long>> {
+    private suspend fun readSubtitleSpans(url: String): List<Pair<Long, Long>> {
         val connection = URL(url).openConnection().apply {
             connectTimeout = 5_000
             readTimeout = 5_000
@@ -65,6 +65,7 @@ internal object SubtitleAutoSync {
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(8_192)
             while (true) {
+                coroutineContext.ensureActive()
                 val count = stream.read(buffer)
                 if (count < 0) break
                 if (output.size() + count > MAX_SUBTITLE_BYTES) return emptyList()
