@@ -3308,11 +3308,13 @@ private fun BoxScope.PlayerSourceSidebar(
         state = sidebarState,
         onEpisodeSelected = {},
         onSourceSelected = { stream ->
-            val sourceId = stream.url ?: return@GlassSidebar
+            val url = stream.url ?: return@GlassSidebar
+            val sourceId = sourceOptionId(url, stream.fileIdx ?: -1, stream.behaviorHints?.filename.orEmpty())
             onSelectSource(sourceId)
         },
         onLanguageSourceSelected = { stream ->
-            val sourceId = stream.url ?: return@GlassSidebar
+            val url = stream.url ?: return@GlassSidebar
+            val sourceId = sourceOptionId(url, stream.fileIdx ?: -1, stream.behaviorHints?.filename.orEmpty())
             onLanguageSelectSource(sourceId)
         },
         onBack = onClose,
@@ -3370,7 +3372,7 @@ private fun BoxScope.EpisodeSwitchSourceSidebar(
         onEpisodeSelected = {},
         onSourceSelected = { stream ->
             val url = stream.url ?: return@GlassSidebar
-            onSelectSource(url)
+            onSelectSource(sourceOptionId(url, stream.fileIdx ?: -1, stream.behaviorHints?.filename.orEmpty()))
         },
         onBack = onClose,
         onDismiss = onClose

@@ -8,8 +8,6 @@ import com.saab.tv.data.security.SecurePreferences
 import com.saab.tv.data.account.AccountStorage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -50,9 +48,8 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
     }
     private val client = OkHttpClient.Builder().callTimeout(9, TimeUnit.SECONDS)
         .connectTimeout(3, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS).build()
-    private data class Evidence(val cached: Boolean?, val seeds: Int?, val at: Long)
+    private data class Evidence(val cached: Boolean?, val at: Long)
     private val results = ConcurrentHashMap<String, Evidence>()
-    private val permits = Semaphore(4)
 
     private suspend fun request(path: String, key: String?, query: Map<String, String>): JsonObject? = withContext(Dispatchers.IO) {
         val url = "https://api.torbox.app/v1/api/torrents/$path".toHttpUrl().newBuilder().apply {
@@ -96,41 +93,41 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
                 "sources=${output.size} checked=${output.count { it.torBoxChecked }} missingHash=${output.count { it.torBoxChecked && TorBoxAvailabilityPolicy.hash(it) == null }}")
         }
         val evidence = ConcurrentHashMap<String, Evidence>()
-        // Bound source-picker latency. Unfinished checks remain unknown, never zero.
-        withTimeoutOrNull(15_000L) {
+        // Cache status is a single batched request. Never wait for per-torrent
+        // tracker/seeder lookups before showing sources.
+        withTimeoutOrNull(4_000L) {
             hashes.chunked(80).forEach { chunk ->
-                val response = request("checkcached", key, mapOf("hash" to chunk.joinToString(","), "format" to "object", "list_files" to "false"))
+                val missing = chunk.filter { hash ->
+                    results[hash]?.takeIf { System.currentTimeMillis() - it.at in 0..60_000L } == null
+                }
+                if (missing.isEmpty()) {
+                    chunk.forEach { hash -> results[hash]?.let { evidence[hash] = it } }
+                    return@forEach
+                }
+                val response = request("checkcached", key, mapOf("hash" to missing.joinToString(","), "format" to "object", "list_files" to "false"))
                 chunk.forEach { hash ->
                     val prior = results[hash]?.takeIf { System.currentTimeMillis() - it.at in 0..60_000L }
                     // Only a successful object response can establish a cache miss.
-                    val cached = TorBoxAvailabilityPolicy.cached(response, hash)
-                    evidence[hash] = Evidence(cached, prior?.seeds, System.currentTimeMillis())
+                    val cached = prior?.cached ?: TorBoxAvailabilityPolicy.cached(response, hash)
+                    val value = Evidence(cached, System.currentTimeMillis())
+                    evidence[hash] = value
+                    if (cached != null) results[hash] = value
                 }
             }
-            hashes.map { hash -> async {
-                permits.withPermit {
-                    val prior = results[hash]?.takeIf { System.currentTimeMillis() - it.at in 0..60_000L }
-                    val seeds = prior?.seeds ?: request("torrentinfo", key,
-                        mapOf("hash" to hash, "timeout" to "7", "use_cache_lookup" to "false"))?.let { TorBoxAvailabilityPolicy.seeds(it, hash) }
-                    val value = Evidence(evidence[hash]?.cached, seeds, System.currentTimeMillis())
-                    evidence[hash] = value
-                    if (value.cached != null || value.seeds != null) results[hash] = value
-                }
-            } }.awaitAll()
         }
         val enriched = streams.map { stream ->
             val hash = TorBoxAvailabilityPolicy.hash(stream) ?: return@map if (StreamSourceProviderResolver.requiresSeederMetadata(stream)) {
                 stream.copy(torBoxChecked = true, torBoxCached = null, torBoxSeeders = null)
             } else stream
             val value = evidence[hash]
-            stream.copy(torBoxChecked = true, torBoxCached = value?.cached, torBoxSeeders = value?.seeds)
-        }.filterNot(TorBoxAvailabilityPolicy::remove)
+            stream.copy(torBoxChecked = true, torBoxCached = value?.cached, torBoxSeeders = null)
+        }
         if (results.size > 2_000) results.clear()
         com.saab.tv.AppDiagnostics.torBoxEvent(context, "Enrichment Completed",
             "sources=${streams.size} hashes=${hashes.size} output=${enriched.size} checked=${enriched.count { it.torBoxChecked }} " +
                 "cached=${enriched.count { it.torBoxCached == true }} removed=${streams.size - enriched.size} " +
                 "unknownCache=${enriched.count { it.torBoxChecked && it.torBoxCached == null }} " +
-                "torBoxSeeders=${enriched.count { it.torBoxSeeders != null }} " +
+                "providerSeeders=${enriched.count { StreamParser.parse(it).seeds != null }} " +
                 "missingHash=${enriched.count { it.torBoxChecked && TorBoxAvailabilityPolicy.hash(it) == null }}")
         enriched
     }

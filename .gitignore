@@ -33,6 +33,7 @@ captures/
 # External native build
 .externalNativeBuild/
 .cxx/
+native/subtitle-sync/target/
 
 # macOS
 .DS_Store

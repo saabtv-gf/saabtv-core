@@ -22,6 +22,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.res.ResourcesCompat
 import com.saab.tv.R
 import com.saab.tv.data.player.PlaybackDiagnostics
+import com.saab.tv.data.subtitle.SubtitleAutoSync
+import com.saab.tv.data.cache.ThumbnailSourceSelector
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -135,6 +137,11 @@ class ExoPlayerBackend(
     private var progressJob: Job? = null
     private var audioSwitchRecoveryJob: Job? = null
     private var seekFeedbackJob: Job? = null
+    private var subtitleAutoSyncJob: Job? = null
+    private var autoSyncSubtitleId: String? = null
+    private var autoSyncMediaUrl: String? = null
+    private var subtitleDelayChangedManually = false
+    private var autoAppliedSubtitleDelay = false
     private var decoderStressJob: Job? = null
     private var assHandler: AssHandler? = null
     private val jitterRecoveryPolicy = VideoJitterRecoveryPolicy()
@@ -700,9 +707,7 @@ class ExoPlayerBackend(
                     source.fileName,
                     { resolvedMagnetUrl, localUrl ->
                         if (!released && currentSourceId == sourceId) {
-                            val resolvedOption = _sourceOptions.value.firstOrNull {
-                                it.url == resolvedMagnetUrl
-                            } ?: source
+                            val resolvedOption = _sourceOptions.value.firstOrNull { it.id == sourceId } ?: source
                             switchToSource(resolvedOption.id, resolvedOption.copy(url = localUrl))
                         }
                     },
@@ -786,10 +791,67 @@ class ExoPlayerBackend(
         applySubtitleTrack(trackId)
     }
 
+    private fun scheduleSubtitleAutoSync(id: String) {
+        if (id != autoSyncSubtitleId && autoAppliedSubtitleDelay) {
+            autoAppliedSubtitleDelay = false
+            subtitleDelayUs.set(0L)
+            _uiState.update { it.copy(subtitleDelayMs = 0L) }
+        }
+        val mediaUrl = autoSyncMediaUrl
+        val subtitle = externalSubtitleSources[id]
+        if (id == SUBTITLE_OFF_ID || subtitle == null || mediaUrl == null || subtitleDelayChangedManually) {
+            subtitleAutoSyncJob?.cancel()
+            autoSyncSubtitleId = null
+            return
+        }
+        if (autoSyncSubtitleId == id) return
+        subtitleAutoSyncJob?.cancel()
+        autoSyncSubtitleId = id
+        val token = loadToken
+        subtitleAutoSyncJob = scope.launch {
+            // Audio probing is secondary to playback and never delays the first frame.
+            repeat(30) {
+                if (released || token != loadToken || autoSyncSubtitleId != id) return@launch
+                if (_uiState.value.hasRenderedFirstFrame) return@repeat
+                delay(1_000L)
+            }
+            if (!_uiState.value.hasRenderedFirstFrame) return@launch
+            delay(6_000L)
+            if (_uiState.value.isBuffering || subtitleDelayChangedManually) return@launch
+            diagnostic("Subtitle Auto-Sync Started", "track=$id")
+            val result = try {
+                kotlinx.coroutines.withTimeoutOrNull(45_000L) {
+                    withContext(Dispatchers.IO) { SubtitleAutoSync.align(mediaUrl, subtitle.url) }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                diagnostic("Subtitle Auto-Sync Unavailable", error.javaClass.simpleName)
+                null
+            }
+            if (result == null) {
+                diagnostic("Subtitle Auto-Sync Skipped", "insufficient or low-confidence match")
+                return@launch
+            }
+            if (released || token != loadToken || autoSyncSubtitleId != id ||
+                _uiState.value.selectedSubtitleTrackId != id || subtitleDelayChangedManually
+            ) return@launch
+            subtitleDelayUs.set(result.offsetMs * 1_000L)
+            autoAppliedSubtitleDelay = true
+            _uiState.update { it.copy(subtitleDelayMs = result.offsetMs) }
+            diagnostic(
+                "Subtitle Auto-Sync Applied",
+                "offset=${result.offsetMs}ms improvement=${"%.2f".format(Locale.US, result.improvement)} " +
+                    "analyzed=${result.analyzedMs}ms"
+            )
+        }
+    }
+
     private fun applySubtitleTrack(trackId: String?) {
         if (released) return
         val player = exoPlayer ?: return
         val id = normalizeSubtitleSelectionId(trackId) ?: SUBTITLE_OFF_ID
+        scheduleSubtitleAutoSync(id)
         val builder = player.trackSelectionParameters.buildUpon()
         builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
 
@@ -863,10 +925,16 @@ class ExoPlayerBackend(
 
     override fun setSubtitleDelay(delayMs: Long) {
         if (released) return
+        subtitleDelayChangedManually = true
+        autoAppliedSubtitleDelay = false
+        subtitleAutoSyncJob?.cancel()
         val clamped = delayMs.coerceIn(MIN_SUBTITLE_DELAY_MS, MAX_SUBTITLE_DELAY_MS)
         subtitleDelayUs.set(clamped * 1000L)
         _uiState.update { it.copy(subtitleDelayMs = clamped) }
     }
+
+    override fun persistableSubtitleDelayMs(): Long =
+        if (autoAppliedSubtitleDelay) 0L else _uiState.value.subtitleDelayMs
 
     override fun setSubtitleTextColor(color: Int) {
         if (released) return
@@ -980,6 +1048,7 @@ class ExoPlayerBackend(
         assHandler = null
 
         scopeJob.cancel()
+        subtitleAutoSyncJob?.cancel()
         stopProgressLoop()
         audioSwitchRecoveryJob = null
         seekFeedbackJob = null
@@ -1043,6 +1112,21 @@ class ExoPlayerBackend(
         resetSourceRetryBudget: Boolean = true
     ) {
         val request = loadRequest ?: return
+
+        subtitleAutoSyncJob?.cancel()
+        val lightweightReference = ThumbnailSourceSelector.select(source.url, request.sources)?.source
+        autoSyncMediaUrl = (lightweightReference ?: source)
+            .takeIf { candidate ->
+                candidate.videoSize?.let { it <= 3_000_000_000L } == true ||
+                    (candidate.videoSize == null && (candidate.qualityHeight ?: Int.MAX_VALUE) <= 720)
+            }
+            ?.url
+        autoSyncSubtitleId = null
+        if (autoAppliedSubtitleDelay) {
+            autoAppliedSubtitleDelay = false
+            subtitleDelayUs.set(0L)
+            _uiState.update { it.copy(subtitleDelayMs = 0L) }
+        }
 
         if (resetSourceRetryBudget) {
             ioAutoRetrySourceId = source.id
@@ -1679,9 +1763,7 @@ class ExoPlayerBackend(
                 fallback.fileName,
                 { resolvedMagnetUrl, localUrl ->
                     if (released) return@invoke
-                    val resolvedOption = _sourceOptions.value.firstOrNull {
-                        it.url == resolvedMagnetUrl
-                    } ?: fallback
+                    val resolvedOption = _sourceOptions.value.firstOrNull { it.id == fallback.id } ?: fallback
                     currentSourceId = resolvedOption.id
                     prepareSource(
                         source = resolvedOption.copy(url = localUrl),

@@ -573,7 +573,7 @@ fun PlayerScreen(
                 selectedAudioTrackId = uiState.selectedAudioTrackId,
                 selectedSubtitleTrackId = uiState.selectedSubtitleTrackId,
                 subtitleSelectionWasManual = uiState.subtitleSelectionWasManual,
-                subtitleDelayMs = uiState.subtitleDelayMs
+                subtitleDelayMs = playbackController.persistableSubtitleDelayMs()
             )
         )
     }

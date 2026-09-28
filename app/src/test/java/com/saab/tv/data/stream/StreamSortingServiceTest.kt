@@ -11,18 +11,18 @@ import org.junit.Test
 class StreamSortingServiceTest {
     private val service = StreamSortingService()
 
-    @Test fun zeroSeederFilterUsesTorBoxWhenPresentAndProviderOtherwise() {
-        val torBoxZero = Stream(title = "Movie 1080p", infoHash = "torbox-zero", seeders = 9,
-            torBoxChecked = true, torBoxCached = false, torBoxSeeders = 0)
+    @Test fun zeroSeederFilterUsesProviderCountButKeepsConfirmedCachedStreams() {
+        val uncachedProviderPositive = Stream(title = "Movie 1080p", infoHash = "provider-positive-uncached", seeders = 9,
+            torBoxChecked = true, torBoxCached = false)
         val providerZero = Stream(title = "Movie 1080p", infoHash = "provider-zero", seeders = 0,
             torBoxChecked = true, torBoxCached = null, torBoxSeeders = null)
         val providerPositive = Stream(title = "Movie 1080p", infoHash = "provider-positive", seeders = 9,
             torBoxChecked = true, torBoxCached = null, torBoxSeeders = null)
         val cachedZero = Stream(title = "Movie 1080p", infoHash = "cached-zero", seeders = 0,
             torBoxChecked = true, torBoxCached = true, torBoxSeeders = 0)
-        val filtered = service.sortAndFilter(listOf(torBoxZero, providerZero, providerPositive, cachedZero),
+        val filtered = service.sortAndFilter(listOf(uncachedProviderPositive, providerZero, providerPositive, cachedZero),
             StreamQuality.entries.toSet(), emptyList(), emptyMap(), hideZeroSeeders = true)
-        assertFalse(torBoxZero in filtered)
+        assertTrue(uncachedProviderPositive in filtered)
         assertFalse(providerZero in filtered)
         assertTrue(providerPositive in filtered)
         assertTrue(cachedZero in filtered)

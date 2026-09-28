@@ -825,6 +825,8 @@ fun DetailsScreen(
                 val trackId = episodePlaybackId(streamId, episode)
                 val epStreamId = episodeStreamId(streamId, episode)
                 val epTitle = episodeDisplayTitle(episode)
+                com.saab.tv.AppDiagnostics.event("Episodes", "Details Selection",
+                    "season=${episode.season} episode=${episode.episode} nativeIdMatches=${epStreamId == trackId}")
                 pendingPlaybackId = trackId
                 pendingPlaybackType = type
                 pendingPlaybackTitle = epTitle

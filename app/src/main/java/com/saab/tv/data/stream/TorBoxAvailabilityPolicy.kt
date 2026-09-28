@@ -29,11 +29,4 @@ object TorBoxAvailabilityPolicy {
         if (!item.isJsonObject || item.asJsonObject.get("hash")?.asString?.lowercase() != expectedHash) null else true
     }.getOrNull()
 
-    fun seeds(response: JsonObject, expectedHash: String): Int? = runCatching {
-        if (response.get("success")?.asBoolean != true) return null
-        val data = response.get("data")?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
-        if (data.get("hash")?.asString?.lowercase() != expectedHash) return null
-        data.get("seeds")?.asInt?.takeIf { it >= 0 }
-    }.getOrNull()
-    fun remove(stream: Stream): Boolean = stream.torBoxCached == false && stream.torBoxSeeders == 0
 }

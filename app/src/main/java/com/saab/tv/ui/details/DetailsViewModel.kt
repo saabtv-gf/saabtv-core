@@ -844,9 +844,8 @@ class DetailsViewModel @Inject constructor(
                         preferredAudioLanguages = sourceLanguagePreferences
                     )
                 } else episodeStreams.filter { stream ->
-                    !com.saab.tv.data.stream.TorBoxAvailabilityPolicy.remove(stream) &&
-                        (profile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
-                            com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0)
+                    profile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
+                        com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0
                 }
 
                 // Selection and auto-play must use the same exact ranking shown

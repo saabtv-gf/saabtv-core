@@ -26,6 +26,13 @@ data class PlayerSourceOption(
     val subtitles: List<PlayerSubtitleSource> = emptyList()
 )
 
+/** A season pack may expose several episode files under one magnet URL. */
+internal fun sourceOptionId(url: String, fileIdx: Int, fileName: String): String = when {
+    fileIdx >= 0 -> "$url#file-index=$fileIdx"
+    fileName.isNotBlank() -> "$url#file-name=${fileName.trim()}"
+    else -> url
+}
+
 /** Preserve availability evidence when the player rebuilds its source-selection cards. */
 internal fun PlayerSourceOption.toStream(): Stream = Stream(
     name = name,
@@ -33,6 +40,7 @@ internal fun PlayerSourceOption.toStream(): Stream = Stream(
     description = description,
     url = url,
     infoHash = infoHash,
+    fileIdx = fileIdx.takeIf { it >= 0 },
     seeders = seeders,
     torBoxChecked = torBoxChecked,
     torBoxCached = torBoxCached,

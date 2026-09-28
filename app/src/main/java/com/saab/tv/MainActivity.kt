@@ -439,7 +439,7 @@ internal fun buildSourcePayload(
         val url = resolvePlayableSourceUrl(stream) ?: return@mapNotNull null
         val parsed = StreamParser.parse(stream)
         PlayerSourceOption(
-            id = url,
+            id = com.saab.tv.ui.player.base.sourceOptionId(url, stream.fileIdx ?: -1, stream.behaviorHints?.filename.orEmpty()),
             url = url,
             label = sourceDisplayLabel(contentTitle, stream),
             name = stream.name,
@@ -468,7 +468,15 @@ internal fun buildSourcePayload(
             }
         )
     }
-        .distinctBy { it.url }
+        .distinctBy { it.id }
+}
+
+internal fun findTorrentSwitchSource(
+    candidates: List<Stream>, magnetUrl: String, fileIdx: Int, fileName: String
+): Stream? = candidates.firstOrNull { candidate ->
+    resolvePlayableSourceUrl(candidate) == magnetUrl &&
+        (fileIdx < 0 || candidate.fileIdx == fileIdx) &&
+        (fileName.isBlank() || candidate.behaviorHints?.filename == fileName)
 }
 
 private fun canonicalSubtitleUrlForId(rawUrl: String): String {
@@ -1698,10 +1706,20 @@ class MainActivity : ComponentActivity() {
                                 movieId = selectedPlaybackId,
                                 mediaType = selectedPlaybackType,
                                 sources = playerSources,
-                                initialSourceId = playerState.currentStream?.let(::resolvePlayableSourceUrl),
+                                initialSourceId = playerState.currentStream?.let { current ->
+                                    resolvePlayableSourceUrl(current)?.let { url ->
+                                        com.saab.tv.ui.player.base.sourceOptionId(url, current.fileIdx ?: -1,
+                                            current.behaviorHints?.filename.orEmpty())
+                                    }
+                                },
                                 onActiveSourceChanged = { source ->
                                     val chosen = playerState.pendingSourceSelection?.candidateStreams
-                                        ?.firstOrNull { resolvePlayableSourceUrl(it) == source.id }
+                                        ?.firstOrNull { candidate ->
+                                            resolvePlayableSourceUrl(candidate)?.let { url ->
+                                                com.saab.tv.ui.player.base.sourceOptionId(url, candidate.fileIdx ?: -1,
+                                                    candidate.behaviorHints?.filename.orEmpty()) == source.id
+                                            } == true
+                                        }
                                     if (chosen != null) {
                                         playerState.currentStream = chosen
                                         playerState.pendingSourceSelection = playerState.pendingSourceSelection
@@ -1843,9 +1861,8 @@ class MainActivity : ComponentActivity() {
                                                     )
                                                 )
                                             } else episodeStreams.filter { stream ->
-                                                !com.saab.tv.data.stream.TorBoxAvailabilityPolicy.remove(stream) &&
-                                                    (currentProfile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
-                                                        com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0)
+                                                currentProfile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
+                                                    com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0
                                             }
                                             val streams = StreamScoreCalculator.sortDescending(
                                                 filteredStreams,
@@ -1988,6 +2005,8 @@ class MainActivity : ComponentActivity() {
                                         val epPlaybackId = episodePlaybackId(selectedMovieId, episode)
                                         val epStreamId = episodeStreamId(selectedMovieId, episode)
                                         val epTitle = episodeDisplayTitle(episode)
+                                        AppDiagnostics.event("Episodes", "Player Selection",
+                                            "season=${episode.season} episode=${episode.episode} nativeIdMatches=${epStreamId == epPlaybackId}")
                                         val switchRequestId = playerState.beginEpisodeSwitch()
 
                                         uiScope.launch {
@@ -2059,9 +2078,8 @@ class MainActivity : ComponentActivity() {
                                                     )
                                                 )
                                             } else episodeStreams.filter { stream ->
-                                                !com.saab.tv.data.stream.TorBoxAvailabilityPolicy.remove(stream) &&
-                                                    (currentProfile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
-                                                        com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0)
+                                                currentProfile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
+                                                    com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0
                                             }
                                             val streams = StreamScoreCalculator.sortDescending(
                                                 filteredStreams,
@@ -2221,13 +2239,18 @@ class MainActivity : ComponentActivity() {
                                     }
                                 } else null,
                                 episodeSwitchSources = playerState.pendingEpisodeSwitch?.let { pending ->
-                                    pending.streams?.let { buildSourcePayload(it, pending.playbackTitle).distinctBy { source -> source.url } }
+                                    pending.streams?.let { buildSourcePayload(it, pending.playbackTitle) }
                                 },
                                 isEpisodeSwitchLoading = playerState.isEpisodeSwitchLoading,
                                 episodeSwitchTitle = playerState.pendingEpisodeSwitch?.playbackTitle,
                                 onEpisodeSwitchSourceSelected = playerState.pendingEpisodeSwitch?.let { pending ->
-                                    { sourceUrl: String ->
-                                        val streamToPlay = pending.streams?.firstOrNull { resolvePlayableSourceUrl(it) == sourceUrl }
+                                    { sourceId: String ->
+                                        val streamToPlay = pending.streams?.firstOrNull { candidate ->
+                                            resolvePlayableSourceUrl(candidate)?.let { url ->
+                                                com.saab.tv.ui.player.base.sourceOptionId(url, candidate.fileIdx ?: -1,
+                                                    candidate.behaviorHints?.filename.orEmpty()) == sourceId
+                                            } == true
+                                        }
                                         if (streamToPlay == null) {
                                             playerState.pendingEpisodeSwitch = null
                                             return@let
@@ -2270,6 +2293,7 @@ class MainActivity : ComponentActivity() {
                                         playerState.currentStream = streamToPlay
                                         playerState.pendingEpisodeSwitch = null
 
+                                        val sourceUrl = resolvePlayableSourceUrl(streamToPlay) ?: return@let
                                         if (sourceUrl.startsWith("magnet:")) {
                                             selectedPlaybackId = pending.playbackId
                                             selectedPlaybackType = "series"
@@ -2324,9 +2348,9 @@ class MainActivity : ComponentActivity() {
                                 onMagnetSourceSelected = { magnetUrl, sourceFileIdx, sourceFileName, onReady, onError ->
                                     val rankedCandidates = playerState.pendingSourceSelection
                                         ?.candidateStreams.orEmpty()
-                                    val selectedCandidate = rankedCandidates.firstOrNull {
-                                        resolvePlayableSourceUrl(it) == magnetUrl
-                                    } ?: Stream(
+                                    val selectedCandidate = findTorrentSwitchSource(
+                                        rankedCandidates, magnetUrl, sourceFileIdx, sourceFileName
+                                    ) ?: Stream(
                                         url = magnetUrl,
                                         fileIdx = sourceFileIdx,
                                         behaviorHints = com.saab.tv.data.model.stremio.StreamBehaviorHints(

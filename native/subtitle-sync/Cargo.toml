@@ -1,0 +1,13 @@
+[package]
+name = "saab_subtitle_sync"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+alass-core = "=2.0.0"
+jni = "0.21"
+webrtc-vad = "=0.4.0"

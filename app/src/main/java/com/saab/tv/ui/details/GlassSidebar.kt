@@ -389,7 +389,9 @@ fun SourcesContent(
         if (selectedStreamId == null) 0
         else {
             val idx = filtered.indexOfFirst { s ->
-                (s.url ?: s.addonTransportUrl) == selectedStreamId
+                val url = s.url ?: s.addonTransportUrl.orEmpty()
+                com.saab.tv.ui.player.base.sourceOptionId(url, s.fileIdx ?: -1,
+                    s.behaviorHints?.filename.orEmpty()) == selectedStreamId
             }
             if (idx >= 0) idx else 0
         }

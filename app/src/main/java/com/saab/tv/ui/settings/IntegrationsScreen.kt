@@ -252,7 +252,7 @@ fun IntegrationsScreen(
         var showRemoteKeyPaste by remember { mutableStateOf(false) }
         val keyFocus = remember { FocusRequester() }
         com.saab.tv.ui.addons.VoidDialog(onDismissRequest = { showTorBox = false }, title = "TorBox Availability") {
-            Text("Enter your TorBox API key to verify cached torrents and recent tracker seeder counts. The key is stored encrypted and synced with your account. Failed checks remain unknown.")
+            Text("Enter your TorBox API key to check whether torrents are cached. Seeder counts come from source providers, so opening a title does not wait for tracker probes. The key is stored encrypted and synced with your account.")
             Spacer(Modifier.height(16.dp))
             com.saab.tv.ui.account.AccountCredentialField(key, { key = it; error = false }, "TorBox API Key",
                 keyFocus, true, password = true, visible = visible, onToggleVisibility = { visible = !visible }, isError = error)

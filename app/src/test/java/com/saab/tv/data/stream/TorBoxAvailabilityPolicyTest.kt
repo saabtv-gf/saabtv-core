@@ -22,20 +22,6 @@ class TorBoxAvailabilityPolicyTest {
     @Test fun magnetHashIsRead() { assertEquals(hash, TorBoxAvailabilityPolicy.hash(Stream(url = "magnet:?xt=urn:btih:$hash"))) }
     @Test fun addonDebridPathRetainsHash() { assertEquals(hash, TorBoxAvailabilityPolicy.hash(Stream(url = "https://torrentio.strem.fun/torbox/token/$hash/0/movie.mkv", addonTransportUrl = "https://torrentio.strem.fun"))) }
     @Test fun arbitraryCdnPathIsNotAssumedToBeTorrentHash() { assertNull(TorBoxAvailabilityPolicy.hash(Stream(url = "https://example.com/$hash"))) }
-    @Test fun onlyConfirmedUncachedZeroIsRemoved() {
-        assertTrue(TorBoxAvailabilityPolicy.remove(Stream(torBoxCached = false, torBoxSeeders = 0)))
-        assertFalse(TorBoxAvailabilityPolicy.remove(Stream(torBoxCached = true, torBoxSeeders = 0)))
-        assertFalse(TorBoxAvailabilityPolicy.remove(Stream(torBoxCached = null, torBoxSeeders = 0)))
-        assertFalse(TorBoxAvailabilityPolicy.remove(Stream(torBoxCached = false, torBoxSeeders = null)))
-    }
-    @Test fun trackerResponseMustMatchRequestedHash() {
-        val response = JsonParser.parseString("""{"success":true,"data":{"hash":"$hash","seeds":0}}""").asJsonObject
-        assertEquals(0, TorBoxAvailabilityPolicy.seeds(response, hash))
-        assertNull(TorBoxAvailabilityPolicy.seeds(response, "b".repeat(40)))
-    }
-    @Test fun failedResponseNeverMeansZero() {
-        assertNull(TorBoxAvailabilityPolicy.seeds(JsonParser.parseString("""{"success":false,"data":{"hash":"$hash","seeds":0}}""").asJsonObject, hash))
-    }
     @Test fun checkedUnknownFallsBackToProviderSeederCount() {
         val stream = Stream(title = "Movie 1080p 👤 900", seeders = 900, torBoxChecked = true)
         assertEquals(900, StreamParser.parse(stream).seeds)

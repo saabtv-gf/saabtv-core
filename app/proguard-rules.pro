@@ -54,6 +54,7 @@
 
 # ─── libmpv JNI bridge ───
 -keep class dev.jdtech.mpv.** { *; }
+-keep class com.saab.tv.data.subtitle.AlassBridge { *; }
 
 # ─── Retrofit ───
 # Keep generic signature and annotations for Retrofit + Gson

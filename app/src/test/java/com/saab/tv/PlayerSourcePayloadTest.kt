@@ -7,6 +7,25 @@ import org.junit.Test
 
 class PlayerSourcePayloadTest {
     @Test
+    fun seasonPackEpisodesWithSameMagnetKeepDistinctFileSelections() {
+        val magnet = "magnet:?xt=urn:btih:${"a".repeat(40)}"
+        val first = Stream(url = magnet, fileIdx = 0,
+            behaviorHints = StreamBehaviorHints(filename = "Show.S01E01.mkv"))
+        val second = Stream(url = magnet, fileIdx = 1,
+            behaviorHints = StreamBehaviorHints(filename = "Show.S01E02.mkv"))
+
+        val payload = buildSourcePayload(listOf(first, second), "Show")
+
+        assertEquals(2, payload.size)
+        assertEquals(listOf(0, 1), payload.map { it.fileIdx })
+        assertEquals(2, payload.map { it.id }.distinct().size)
+        assertEquals(second, findTorrentSwitchSource(listOf(first, second), magnet, 1,
+            "Show.S01E02.mkv"))
+        assertEquals(null, findTorrentSwitchSource(listOf(first, second), magnet, 2,
+            "Show.S01E03.mkv"))
+    }
+
+    @Test
     fun payloadPreservesRankOrderAndScoringMetadata() {
         val higherRanked = Stream(
             name = "[Torrentio] 4K",
