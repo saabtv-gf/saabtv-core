@@ -73,11 +73,62 @@ class ThumbnailSourceSelectorTest {
     @Test
     fun explicitlyCachedSourceDoesNotRequireLiveSeeders() {
         val playing = source("Movie 4K", "https://cdn.example/4k.mkv", 2160, 20, listOf("hevc"), 40)
-        val cached = source("Movie 720p Cached", "https://cdn.example/cached.mkv", 720, 2, listOf("h264"), 0)
+        val cached = source("Movie 720p Cached", "https://cdn.example/cached.mkv", 720, 2, listOf("h264"), 0,
+            torBoxChecked = true, torBoxCached = true)
 
         assertEquals(
             cached.url,
             ThumbnailSourceSelector.select(playing.url, listOf(playing, cached))?.source?.url
+        )
+    }
+
+    @Test
+    fun smallestTorBoxCached720WinsBefore1080AndUncached720() {
+        val playing = source("Movie 4K", "https://cdn.example/4k.mkv", 2160, 20, listOf("hevc"))
+        val cached720Large = source("Movie 720p", "https://cdn.example/720-large.mkv", 720, 3,
+            listOf("h264"), 0, true, true)
+        val cached720Small = source("Movie 720p", "https://cdn.example/720-small.mkv", 720, 2,
+            listOf("hevc"), 0, true, true)
+        val cached1080 = source("Movie 1080p", "https://cdn.example/1080.mkv", 1080, 1,
+            listOf("h264"), 0, true, true)
+        val uncached720 = source("Movie 720p", "https://cdn.example/720-uncached.mkv", 720, 1,
+            listOf("h264"), 100, true, false)
+
+        assertEquals(
+            cached720Small.url,
+            ThumbnailSourceSelector.select(playing.url, listOf(playing, cached720Large, cached720Small,
+                cached1080, uncached720))?.source?.url
+        )
+    }
+
+    @Test
+    fun smallestTorBoxCached1080WinsWhenThereIsNoCached720() {
+        val playing = source("Movie 4K", "https://cdn.example/4k.mkv", 2160, 20, listOf("hevc"))
+        val uncached720 = source("Movie 720p", "https://cdn.example/720.mkv", 720, 1,
+            listOf("h264"), 100, true, false)
+        val cached1080Large = source("Movie 1080p", "https://cdn.example/1080-large.mkv", 1080, 4,
+            listOf("h264"), 0, true, true)
+        val cached1080Small = source("Movie 1080p", "https://cdn.example/1080-small.mkv", 1080, 2,
+            listOf("hevc"), 0, true, true)
+
+        assertEquals(
+            cached1080Small.url,
+            ThumbnailSourceSelector.select(playing.url, listOf(playing, uncached720,
+                cached1080Large, cached1080Small))?.source?.url
+        )
+    }
+
+    @Test
+    fun providerCacheLabelWithoutTorBoxCheckIsNotVerified() {
+        val playing = source("Movie 4K", "https://cdn.example/4k.mkv", 2160, 20, listOf("hevc"))
+        val claimedCached = source("Movie 720p Cached", "https://cdn.example/claimed.mkv", 720, 1,
+            listOf("h264"), 0)
+        val healthy = source("Movie 720p", "https://cdn.example/healthy.mkv", 720, 2,
+            listOf("h264"), 20)
+
+        assertEquals(
+            healthy.url,
+            ThumbnailSourceSelector.select(playing.url, listOf(playing, claimedCached, healthy))?.source?.url
         )
     }
 
@@ -87,7 +138,9 @@ class ThumbnailSourceSelectorTest {
         height: Int,
         sizeGb: Long,
         formats: List<String>,
-        seeders: Int? = 100
+        seeders: Int? = 100,
+        torBoxChecked: Boolean = false,
+        torBoxCached: Boolean? = null
     ) = PlayerSourceOption(
         id = url,
         url = url,
@@ -95,6 +148,8 @@ class ThumbnailSourceSelectorTest {
         qualityHeight = height,
         videoSize = sizeGb * 1_073_741_824L,
         seeders = seeders,
+        torBoxChecked = torBoxChecked,
+        torBoxCached = torBoxCached,
         formats = formats
     )
 }

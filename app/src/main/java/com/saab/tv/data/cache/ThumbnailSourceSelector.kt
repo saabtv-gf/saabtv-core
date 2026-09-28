@@ -5,8 +5,8 @@ import com.saab.tv.ui.player.base.PlayerSourceOption
 /**
  * Chooses a lightweight secondary stream for seek-preview extraction. The selected
  * playback stream is never changed. A 320x180 preview gains no useful detail from
- * decoding a 4K remux, so AVC SDR sources with small files and modest resolution
- * are deliberately preferred.
+ * decoding a 4K remux. TorBox-confirmed cached 720p and then 1080p sources are
+ * preferred by smallest file size; otherwise use the availability-aware fallback.
  */
 object ThumbnailSourceSelector {
     data class Selection(
@@ -28,9 +28,14 @@ object ThumbnailSourceSelector {
             .distinctBy { it.url }
             .toList()
 
+        // Availability is enriched upstream only when a TorBox key is configured.
+        // Do not mistake provider labels or a TorBox URL for a verified cache hit.
+        val cached720 = candidates.filter { it.qualityHeight == 720 && it.isTorBoxCached() }
+        val cached1080 = candidates.filter { it.qualityHeight == 1080 && it.isTorBoxCached() }
+
         // A tiny file is useless if its torrent cannot supply the random ranges
         // required by the thumbnail decoder. Only compare size after candidates
-        // have passed an availability floor. Explicitly cached/instant sources are
+        // have passed an availability floor. TorBox-confirmed cached sources are
         // reliable without live seeders; otherwise require a known healthy swarm.
         val reliableCandidates = candidates.filter(::hasReliableAvailability)
         // Prefer cheap-to-decode AVC SDR at 720p or below, then choose the least
@@ -42,10 +47,12 @@ object ThumbnailSourceSelector {
         val lightweightCandidates = reliableCandidates.filter {
             (it.qualityHeight ?: Int.MAX_VALUE) <= 720 && !isHdr(it)
         }
-        val selected = fastDecodeCandidates
-            .ifEmpty { lightweightCandidates }
-            .ifEmpty { reliableCandidates }
-            .minWithOrNull(sourceComparator)
+        val selected = cached720.minWithOrNull(cachedSourceComparator)
+            ?: cached1080.minWithOrNull(cachedSourceComparator)
+            ?: fastDecodeCandidates
+                .ifEmpty { lightweightCandidates }
+                .ifEmpty { reliableCandidates }
+                .minWithOrNull(sourceComparator)
             ?: playback?.takeIf {
                 TorBoxStreamUrlPolicy.isRemoteHttpStream(it.url) && !isUnsafePreviewSource(it)
             }
@@ -58,6 +65,7 @@ object ThumbnailSourceSelector {
                 append(" range=${if (isHdr(selected)) "HDR" else "SDR"}")
                 append(" size=${selected.videoSize ?: -1}")
                 append(" seeders=${selected.seeders ?: -1}")
+                append(" torboxCached=${selected.isTorBoxCached()}")
                 append(" alternate=${selected.url != playbackUrl}")
             }
         )
@@ -71,23 +79,23 @@ object ThumbnailSourceSelector {
         { -(it.seeders ?: -1) }
     )
 
+    private val cachedSourceComparator = compareBy<PlayerSourceOption>(
+        { if (it.videoSize != null && it.videoSize > 0L) 0 else 1 },
+        { it.videoSize?.takeIf { size -> size > 0L } ?: Long.MAX_VALUE },
+        { codecPenalty(it) },
+        { if (isHdr(it)) 1 else 0 },
+        { -(it.seeders ?: -1) }
+    )
+
     private fun hasReliableAvailability(source: PlayerSourceOption): Boolean =
-        isExplicitlyCached(source) || (source.seeders ?: 0) >= MIN_RELIABLE_SEEDERS
+        source.isTorBoxCached() || (source.seeders ?: 0) >= MIN_RELIABLE_SEEDERS
 
-    private fun isExplicitlyCached(source: PlayerSourceOption): Boolean {
-        val text = source.searchableText.lowercase()
-        return "cached" in text && "uncached" !in text && "not cached" !in text ||
-            "instant" in text || "⚡" in text
-    }
+    private fun PlayerSourceOption.isTorBoxCached(): Boolean = torBoxChecked && torBoxCached == true
 
-    private fun cachedPenalty(source: PlayerSourceOption): Int {
-        val text = source.searchableText.lowercase()
-        return when {
-            "uncached" in text || "download required" in text -> 2
-            "cached" in text || "instant" in text || "⚡" in text ||
-                TorBoxStreamUrlPolicy.isTorBoxUrl(source.url) -> 0
-            else -> 1
-        }
+    private fun cachedPenalty(source: PlayerSourceOption): Int = when {
+        source.isTorBoxCached() -> 0
+        source.torBoxChecked && source.torBoxCached == false -> 2
+        else -> 1
     }
 
     private fun codecPenalty(source: PlayerSourceOption): Int {
