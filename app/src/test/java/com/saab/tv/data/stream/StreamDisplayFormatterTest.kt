@@ -70,6 +70,25 @@ class StreamDisplayFormatterTest {
     }
 
     @Test
+    fun sourceMetadataIsSplitIntoCompactWrapFriendlyTags() {
+        val stream = Stream(
+            name = "Torrentio",
+            title = "Example 2160p English Telugu DV HDR10+ 8.3 GB",
+            torBoxChecked = true,
+            torBoxCached = true,
+            torBoxSeeders = 73
+        )
+
+        val tags = StreamDisplayFormatter.tags(stream)
+        assertTrue(tags.contains(StreamDisplayTag(StreamTagKind.CACHE, "TorBox Cached")))
+        assertTrue(tags.contains(StreamDisplayTag(StreamTagKind.QUALITY, "4K")))
+        assertTrue(tags.contains(StreamDisplayTag(StreamTagKind.FORMAT, "DV")))
+        assertTrue(tags.contains(StreamDisplayTag(StreamTagKind.FORMAT, "HDR10+")))
+        assertTrue(tags.contains(StreamDisplayTag(StreamTagKind.SEEDERS, "73 TorBox")))
+        assertTrue(tags.any { it.kind == StreamTagKind.LANGUAGE && it.label.contains("Telugu") })
+    }
+
+    @Test
     fun displaysPreferredLanguagesFromCompactAddonMetadata() {
         val stream = Stream(
             description = "🌐 EN + TE + HI + TA + ML"

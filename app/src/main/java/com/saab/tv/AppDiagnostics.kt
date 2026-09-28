@@ -41,6 +41,17 @@ object AppDiagnostics {
         writer.execute { append(app, item) }
     }
 
+    /** Always-on, bounded TorBox state trail. Callers supply counts and booleans only—never keys, hashes or URLs. */
+    fun torBoxEvent(event: String, details: String) {
+        appContext?.let { torBoxEvent(it, event, details) }
+    }
+
+    fun torBoxEvent(context: Context, event: String, details: String) {
+        val item = PlaybackDiagnosticEvent(System.currentTimeMillis(), "INFO", "TorBox", event,
+            DiagnosticPrivacy.redact(details).take(800))
+        writer.execute { append(context.applicationContext, item) }
+    }
+
     /** A fatal event must reach disk before Android terminates the process. */
     fun failure(context: Context, component: String, event: String, failure: Throwable) {
         append(context.applicationContext, PlaybackDiagnosticEvent(System.currentTimeMillis(), "ERROR", component, event,

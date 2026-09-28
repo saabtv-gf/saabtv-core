@@ -789,11 +789,13 @@ class DetailsViewModel @Inject constructor(
                 val rawStreams: List<Stream>
                 val addonSubtitles: List<AddonSubtitle>
                 val prefetchKey = "$type:$id"
+                var streamOrigin = "fresh"
 
                 if (prefetchedStreamKey == prefetchKey) {
                     prefetchStreamsJob?.join()
                     val completedPrefetch = prefetchedStreams
                     if (completedPrefetch != null) {
+                        streamOrigin = "prefetch"
                         rawStreams = completedPrefetch
                         addonSubtitles = prefetchedSubtitles ?: emptyList()
                     } else {
@@ -809,8 +811,10 @@ class DetailsViewModel @Inject constructor(
                     addonSubtitles = subtitlesDeferred.await()
                 }
 
-                val episodeStreams = if (rawStreams.isEmpty() && !fallbackStreamId.isNullOrBlank() && fallbackStreamId != id)
-                    repository.getStreams(type, fallbackStreamId) else rawStreams
+                val episodeStreams = if (rawStreams.isEmpty() && !fallbackStreamId.isNullOrBlank() && fallbackStreamId != id) {
+                    streamOrigin = "fallback"
+                    repository.getStreams(type, fallbackStreamId)
+                } else rawStreams
 
                 // Read sorting preferences from the active profile
                 val activeProfileId = profileConfigurationManager.getLastActiveProfileId()
@@ -848,6 +852,8 @@ class DetailsViewModel @Inject constructor(
                 // Selection and auto-play must use the same exact ranking shown
                 // on source cards, independent of legacy primary-sort settings.
                 val streams = StreamScoreCalculator.sortDescending(filteredStreams, sourceLanguagePreferences)
+                com.saab.tv.AppDiagnostics.torBoxEvent("Details Source Picker",
+                    "origin=$streamOrigin ${com.saab.tv.data.stream.TorBoxDiagnosticSummary.sources(streams)}")
 
                 val preferredStream = if (forceSourcePicker || !rememberSourceSelection) {
                     null

@@ -1,7 +1,7 @@
 # Phone Companion
 
-Static HTTPS interface for sign-in, signup, links, search, profile photos and
-home-screen artwork. Hosted at `https://saabtv-gf.github.io/saabtv-core/`.
+Static HTTPS interface for sign-in, signup, links, search, TorBox API-key entry,
+profile photos and home-screen artwork. Hosted at `https://saabtv-gf.github.io/saabtv-core/`.
 Open a phone tool on the TV and scan its QR. Without a valid pairing link, entry
 and submission remain disabled. Both devices need internet, not the same Wi-Fi.
 No local HTTP/TLS server, certificate exception, analytics or browser storage.
@@ -9,6 +9,8 @@ No local HTTP/TLS server, certificate exception, analytics or browser storage.
 ## Protocol and deployment
 
 - GitHub Pages hosts only HTML, CSS and JavaScript. Neon Data API relays ciphertext.
+- TorBox key entry uses the existing encrypted paste pairing; the TV validates and
+  saves the key only when the user selects Save in Integrations.
 - AES-256-GCM with fresh 96-bit IVs and session/direction/message-ID authenticated
   data. Fresh key and separate 256-bit read/write capabilities per pairing.
 - QR fragments carry only the phone write capability, session ID and encryption

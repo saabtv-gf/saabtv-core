@@ -433,6 +433,8 @@ internal fun buildSourcePayload(
     streams: List<Stream>,
     contentTitle: String
 ): List<PlayerSourceOption> {
+    AppDiagnostics.torBoxEvent("Player Source Picker",
+        com.saab.tv.data.stream.TorBoxDiagnosticSummary.sources(streams))
     return streams.mapNotNull { stream ->
         val url = resolvePlayableSourceUrl(stream) ?: return@mapNotNull null
         val parsed = StreamParser.parse(stream)
@@ -455,6 +457,9 @@ internal fun buildSourcePayload(
                 StreamQuality.UNKNOWN -> null
             },
             seeders = parsed.seeds,
+            torBoxChecked = stream.torBoxChecked,
+            torBoxCached = stream.torBoxCached,
+            torBoxSeeders = stream.torBoxSeeders,
             formats = parsed.formats.sorted(),
             fileIdx = stream.fileIdx ?: -1,
             fileName = stream.behaviorHints?.filename ?: "",
@@ -2216,22 +2221,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 } else null,
                                 episodeSwitchSources = playerState.pendingEpisodeSwitch?.let { pending ->
-                                    pending.streams?.mapNotNull { stream ->
-                                        val url = resolvePlayableSourceUrl(stream) ?: return@mapNotNull null
-                                        PlayerSourceOption(
-                                            id = url,
-                                            url = url,
-                                            label = sourceDisplayLabel(pending.playbackTitle, stream),
-                                            name = stream.name,
-                                            title = stream.title,
-                                            description = stream.description,
-                                            addonTransportUrl = stream.addonTransportUrl,
-                                            infoHash = stream.infoHash,
-                                            videoSize = stream.behaviorHints?.videoSize,
-                                            fileIdx = stream.fileIdx ?: -1,
-                                            fileName = stream.behaviorHints?.filename ?: ""
-                                        )
-                                    }?.distinctBy { it.url }
+                                    pending.streams?.let { buildSourcePayload(it, pending.playbackTitle).distinctBy { source -> source.url } }
                                 },
                                 isEpisodeSwitchLoading = playerState.isEpisodeSwitchLoading,
                                 episodeSwitchTitle = playerState.pendingEpisodeSwitch?.playbackTitle,

@@ -12,6 +12,14 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,6 +43,8 @@ import com.saab.tv.ui.home.DpadRepeatGate
 import com.saab.tv.data.model.stremio.MetaVideo
 import com.saab.tv.data.model.stremio.Stream
 import com.saab.tv.data.stream.StreamDisplayFormatter
+import com.saab.tv.data.stream.StreamDisplayTag
+import com.saab.tv.data.stream.StreamTagKind
 import com.saab.tv.data.stream.StreamScoreCalculator
 import com.saab.tv.data.stream.StreamLanguageSelector
 import com.saab.tv.data.tmdb.TmdbEpisodeEnrichment
@@ -938,6 +948,7 @@ private fun WatchedToggleButton(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RawSourceItem(
     contentTitle: String,
@@ -950,6 +961,7 @@ fun RawSourceItem(
     var isFocused by remember { mutableStateOf(false) }
     val primary = MaterialTheme.colorScheme.primary
     val display = remember(contentTitle, stream) { StreamDisplayFormatter.format(contentTitle, stream) }
+    val tags = remember(stream) { StreamDisplayFormatter.tags(stream) }
     val scorePercent = remember(stream, sourceLanguagePreferences) {
         StreamScoreCalculator.scoreLabel(stream, sourceLanguagePreferences)
     }
@@ -960,7 +972,7 @@ fun RawSourceItem(
             .border(if (isFocused) 3.dp else 0.dp, if (isFocused) primary else Color.Transparent, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     display.title,
@@ -991,14 +1003,47 @@ fun RawSourceItem(
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 )
             }
-            Text(
-                display.details,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isFocused) primary else Color.Gray,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 4.dp)
-            )
+            if (tags.isNotEmpty()) {
+                Spacer(Modifier.height(7.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    tags.forEach { tag -> SourceMetaTag(tag, isFocused) }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun SourceMetaTag(tag: StreamDisplayTag, focused: Boolean) {
+    val accent = when {
+        tag.kind == StreamTagKind.CACHE && tag.label == "TorBox Cached" -> Color(0xFF68D9A0)
+        tag.kind == StreamTagKind.CACHE && tag.label == "TorBox Uncached" -> Color(0xFFFFB86B)
+        tag.kind == StreamTagKind.CACHE && tag.label == "TorBox Not Checked" -> Color(0xFFFFCD75)
+        else -> if (focused) Color.White else Color.White.copy(alpha = 0.82f)
+    }
+    val icon = when (tag.kind) {
+        StreamTagKind.PROVIDER -> Icons.Default.Extension
+        StreamTagKind.CACHE -> when (tag.label) {
+            "TorBox Cached" -> Icons.Default.CloudDone
+            "TorBox Uncached" -> Icons.Default.CloudOff
+            else -> Icons.Default.HelpOutline
+        }
+        StreamTagKind.LANGUAGE -> Icons.Default.Language
+        StreamTagKind.QUALITY -> Icons.Default.HighQuality
+        StreamTagKind.SIZE -> Icons.Default.Storage
+        StreamTagKind.SEEDERS -> Icons.Default.People
+        StreamTagKind.FORMAT -> null
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier.clip(RoundedCornerShape(5.dp))
+            .background(accent.copy(alpha = if (focused) 0.20f else 0.12f))
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+    ) {
+        if (icon != null) Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(13.dp))
+        Text(tag.label, style = MaterialTheme.typography.labelSmall, color = accent, maxLines = 1,
+            softWrap = false)
     }
 }

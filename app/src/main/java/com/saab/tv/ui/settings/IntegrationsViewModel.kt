@@ -70,6 +70,10 @@ class IntegrationsViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(torBoxConfigured = false)
     }
 
+    fun refreshTorBoxStatus() {
+        _uiState.value = _uiState.value.copy(torBoxConfigured = torBox.configured())
+    }
+
     private val _uiState = MutableStateFlow(IntegrationsUiState())
     val uiState: StateFlow<IntegrationsUiState> = _uiState.asStateFlow()
 

@@ -4,8 +4,12 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 const source = (await readFile(new URL('../app.js', import.meta.url), 'utf8')).replace(/^import .*\n/, '');
-for (const mode of ['signin', 'signup', 'paste', 'search', 'avatar', 'hub']) {
-  test(`QR ${mode} displays only its own inputs and no tool tabs`, async () => {
+for (const scenario of [
+  ...['signin', 'signup', 'paste', 'search', 'avatar', 'hub'].map(mode => ({ mode })),
+  { mode: 'paste', inputKind: 'secret' }
+]) {
+  const { mode, inputKind } = scenario;
+  test(`QR ${mode}${inputKind ? ` ${inputKind}` : ''} displays only its own inputs and no tool tabs`, async () => {
     const nodes = new Map();
     class Element {
       constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.attributes = {}; }
@@ -34,7 +38,7 @@ for (const mode of ['signin', 'signup', 'paste', 'search', 'avatar', 'hub']) {
       setTimeout() { return 1; }, clearTimeout() {},
       decode: () => new Uint8Array(32), crypto: { subtle: { async importKey() { return {}; } } },
       AUTH: 'test-auth', DATA: 'test-data', async fetchJson() { return { token: 'fake' }; },
-      Relay: class { expires = Date.now() + 300000; async manifest() { return { version: 1, mode, items: [{id:'one', title:'Artwork'}] }; } }
+      Relay: class { expires = Date.now() + 300000; async manifest() { return { version: 1, mode, inputKind, items: [{id:'one', title:'Artwork'}] }; } }
     };
     vm.runInNewContext(source, context);
     await new Promise(resolve => setImmediate(resolve));
@@ -47,5 +51,10 @@ for (const mode of ['signin', 'signup', 'paste', 'search', 'avatar', 'hub']) {
     const expected = mode === 'signin' ? ['username','password'] : mode === 'signup' ? ['username','password','confirm'] : ['paste','search'].includes(mode) ? ['value'] : mode === 'avatar' ? ['image','zoom','cropx','cropy'] : ['item','image','zoom','cropx','cropy'];
     assert.deepEqual(ids, expected);
     if (mode === 'signup') assert.equal(nodes.get('#username').placeholder, 'Username');
+    if (inputKind === 'secret') {
+      assert.equal(nodes.get('#value').type, 'password');
+      assert.equal(nodes.get('#value').maxLength, 256);
+      assert.equal(nodes.get('#title').textContent, 'Send TorBox API Key');
+    }
   });
 }

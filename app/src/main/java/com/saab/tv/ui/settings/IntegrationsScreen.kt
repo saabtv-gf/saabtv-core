@@ -75,6 +75,8 @@ fun IntegrationsScreen(
     var showDisconnectConfirm by remember { mutableStateOf(false) }
     var showTorBox by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) { viewModel.refreshTorBoxStatus() }
+
     // Handle events
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -247,6 +249,7 @@ fun IntegrationsScreen(
         var key by remember { mutableStateOf("") }
         var visible by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf(false) }
+        var showRemoteKeyPaste by remember { mutableStateOf(false) }
         val keyFocus = remember { FocusRequester() }
         com.saab.tv.ui.addons.VoidDialog(onDismissRequest = { showTorBox = false }, title = "TorBox Availability") {
             Text("Enter your TorBox API key to verify cached torrents and recent tracker seeder counts. The key is stored encrypted and synced with your account. Failed checks remain unknown.")
@@ -254,6 +257,9 @@ fun IntegrationsScreen(
             com.saab.tv.ui.account.AccountCredentialField(key, { key = it; error = false }, "TorBox API Key",
                 keyFocus, true, password = true, visible = visible, onToggleVisibility = { visible = !visible }, isError = error)
             Spacer(Modifier.height(16.dp))
+            com.saab.tv.ui.components.SetupButton("Paste Key From Phone", { showRemoteKeyPaste = true },
+                modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
             com.saab.tv.ui.components.SetupButton("Save", {
                 if (viewModel.saveTorBoxKey(key.trim())) showTorBox = false else error = true
             }, enabled = key.isNotBlank(), primary = true, modifier = Modifier.fillMaxWidth())
@@ -261,6 +267,15 @@ fun IntegrationsScreen(
                 viewModel.clearTorBoxKey(); showTorBox = false
             }, modifier = Modifier.fillMaxWidth())
             com.saab.tv.ui.components.SetupButton("Cancel", { showTorBox = false }, modifier = Modifier.fillMaxWidth())
+        }
+        if (showRemoteKeyPaste) {
+            com.saab.tv.ui.addons.RemotePasteDialog(
+                onDismissRequest = { showRemoteKeyPaste = false },
+                onUrlReceived = { received -> key = received; error = false; showRemoteKeyPaste = false },
+                mode = com.saab.tv.remote_input.RemoteInputMode.SECRET,
+                title = "Paste TorBox API Key",
+                description = "Scan With Your Phone To Enter The Key Securely"
+            )
         }
         LaunchedEffect(Unit) { withFrameNanos { }; keyFocus.requestFocus() }
     }

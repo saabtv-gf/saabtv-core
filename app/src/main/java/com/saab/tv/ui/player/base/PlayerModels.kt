@@ -1,6 +1,8 @@
 package com.saab.tv.ui.player.base
 
 import androidx.compose.runtime.Immutable
+import com.saab.tv.data.model.stremio.Stream
+import com.saab.tv.data.model.stremio.StreamBehaviorHints
 
 @Immutable
 data class PlayerSourceOption(
@@ -15,10 +17,28 @@ data class PlayerSourceOption(
     val videoSize: Long? = null,
     val qualityHeight: Int? = null,
     val seeders: Int? = null,
+    val torBoxChecked: Boolean = false,
+    val torBoxCached: Boolean? = null,
+    val torBoxSeeders: Int? = null,
     val formats: List<String> = emptyList(),
     val fileIdx: Int = -1,
     val fileName: String = "",
     val subtitles: List<PlayerSubtitleSource> = emptyList()
+)
+
+/** Preserve availability evidence when the player rebuilds its source-selection cards. */
+internal fun PlayerSourceOption.toStream(): Stream = Stream(
+    name = name,
+    title = title ?: label,
+    description = description,
+    url = url,
+    infoHash = infoHash,
+    seeders = seeders,
+    torBoxChecked = torBoxChecked,
+    torBoxCached = torBoxCached,
+    torBoxSeeders = torBoxSeeders,
+    behaviorHints = StreamBehaviorHints(filename = fileName, videoSize = videoSize),
+    addonTransportUrl = addonTransportUrl
 )
 
 @Immutable

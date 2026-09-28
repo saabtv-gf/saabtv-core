@@ -1,6 +1,7 @@
 package com.saab.tv.remote_input
 
 import android.net.Uri
+import com.google.gson.JsonObject
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -25,10 +26,19 @@ class ServerManager {
     ): ServerInfo? {
         stopServer()
         val tool = if (mode == RemoteInputMode.SEARCH) "search" else "paste"
-        val pairing = CloudPairingSession(tool) { message ->
+        val manifest = JsonObject().apply {
+            if (mode == RemoteInputMode.SECRET) addProperty("inputKind", "secret")
+        }
+        val pairing = CloudPairingSession(tool, manifest) { message ->
             val value = message.get("value").asString.trim()
-            require(value.isNotEmpty() && value.length <= if (tool == "search") 200 else 2048)
-            if (tool == "paste") require(Uri.parse(value).scheme?.lowercase() in listOf("http", "https"))
+            val maxLength = when (mode) {
+                RemoteInputMode.URL -> 2048
+                RemoteInputMode.SEARCH -> 200
+                RemoteInputMode.SECRET -> 256
+            }
+            require(value.isNotEmpty() && value.length <= maxLength)
+            if (mode == RemoteInputMode.URL) require(Uri.parse(value).scheme?.lowercase() in listOf("http", "https"))
+            if (mode == RemoteInputMode.SECRET) require(value.none(Char::isWhitespace))
             onInputReceived(value)
         }
         session = pairing

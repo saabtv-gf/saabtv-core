@@ -9,6 +9,9 @@ data class StreamDisplayText(
     val details: String
 )
 
+enum class StreamTagKind { PROVIDER, CACHE, LANGUAGE, QUALITY, FORMAT, SIZE, SEEDERS }
+data class StreamDisplayTag(val kind: StreamTagKind, val label: String)
+
 object StreamDisplayFormatter {
     private const val BYTES_PER_GB = 1_073_741_824.0
     private const val BYTES_PER_MB = 1_048_576.0
@@ -45,6 +48,31 @@ object StreamDisplayFormatter {
             } else Unit
         }.joinToString(" • ")
         return StreamDisplayText(title = title, details = details)
+    }
+
+    /** Compact, individually wrapping metadata for TV source cards. */
+    fun tags(stream: Stream): List<StreamDisplayTag> {
+        val parsed = StreamParser.parse(stream)
+        return buildList {
+            StreamSourceProviderResolver.detect(stream)?.label?.let { add(StreamDisplayTag(StreamTagKind.PROVIDER, it)) }
+            when {
+                stream.torBoxChecked -> add(StreamDisplayTag(StreamTagKind.CACHE, when (stream.torBoxCached) {
+                    true -> "TorBox Cached"
+                    false -> "TorBox Uncached"
+                    null -> "TorBox Unknown"
+                }))
+                StreamSourceProviderResolver.requiresSeederMetadata(stream) ->
+                    add(StreamDisplayTag(StreamTagKind.CACHE, "TorBox Not Checked"))
+            }
+            qualityLabel(parsed.quality)?.let { add(StreamDisplayTag(StreamTagKind.QUALITY, it)) }
+            addAll(dynamicRangeLabels(parsed.formats).map { StreamDisplayTag(StreamTagKind.FORMAT, it) })
+            parsed.sizeBytes?.let(::formatSize)?.let { add(StreamDisplayTag(StreamTagKind.SIZE, it)) }
+            parsed.seeds?.let { add(StreamDisplayTag(StreamTagKind.SEEDERS,
+                "$it ${if (stream.torBoxSeeders != null) "TorBox" else "Provider"}")) }
+            val languages = languageSummary(stream)
+            if (languages != "Language Not Specified") add(StreamDisplayTag(StreamTagKind.LANGUAGE,
+                languages.replace(" Other Languages", " more").replace(" Other Language", " more")))
+        }
     }
 
     fun languageSummary(stream: Stream): String {

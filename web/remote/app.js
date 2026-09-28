@@ -44,8 +44,9 @@ function field(labelText, type, id, help) {
 }
 function showMode(mode) {
   if (!Object.hasOwn(modes, mode)) return;
-  document.querySelector('#title').textContent = modes[mode][0];
-  document.querySelector('#description').textContent = modes[mode][1];
+  const secretPaste = mode === 'paste' && manifest?.inputKind === 'secret';
+  document.querySelector('#title').textContent = secretPaste ? 'Send TorBox API Key' : modes[mode][0];
+  document.querySelector('#description').textContent = secretPaste ? 'Enter your key here, then save it in Integrations on your TV.' : modes[mode][1];
   document.querySelectorAll('[data-mode]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
     button.disabled = !!relay && button.dataset.mode !== manifest.mode;
@@ -77,8 +78,9 @@ function showMode(mode) {
       });
     }
   } else if (mode === 'paste' || mode === 'search') {
-    fields.append(field(mode === 'paste' ? 'Link' : 'Movie Or Series', mode === 'paste' ? 'url' : 'search', 'value'));
-    document.querySelector('#value').maxLength = mode === 'paste' ? 2048 : 200;
+    fields.append(field(secretPaste ? 'TorBox API Key' : mode === 'paste' ? 'Link' : 'Movie Or Series',
+      secretPaste ? 'password' : mode === 'paste' ? 'url' : 'search', 'value'));
+    document.querySelector('#value').maxLength = secretPaste ? 256 : mode === 'paste' ? 2048 : 200;
   } else {
     if (mode === 'hub' && relay) {
       const label = document.createElement('label'); label.htmlFor = 'item'; label.textContent = 'Artwork Item';
@@ -140,13 +142,14 @@ async function send(message) {
     await activeRelay.send(message);
     if (activeGeneration !== generation) return;
     form.reset();
-    status('Received By Your TV', ['signin','signup'].includes(mode) ? 'Confirm on your TV to continue. Your password has been cleared from this form.' : 'Your TV has confirmed receipt.');
+    status('Received By Your TV', ['signin','signup'].includes(mode) ? 'Confirm on your TV to continue. Your password has been cleared from this form.' :
+      mode === 'paste' && manifest.inputKind === 'secret' ? 'Save the key in Integrations on your TV. This form has been cleared.' : 'Your TV has confirmed receipt.');
     if (mode === 'hub') { showMode('hub'); }
     else { relay = undefined; fields.replaceChildren(); submit.textContent = 'Received By TV'; }
   } catch (error) {
     if (activeGeneration !== generation) return;
     // Clear credentials after any attempt, even if delivery acknowledgement failed.
-    if (['signin','signup'].includes(mode)) form.reset();
+    if (['signin','signup'].includes(mode) || (mode === 'paste' && manifest.inputKind === 'secret')) form.reset();
     status('Could Not Confirm Delivery', error.message);
     fields.querySelectorAll('input,button,select').forEach(input => input.disabled = false);
     submit.disabled = false;
@@ -170,8 +173,10 @@ form.addEventListener('submit', async event => {
       Object.assign(message, { username, password });
     } else if (mode === 'paste' || mode === 'search') {
       message.value = document.querySelector('#value').value.trim();
-      if (!message.value || message.value.length > (mode === 'search' ? 200 : 2048)) throw new Error('Enter valid text.');
-      if (mode === 'paste' && !['http:', 'https:'].includes(new URL(message.value).protocol)) throw new Error('Use an HTTP or HTTPS link.');
+      const secretPaste = mode === 'paste' && manifest.inputKind === 'secret';
+      if (!message.value || message.value.length > (secretPaste ? 256 : mode === 'search' ? 200 : 2048)) throw new Error('Enter valid text.');
+      if (secretPaste && /\s/.test(message.value)) throw new Error('The API key must not contain spaces.');
+      if (mode === 'paste' && !secretPaste && !['http:', 'https:'].includes(new URL(message.value).protocol)) throw new Error('Use an HTTP or HTTPS link.');
     } else {
       if (!image) throw new Error('Choose an image first.');
       const blob = await new Promise(resolve => cropCanvas.toBlob(resolve, 'image/jpeg', .9));

@@ -5,6 +5,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.saab.tv.data.model.stremio.Stream
 import com.saab.tv.data.security.SecurePreferences
+import com.saab.tv.data.account.AccountStorage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
@@ -23,14 +24,30 @@ import kotlin.coroutines.resume
 class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private val context: Context) {
     // Separate key in an existing cloud-synced encrypted store preserves snapshot compatibility.
     private fun store() = SecurePreferences.create(context, "tmdb_credentials", "saabtv_tmdb_master_key")
-    fun configured() = !store().preferences.getString("torbox_api_key", null).isNullOrBlank()
+    fun configured(): Boolean {
+        val secure = store()
+        val present = !secure.preferences.getString("torbox_api_key", null).isNullOrBlank()
+        com.saab.tv.AppDiagnostics.torBoxEvent(context, "Integration Key Probe",
+            "present=$present persistent=${secure.isPersistent} accountBound=${AccountStorage.userId(context) != null}")
+        return present
+    }
     fun save(key: String): Boolean {
         val secure = store()
-        if (!secure.isPersistent || key.isBlank() || key.any { it.isWhitespace() }) return false
+        if (!secure.isPersistent || key.isBlank() || key.any { it.isWhitespace() }) {
+            com.saab.tv.AppDiagnostics.torBoxEvent(context, "Key Save Rejected",
+                "persistent=${secure.isPersistent} blank=${key.isBlank()} whitespace=${key.any { it.isWhitespace() }}")
+            return false
+        }
         results.clear()
-        return secure.preferences.edit().putString("torbox_api_key", key.trim()).commit()
+        val saved = secure.preferences.edit().putString("torbox_api_key", key.trim()).commit()
+        com.saab.tv.AppDiagnostics.torBoxEvent(context, "Key Save Result", "saved=$saved")
+        return saved
     }
-    fun clear() { store().preferences.edit().remove("torbox_api_key").commit(); results.clear() }
+    fun clear() {
+        val cleared = store().preferences.edit().remove("torbox_api_key").commit()
+        results.clear()
+        com.saab.tv.AppDiagnostics.torBoxEvent(context, "Key Clear Result", "cleared=$cleared")
+    }
     private val client = OkHttpClient.Builder().callTimeout(9, TimeUnit.SECONDS)
         .connectTimeout(3, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS).build()
     private data class Evidence(val cached: Boolean?, val seeds: Int?, val at: Long)
@@ -60,13 +77,23 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
     }
 
     suspend fun enrich(streams: List<Stream>): List<Stream> = coroutineScope {
-        val key = store().preferences.getString("torbox_api_key", null)?.takeIf { it.isNotBlank() }
-            ?: return@coroutineScope streams
+        val secure = store()
+        val key = secure.preferences.getString("torbox_api_key", null)?.takeIf { it.isNotBlank() }
+        com.saab.tv.AppDiagnostics.torBoxEvent(context, "Source Key Probe",
+            "present=${key != null} persistent=${secure.isPersistent} accountBound=${AccountStorage.userId(context) != null} sources=${streams.size}")
+        if (key == null) {
+            com.saab.tv.AppDiagnostics.torBoxEvent(context, "Enrichment Skipped", "reason=key_unavailable sources=${streams.size}")
+            return@coroutineScope streams
+        }
         val hashes = streams.mapNotNull(TorBoxAvailabilityPolicy::hash).distinct()
+        com.saab.tv.AppDiagnostics.torBoxEvent(context, "Enrichment Started", "sources=${streams.size} usableHashes=${hashes.size}")
         if (hashes.isEmpty()) return@coroutineScope streams.map { stream ->
             if (StreamSourceProviderResolver.requiresSeederMetadata(stream))
                 stream.copy(torBoxChecked = true, torBoxCached = null, torBoxSeeders = null)
             else stream
+        }.also { output ->
+            com.saab.tv.AppDiagnostics.torBoxEvent(context, "Enrichment Completed",
+                "sources=${output.size} checked=${output.count { it.torBoxChecked }} missingHash=${output.count { it.torBoxChecked && TorBoxAvailabilityPolicy.hash(it) == null }}")
         }
         val evidence = ConcurrentHashMap<String, Evidence>()
         // Bound source-picker latency. Unfinished checks remain unknown, never zero.
@@ -99,8 +126,12 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
             stream.copy(torBoxChecked = true, torBoxCached = value?.cached, torBoxSeeders = value?.seeds)
         }.filterNot(TorBoxAvailabilityPolicy::remove)
         if (results.size > 2_000) results.clear()
-        com.saab.tv.AppDiagnostics.event(context, "TorBox", "Availability Checks",
-            "sources=${streams.size} hashes=${hashes.size} cached=${enriched.count { it.torBoxCached == true }} removed=${streams.size - enriched.size} unknown=${enriched.count { it.torBoxChecked && it.torBoxCached == null }}")
+        com.saab.tv.AppDiagnostics.torBoxEvent(context, "Enrichment Completed",
+            "sources=${streams.size} hashes=${hashes.size} output=${enriched.size} checked=${enriched.count { it.torBoxChecked }} " +
+                "cached=${enriched.count { it.torBoxCached == true }} removed=${streams.size - enriched.size} " +
+                "unknownCache=${enriched.count { it.torBoxChecked && it.torBoxCached == null }} " +
+                "torBoxSeeders=${enriched.count { it.torBoxSeeders != null }} " +
+                "missingHash=${enriched.count { it.torBoxChecked && TorBoxAvailabilityPolicy.hash(it) == null }}")
         enriched
     }
 }

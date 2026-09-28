@@ -1,3 +1,3 @@
 package com.saab.tv.remote_input
 
-enum class RemoteInputMode { URL, SEARCH }
+enum class RemoteInputMode { URL, SEARCH, SECRET }

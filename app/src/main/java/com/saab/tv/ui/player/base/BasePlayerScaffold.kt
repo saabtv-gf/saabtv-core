@@ -111,8 +111,6 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.saab.tv.data.model.stremio.MetaVideo
 import com.saab.tv.domain.episodeMatchesPlaybackId
-import com.saab.tv.data.model.stremio.Stream
-import com.saab.tv.data.model.stremio.StreamBehaviorHints
 import com.saab.tv.data.torrent.TorrentProgress
 import com.saab.tv.ui.details.GlassSidebar
 import com.saab.tv.ui.details.GlassSidebarScaffold
@@ -3293,22 +3291,7 @@ private fun BoxScope.PlayerSourceSidebar(
     onLanguageSelectSource: (String) -> Unit,
     onSelectSource: (String) -> Unit
 ) {
-    val sourceStreams = remember(sources) {
-        sources.map { source ->
-            Stream(
-                name = source.name,
-                title = source.title ?: source.label,
-                description = source.description,
-                url = source.url,
-                infoHash = source.infoHash,
-                behaviorHints = StreamBehaviorHints(
-                    filename = source.fileName,
-                    videoSize = source.videoSize
-                ),
-                addonTransportUrl = source.addonTransportUrl
-            )
-        }
-    }
+    val sourceStreams = remember(sources) { sources.map(PlayerSourceOption::toStream) }
 
     val sidebarState = if (visible) {
         SidebarState.Sources(
@@ -3369,22 +3352,7 @@ private fun BoxScope.EpisodeSwitchSourceSidebar(
     onClose: () -> Unit,
     onSelectSource: (String) -> Unit
 ) {
-    val sourceStreams = remember(sources) {
-        sources?.map { source ->
-            Stream(
-                name = source.name,
-                title = source.title ?: source.label,
-                description = source.description,
-                url = source.url,
-                infoHash = source.infoHash,
-                behaviorHints = StreamBehaviorHints(
-                    filename = source.fileName,
-                    videoSize = source.videoSize
-                ),
-                addonTransportUrl = source.addonTransportUrl
-            )
-        }
-    }
+    val sourceStreams = remember(sources) { sources?.map(PlayerSourceOption::toStream) }
 
     val sidebarState = if (visible) {
         SidebarState.Sources(

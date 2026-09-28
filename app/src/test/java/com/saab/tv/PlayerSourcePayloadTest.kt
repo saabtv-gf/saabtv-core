@@ -13,6 +13,9 @@ class PlayerSourcePayloadTest {
             title = "Movie 2160p 8 GB Seeds: 510",
             url = "https://example.com/high",
             infoHash = "high-hash",
+            torBoxChecked = true,
+            torBoxCached = true,
+            torBoxSeeders = 73,
             behaviorHints = StreamBehaviorHints(
                 filename = "Movie.High.mkv",
                 videoSize = 8_589_934_592L
@@ -35,5 +38,8 @@ class PlayerSourcePayloadTest {
         assertEquals("high-hash", payload.first().infoHash)
         assertEquals(8_589_934_592L, payload.first().videoSize)
         assertEquals("Movie.High.mkv", payload.first().fileName)
+        assertEquals(true, payload.first().torBoxChecked)
+        assertEquals(true, payload.first().torBoxCached)
+        assertEquals(73, payload.first().torBoxSeeders)
     }
 }
