@@ -124,10 +124,19 @@ private const val SOURCE_SELECTION_COMMIT_MIN_POSITION_MS = 5_000L
 private const val SOURCE_SELECTION_FAILURE_RESET_MAX_POSITION_MS = 1_000L
 
 private fun FocusRequester.requestFocusSafely(): Boolean =
-    runCatching {
-        requestFocus()
-        true
-    }.getOrDefault(false)
+    runCatching { requestFocus(); true }.getOrDefault(false)
+
+private suspend fun FocusRequester.requestFocusWhenAttached(hasFocus: () -> Boolean = { true }): Boolean {
+    repeat(14) {
+        androidx.compose.runtime.withFrameNanos { }
+        if (requestFocusSafely()) {
+            androidx.compose.runtime.withFrameNanos { }
+            if (hasFocus()) return true
+        }
+        delay(50)
+    }
+    return false
+}
 
 private fun isPlaybackSnapshotCompleted(
     positionMs: Long,
@@ -909,6 +918,7 @@ class MainActivity : ComponentActivity() {
                         val homeEntryRequester = remember { FocusRequester() }
                         val searchEntryRequester = remember { FocusRequester() }
                         val settingsEntryRequester = remember { FocusRequester() }
+                        var settingsScreenFocused by remember { mutableStateOf(false) }
                         val watchlistEntryRequester = remember { FocusRequester() }
 
                         // STATE CHANGE TRIGGER:
@@ -930,16 +940,16 @@ class MainActivity : ComponentActivity() {
                                             "poster" -> searchResultsRequester.requestFocusSafely()
                                         }
                                     } else {
-                                        searchEntryRequester.requestFocusSafely()
+                                        searchEntryRequester.requestFocusWhenAttached()
                                     }
                                 }
                                 NavDestination.Settings -> {
                                     delay(200) // Increased for stability
-                                    settingsEntryRequester.requestFocusSafely()
+                                    settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused }
                                 }
                                 NavDestination.Watchlist -> {
                                     delay(200)
-                                    watchlistEntryRequester.requestFocusSafely()
+                                    watchlistEntryRequester.requestFocusWhenAttached()
                                 }
                                 else -> Unit
                             }
@@ -950,7 +960,7 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(navPosition) {
                             if (activeView == "menu" && currentNav == NavDestination.Settings) {
                                 delay(450) // Wait for Crossfade (400ms) + buffer
-                                settingsEntryRequester.requestFocusSafely()
+                                settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused }
                             }
                         }
 
@@ -970,7 +980,7 @@ class MainActivity : ComponentActivity() {
                                         when(destination) {
                                             NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> homeEntryRequester.requestFocusSafely()
                                             NavDestination.Search -> searchEntryRequester.requestFocusSafely()
-                                            NavDestination.Settings -> settingsEntryRequester.requestFocusSafely()
+                                            NavDestination.Settings -> uiScope.launch { settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused } }
                                             NavDestination.Watchlist -> watchlistEntryRequester.requestFocusSafely()
                                             else -> {}
                                         }
@@ -987,7 +997,7 @@ class MainActivity : ComponentActivity() {
                                     when(currentNav) {
                                         NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> homeEntryRequester.requestFocusSafely()
                                         NavDestination.Search -> searchEntryRequester.requestFocusSafely()
-                                        NavDestination.Settings -> settingsEntryRequester.requestFocusSafely()
+                                        NavDestination.Settings -> uiScope.launch { settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused } }
                                         NavDestination.Watchlist -> watchlistEntryRequester.requestFocusSafely()
                                         else -> {}
                                     }
@@ -1142,6 +1152,7 @@ class MainActivity : ComponentActivity() {
                                                         entryRequester = settingsEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Settings]!!,
                                                         onDashboardChanged = { homeVm.invalidate() },
+                                                        onScreenFocusChanged = { settingsScreenFocused = it },
                                                         onContentFocusChanged = { settingsContentFocused = it }
                                                     )
                                                 }
@@ -1285,6 +1296,7 @@ class MainActivity : ComponentActivity() {
                                                         entryRequester = settingsEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Settings]!!,
                                                         onDashboardChanged = { homeVm.invalidate() },
+                                                        onScreenFocusChanged = { settingsScreenFocused = it },
                                                         onContentFocusChanged = { settingsContentFocused = it }
                                                     )
                                                 }
@@ -1797,6 +1809,9 @@ class MainActivity : ComponentActivity() {
                                                 rawStreams = streamsDeferred.await()
                                                 addonSubs = subtitlesDeferred.await()
                                             }
+                                            val episodeStreams = if (rawStreams.isEmpty() && nextStreamId != nextPlaybackId) {
+                                                addonRepository.getStreams("series", nextPlaybackId)
+                                            } else rawStreams
                                             if (switchRequestId != playerState.episodeSwitchRequestId || activeView != "player") {
                                                 return@launch
                                             }
@@ -1807,7 +1822,7 @@ class MainActivity : ComponentActivity() {
                                                 val addonOrders = addonRepository.getAddonSortOrders()
                                                 val excludedF = StreamSortingService.parseExcludedFormats(currentProfile?.sourceExcludedFormats ?: "")
                                                 streamSortingService.sortAndFilter(
-                                                    streams = rawStreams,
+                                                    streams = episodeStreams,
                                                     enabledQualities = enabledQ,
                                                     excludePhrases = excludeP,
                                                     addonSortOrders = addonOrders,
@@ -1822,7 +1837,11 @@ class MainActivity : ComponentActivity() {
                                                         currentProfile?.sourceLanguagePriority3
                                                     )
                                                 )
-                                            } else rawStreams
+                                            } else episodeStreams.filter { stream ->
+                                                !com.saab.tv.data.stream.TorBoxAvailabilityPolicy.remove(stream) &&
+                                                    (currentProfile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
+                                                        com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0)
+                                            }
                                             val streams = StreamScoreCalculator.sortDescending(
                                                 filteredStreams,
                                                 StreamSortingService.smartLanguagePreferences(
@@ -2006,6 +2025,9 @@ class MainActivity : ComponentActivity() {
                                                 rawStreams2 = streamsDeferred.await()
                                                 addonSubs = subtitlesDeferred.await()
                                             }
+                                            val episodeStreams = if (rawStreams2.isEmpty() && epStreamId != epPlaybackId) {
+                                                addonRepository.getStreams("series", epPlaybackId)
+                                            } else rawStreams2
                                             if (switchRequestId != playerState.episodeSwitchRequestId || activeView != "player") {
                                                 return@launch
                                             }
@@ -2016,7 +2038,7 @@ class MainActivity : ComponentActivity() {
                                                 val addonOrders = addonRepository.getAddonSortOrders()
                                                 val excludedF = StreamSortingService.parseExcludedFormats(currentProfile?.sourceExcludedFormats ?: "")
                                                 streamSortingService.sortAndFilter(
-                                                    streams = rawStreams2,
+                                                    streams = episodeStreams,
                                                     enabledQualities = enabledQ,
                                                     excludePhrases = excludeP,
                                                     addonSortOrders = addonOrders,
@@ -2031,7 +2053,11 @@ class MainActivity : ComponentActivity() {
                                                         currentProfile?.sourceLanguagePriority3
                                                     )
                                                 )
-                                            } else rawStreams2
+                                            } else episodeStreams.filter { stream ->
+                                                !com.saab.tv.data.stream.TorBoxAvailabilityPolicy.remove(stream) &&
+                                                    (currentProfile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
+                                                        com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0)
+                                            }
                                             val streams = StreamScoreCalculator.sortDescending(
                                                 filteredStreams,
                                                 StreamSortingService.smartLanguagePreferences(

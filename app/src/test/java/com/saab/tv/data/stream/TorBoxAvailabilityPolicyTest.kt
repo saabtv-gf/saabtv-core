@@ -36,9 +36,20 @@ class TorBoxAvailabilityPolicyTest {
     @Test fun failedResponseNeverMeansZero() {
         assertNull(TorBoxAvailabilityPolicy.seeds(JsonParser.parseString("""{"success":false,"data":{"hash":"$hash","seeds":0}}""").asJsonObject, hash))
     }
-    @Test fun checkedUnknownDoesNotFallBackToScrapedSeederCount() {
+    @Test fun checkedUnknownFallsBackToProviderSeederCount() {
         val stream = Stream(title = "Movie 1080p 👤 900", seeders = 900, torBoxChecked = true)
-        assertNull(StreamParser.parse(stream).seeds)
+        assertEquals(900, StreamParser.parse(stream).seeds)
+    }
+    @Test fun torBoxSeederCountOverridesProvider() {
+        val stream = Stream(title = "Movie 1080p", seeders = 900, torBoxChecked = true, torBoxSeeders = 0)
+        assertEquals(0, StreamParser.parse(stream).seeds)
+        assertTrue(StreamDisplayFormatter.format("Movie", stream).details.contains("0 Seeders · TorBox"))
+    }
+    @Test fun sourcePanelLabelsProviderFallbackAndUnknownCache() {
+        val stream = Stream(title = "Movie 1080p", seeders = 9, torBoxChecked = true)
+        val details = StreamDisplayFormatter.format("Movie", stream).details
+        assertTrue(details.contains("TorBox Cache Unknown"))
+        assertTrue(details.contains("9 Seeders · Provider"))
     }
     @Test fun cachedWinsInsideResolutionTier() {
         val cached = Stream(title = "Movie 1080p", torBoxChecked = true, torBoxCached = true, torBoxSeeders = 0)

@@ -524,7 +524,9 @@ fun DetailsScreen(
                                 pendingPlaybackId = trackId
                                 pendingPlaybackType = type
                                 pendingPlaybackTitle = epTitle
-                                viewModel.loadStreams(type, epStreamId, epTitle, sourceSelectionId = trackId, autoSelectSource = autoSelectSource, rememberSourceSelection = rememberSourceSelection)
+                                viewModel.loadStreams(type, epStreamId, epTitle, sourceSelectionId = trackId,
+                                    fallbackStreamId = trackId, autoSelectSource = autoSelectSource,
+                                    rememberSourceSelection = rememberSourceSelection)
                             }
                         )
 
@@ -826,7 +828,9 @@ fun DetailsScreen(
                 pendingPlaybackId = trackId
                 pendingPlaybackType = type
                 pendingPlaybackTitle = epTitle
-                viewModel.loadStreams(type, epStreamId, epTitle, sourceSelectionId = trackId, autoSelectSource = autoSelectSource, rememberSourceSelection = rememberSourceSelection)
+                viewModel.loadStreams(type, epStreamId, epTitle, sourceSelectionId = trackId,
+                    fallbackStreamId = trackId, autoSelectSource = autoSelectSource,
+                    rememberSourceSelection = rememberSourceSelection)
             },
             onSourceSelected = { stream ->
                 viewModel.closeSidebar()

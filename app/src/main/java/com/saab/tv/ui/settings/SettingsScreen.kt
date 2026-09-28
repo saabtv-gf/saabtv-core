@@ -66,6 +66,7 @@ fun SettingsScreen(
     entryRequester: FocusRequester,
     drawerRequester: FocusRequester,
     onDashboardChanged: () -> Unit = {},
+    onScreenFocusChanged: (Boolean) -> Unit = {},
     onContentFocusChanged: (Boolean) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -132,7 +133,7 @@ fun SettingsScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onFocusChanged { isScreenFocused = it.hasFocus }
+            .onFocusChanged { isScreenFocused = it.hasFocus; onScreenFocusChanged(it.hasFocus) }
     ) {
         Row(
             modifier = Modifier

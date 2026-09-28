@@ -33,13 +33,13 @@ object StreamDisplayFormatter {
                 true -> "TorBox Cached"
                 false -> "TorBox Not Cached"
                 null -> "TorBox Cache Unknown"
-            })
+            }) else if (StreamSourceProviderResolver.requiresSeederMetadata(stream)) add("TorBox Not Checked")
             add(languageSummary(stream))
             qualityLabel(parsed.quality)?.let(::add)
             addAll(dynamicRangeLabels(parsed.formats))
             parsed.sizeBytes?.let(::formatSize)?.let(::add)
             parsed.seeds?.let { seeds ->
-                add("$seeds ${if (seeds == 1) "Seeder" else "Seeders"}${if (stream.torBoxChecked) " · TorBox" else ""}")
+                add("$seeds ${if (seeds == 1) "Seeder" else "Seeders"} · ${if (stream.torBoxSeeders != null) "TorBox" else "Provider"}")
             } ?: if (StreamSourceProviderResolver.requiresSeederMetadata(stream)) {
                 add("Seeders Not Reported")
             } else Unit

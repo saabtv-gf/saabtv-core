@@ -83,7 +83,7 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
             hashes.map { hash -> async {
                 permits.withPermit {
                     val prior = results[hash]?.takeIf { System.currentTimeMillis() - it.at in 0..60_000L }
-                    val seeds = prior?.seeds ?: request("torrentinfo", null,
+                    val seeds = prior?.seeds ?: request("torrentinfo", key,
                         mapOf("hash" to hash, "timeout" to "7", "use_cache_lookup" to "false"))?.let { TorBoxAvailabilityPolicy.seeds(it, hash) }
                     val value = Evidence(evidence[hash]?.cached, seeds, System.currentTimeMillis())
                     evidence[hash] = value

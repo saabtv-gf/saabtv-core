@@ -761,6 +761,7 @@ class DetailsViewModel @Inject constructor(
         id: String,
         displayTitle: String,
         sourceSelectionId: String = id,
+        fallbackStreamId: String? = null,
         forceSourcePicker: Boolean = false,
         autoSelectSource: Boolean = false,
         rememberSourceSelection: Boolean = true
@@ -808,6 +809,9 @@ class DetailsViewModel @Inject constructor(
                     addonSubtitles = subtitlesDeferred.await()
                 }
 
+                val episodeStreams = if (rawStreams.isEmpty() && !fallbackStreamId.isNullOrBlank() && fallbackStreamId != id)
+                    repository.getStreams(type, fallbackStreamId) else rawStreams
+
                 // Read sorting preferences from the active profile
                 val activeProfileId = profileConfigurationManager.getLastActiveProfileId()
                 val profile = activeProfileId?.let { dao.getProfileById(it) }?.let(deviceDisplay::effective)
@@ -824,7 +828,7 @@ class DetailsViewModel @Inject constructor(
                         ?.associate { it.transportUrl to it.sortOrder } ?: emptyMap()
                     val excludedFormats = StreamSortingService.parseExcludedFormats(profile?.sourceExcludedFormats ?: "")
                     streamSortingService.sortAndFilter(
-                        streams = rawStreams,
+                        streams = episodeStreams,
                         enabledQualities = enabledQualities,
                         excludePhrases = excludePhrases,
                         addonSortOrders = addonSortOrders,
@@ -835,7 +839,11 @@ class DetailsViewModel @Inject constructor(
                         hideZeroSeeders = profile?.sourceHideZeroSeeders == true,
                         preferredAudioLanguages = sourceLanguagePreferences
                     )
-                } else rawStreams
+                } else episodeStreams.filter { stream ->
+                    !com.saab.tv.data.stream.TorBoxAvailabilityPolicy.remove(stream) &&
+                        (profile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
+                            com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0)
+                }
 
                 // Selection and auto-play must use the same exact ranking shown
                 // on source cards, independent of legacy primary-sort settings.

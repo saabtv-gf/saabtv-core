@@ -18,7 +18,7 @@ class StreamDisplayFormatterTest {
         val display = StreamDisplayFormatter.format("Example Movie", stream)
 
         assertEquals("Example Movie", display.title)
-        assertTrue(display.details.startsWith("Torrentio • English, Hindi +2 Other Languages"))
+        assertTrue(display.details.startsWith("Torrentio • TorBox Not Checked • English, Hindi +2 Other Languages"))
         assertTrue(display.details.contains("4K"))
         assertTrue(display.details.contains("450 Seeders"))
         assertFalse(display.title.contains("2160p"))
@@ -54,7 +54,7 @@ class StreamDisplayFormatterTest {
 
         val display = StreamDisplayFormatter.format("Example Movie", stream)
 
-        assertTrue(display.details.startsWith("MediaFusion • English"))
+        assertTrue(display.details.startsWith("MediaFusion • TorBox Not Checked • English"))
         assertTrue(display.details.contains("Seeders Not Reported"))
     }
 

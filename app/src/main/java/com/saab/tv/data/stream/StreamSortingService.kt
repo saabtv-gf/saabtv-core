@@ -69,7 +69,7 @@ class StreamSortingService @Inject constructor() {
                     isCompleteSeasonTorrent(ranked.stream)
             }
             .filter { ranked -> !TorBoxAvailabilityPolicy.remove(ranked.stream) }
-            .filter { ranked -> !hideZeroSeeders || ranked.stream.torBoxChecked || ranked.stream.torBoxCached == true || ranked.info.seeds != 0 }
+            .filter { ranked -> !hideZeroSeeders || ranked.stream.torBoxCached == true || ranked.info.seeds != 0 }
             .sortedWith(buildComparator(addonSortOrders, sortBy, languagePreferences))
             .map(RankedStream::stream)
     }
