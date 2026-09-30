@@ -55,9 +55,9 @@ fun SetupButton(
         border = BorderStroke(if (focused) 3.dp else 1.dp, if (focused) Color.White else accent.copy(alpha = 0.25f)),
         colors = ButtonDefaults.buttonColors(
             containerColor = when { focused -> accent; primary -> accent.copy(alpha = 0.15f); else -> MaterialTheme.colorScheme.surfaceVariant },
-            contentColor = when { focused && destructive -> MaterialTheme.colorScheme.onError; focused -> MaterialTheme.colorScheme.onPrimary; else -> MaterialTheme.colorScheme.onSurface },
+            contentColor = when { focused && destructive -> MaterialTheme.colorScheme.onError; focused -> MaterialTheme.colorScheme.onPrimary; else -> Color.White },
             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+            disabledContentColor = Color.White.copy(alpha = 0.45f)
         ),
         contentPadding = PaddingValues(horizontal = if (compact) 12.dp else 20.dp, vertical = 10.dp)
     ) {

@@ -80,7 +80,7 @@ import kotlinx.coroutines.delay
  * ============================================================================
  */
 
-private val ITEM_WIDTH = 140.dp
+private val ITEM_WIDTH = 120.dp
 private val ITEM_SPACING = 20.dp
 
 private fun FocusRequester.requestFocusSafely() {
@@ -131,7 +131,7 @@ fun InfiniteLoopRow(
     val density = LocalDensity.current
     val paddingPx = remember(density, startPadding) { with(density) { startPadding.toPx() } }
     val configuration = LocalConfiguration.current
-    val effectiveItemWidth = if (isLandscapeCards) 190.dp else 140.dp
+    val effectiveItemWidth = if (isLandscapeCards) 190.dp else ITEM_WIDTH
     val screenWidth = configuration.screenWidthDp.dp
     
     // Detect if this is a restoration (coming back from details screen)

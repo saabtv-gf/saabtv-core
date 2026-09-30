@@ -84,7 +84,6 @@ fun SaabTvLandscapeCard(
     onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
-    val focusLift by animateFloatAsState(if (isFocused) -4f else 0f, tween(170), label = "landscapeFocusLift")
     var longPressHandled by remember { mutableStateOf(false) }
     val cardCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     val roundCorners = LocalRoundCorners.current
@@ -98,7 +97,7 @@ fun SaabTvLandscapeCard(
             .aspectRatio(16f / 9f)
             .onGloballyPositioned { cardCoordinates[0] = it }
             .zIndex(if (isFocused) 10f else 0f)
-            .graphicsLayer { clip = false; translationY = focusLift * density }
+            .graphicsLayer { clip = false }
     ) {
         Surface(
             onClick = onClick,
@@ -125,7 +124,7 @@ fun SaabTvLandscapeCard(
                 shape = cardShape,
                 focusedShape = focusedCardShape
             ),
-            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.09f),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = MaterialTheme.colorScheme.surface,
                 focusedContainerColor = MaterialTheme.colorScheme.surface,

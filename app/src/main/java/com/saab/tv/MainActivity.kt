@@ -1083,6 +1083,14 @@ class MainActivity : ComponentActivity() {
                                                                 activeView = "details"
                                                             },
                                                             onContinueClick = { movie ->
+                                                                val canResumeOpenStream = selectedMovieId == movie.id &&
+                                                                    selectedMovieType == movie.type &&
+                                                                    selectedVideoUrl.startsWith("https://") &&
+                                                                    playerState.currentStream != null &&
+                                                                    vm.state.value.history.any { history ->
+                                                                        !history.watched && history.id == selectedPlaybackId &&
+                                                                            (movie.type != "series" || seriesIdFromPlaybackId(history.id) == movie.id)
+                                                                    }
                                                                 selectedMovieId = movie.id
                                                                 selectedMovieType = movie.type
                                                                 selectedMovieTitle = movie.name
@@ -1091,12 +1099,16 @@ class MainActivity : ComponentActivity() {
                                                                 selectedMovieLogo = movie.logo ?: ""
                                                                 selectedAddonBaseUrl = movie.addonBaseUrl
                                                                 detailsResumePlaybackHint = null
-                                                                selectedPlaybackId = movie.id
+                                                                if (!canResumeOpenStream) selectedPlaybackId = movie.id
                                                                 selectedPlaybackType = movie.type
                                                                 selectedPlaybackTitle = movie.name
-                                                                autoResumeFromContinue = true
+                                                                autoResumeFromContinue = !canResumeOpenStream
                                                                 previousView = "menu"
-                                                                activeView = "resume"
+                                                                if (!canResumeOpenStream) {
+                                                                    selectedVideoUrl = ""
+                                                                    torrentProgress = TorrentProgress("Finding your source...")
+                                                                }
+                                                                activeView = if (canResumeOpenStream) "player" else "resume"
                                                             },
                                                             onTrailerClick = { youtubeKey, trailerName ->
                                                                 YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
@@ -1115,6 +1127,9 @@ class MainActivity : ComponentActivity() {
                                                     SearchScreen(
                                                         searchSessionId = searchSessionId,
                                                         currentProfile = currentProfile,
+                                                        onTrailerClick = { youtubeKey, trailerName ->
+                                                            YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
+                                                        },
                                                         watchedIds = searchHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
                                                         onMovieClick = { movie ->
                                                             selectedMovieId = movie.id
@@ -1162,6 +1177,9 @@ class MainActivity : ComponentActivity() {
                                                         currentProfile = currentProfile,
                                                         entryRequester = watchlistEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Watchlist]!!,
+                                                        onTrailerClick = { youtubeKey, trailerName ->
+                                                            YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
+                                                        },
                                                         watchedIds = watchlistHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
                                                         onMovieClick = { movie ->
                                                             selectedMovieId = movie.id
@@ -1247,6 +1265,14 @@ class MainActivity : ComponentActivity() {
                                                                 activeView = "details"
                                                             },
                                                             onContinueClick = { movie ->
+                                                                val canResumeOpenStream = selectedMovieId == movie.id &&
+                                                                    selectedMovieType == movie.type &&
+                                                                    selectedVideoUrl.startsWith("https://") &&
+                                                                    playerState.currentStream != null &&
+                                                                    vm.state.value.history.any { history ->
+                                                                        !history.watched && history.id == selectedPlaybackId &&
+                                                                            (movie.type != "series" || seriesIdFromPlaybackId(history.id) == movie.id)
+                                                                    }
                                                                 selectedMovieId = movie.id
                                                                 selectedMovieType = movie.type
                                                                 selectedMovieTitle = movie.name
@@ -1255,12 +1281,16 @@ class MainActivity : ComponentActivity() {
                                                                 selectedMovieLogo = movie.logo ?: ""
                                                                 selectedAddonBaseUrl = movie.addonBaseUrl
                                                                 detailsResumePlaybackHint = null
-                                                                selectedPlaybackId = movie.id
+                                                                if (!canResumeOpenStream) selectedPlaybackId = movie.id
                                                                 selectedPlaybackType = movie.type
                                                                 selectedPlaybackTitle = movie.name
-                                                                autoResumeFromContinue = true
+                                                                autoResumeFromContinue = !canResumeOpenStream
                                                                 previousView = "menu"
-                                                                activeView = "resume"
+                                                                if (!canResumeOpenStream) {
+                                                                    selectedVideoUrl = ""
+                                                                    torrentProgress = TorrentProgress("Finding your source...")
+                                                                }
+                                                                activeView = if (canResumeOpenStream) "player" else "resume"
                                                             },
                                                             onTrailerClick = { youtubeKey, trailerName ->
                                                                 YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
@@ -1279,6 +1309,9 @@ class MainActivity : ComponentActivity() {
                                                     SearchScreen(
                                                         searchSessionId = searchSessionId,
                                                         currentProfile = currentProfile,
+                                                        onTrailerClick = { youtubeKey, trailerName ->
+                                                            YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
+                                                        },
                                                         watchedIds = searchHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
                                                         onMovieClick = { movie ->
                                                             selectedMovieId = movie.id
@@ -1372,6 +1405,10 @@ class MainActivity : ComponentActivity() {
                             GridViewScreen(
                                 title = gridViewTitle,
                                 items = gridViewItems,
+                                profileId = currentProfile?.id ?: 1,
+                                onTrailerClick = { youtubeKey, trailerName ->
+                                    YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
+                                },
                                 lastFocusedIndex = gridRestoreState.focusedIndex,
                                 onFocusChange = { gridRestoreState.focusedIndex = it },
                                 onMovieClick = { movie ->
@@ -1529,6 +1566,7 @@ class MainActivity : ComponentActivity() {
                                         playerState.selectedPlayerSubtitles = subtitlePayload
                                         playerState.selectedPlayerSources = sourcePayload
                                         selectedVideoUrl = url
+                                        torrentProgress = null
                                         when (currentProfile?.playerPreference) {
                                             "external" -> {
                                                 autoResumeFromContinue = false
@@ -1575,6 +1613,7 @@ class MainActivity : ComponentActivity() {
                                         autoStartPlayback = autoResumeFromContinue,
                                         onAutoResumeNeedsSelection = {
                                             autoResumeFromContinue = false
+                                            torrentProgress = null
                                             activeView = "details"
                                         },
                                         autoSelectSource = currentProfile?.autoSelectSource ?: false,
@@ -1657,24 +1696,8 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                             }
-                            if (view == "resume") {
-                                Box(Modifier.fillMaxSize().background(Color.Black)) {
-                                    val artwork = selectedMovieBackground.ifBlank { selectedMoviePoster }
-                                    if (artwork.isNotBlank()) AsyncImage(
-                                        model = artwork,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize().alpha(0.28f)
-                                    )
-                                    Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                                        CircularProgressIndicator(Modifier.size(42.dp))
-                                        Text("Opening ${selectedMovieTitle}", style = MaterialTheme.typography.titleLarge)
-                                    }
-                                }
-                            }
                         }
-                        if (view == "player") {
+                        if (view == "player" || view == "resume") {
                             if (selectedVideoUrl.isBlank() && torrentProgress == null) {
                                 LaunchedEffect(Unit) { activeView = "details" }
                             } else {
@@ -2470,6 +2493,7 @@ class MainActivity : ComponentActivity() {
                                 torrentProgress = torrentProgress,
                                 onBack = { sessionResult ->
                                     torrentProgress = null
+                                    autoResumeFromContinue = false
                                     playerState.cancelEpisodeSwitch()
                                     handlePlayerSessionEnd(
                                         sessionResult = sessionResult,

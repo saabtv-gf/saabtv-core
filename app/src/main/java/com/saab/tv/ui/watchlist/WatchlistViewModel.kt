@@ -6,6 +6,7 @@ import com.saab.tv.data.local.AddonDao
 import com.saab.tv.data.model.WatchlistEntity
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.data.repository.AddonRepository
+import com.saab.tv.data.account.AccountSyncManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
@@ -22,7 +23,8 @@ import javax.inject.Inject
 @HiltViewModel
 class WatchlistViewModel @Inject constructor(
     private val dao: AddonDao,
-    private val repository: AddonRepository
+    private val repository: AddonRepository,
+    private val accountSync: AccountSyncManager
 ) : ViewModel() {
 
     private val resolveInFlight = ConcurrentHashMap.newKeySet<String>()
@@ -54,6 +56,14 @@ class WatchlistViewModel @Inject constructor(
         profileId.value = value
         resolveInFlight.clear()
         lastFocusedKey = null
+    }
+
+    fun remove(item: MetaItem) {
+        val activeProfileId = profileId.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            dao.removeFromWatchlist(activeProfileId, item.id)
+            accountSync.historyChanged(urgent = true)
+        }
     }
 
     /**

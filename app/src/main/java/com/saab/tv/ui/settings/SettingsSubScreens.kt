@@ -2142,7 +2142,7 @@ fun AboutSettings(
         if (updateState is UpdateState.AwaitingInstallPermission) {
             Text("Allow Saab TV To Install Updates", modifier = Modifier.padding(top = 16.dp), color = accentColor)
             Text("In TV Settings, enable installation from Saab TV. The download starts only after permission is granted. Return here with Back.",
-                style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp), color = Color.White.copy(alpha = 0.8f))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SetupButton("Open TV Settings", { updateManager.openInstallPermissionSettings() }, primary = true)
                 SetupButton("Cancel", { updateManager.cancelPendingUpdate() })
@@ -2150,7 +2150,8 @@ fun AboutSettings(
         }
         if (updateState is UpdateState.Verifying) {
             Text("Verifying Update…", modifier = Modifier.padding(top = 16.dp), color = accentColor)
-            Text("Checking checksum, package, Android version, CPU and signing certificate.", style = MaterialTheme.typography.bodyMedium)
+            Text("Checking checksum, package, Android version, CPU and signing certificate.", style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.8f))
         }
 
         // READY TO INSTALL

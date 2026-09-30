@@ -225,7 +225,8 @@ private fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boo
                     AccountCredentialField(value = username, onValueChange = { username = it.take(32) }, label = "Username",
                         enabled = !busy, focusRequester = usernameFocus, onNext = { passwordFocus.requestFocus() },
                         supportingText = { Text(availability ?: if (signup) "3–32 letters, numbers or underscores" else "Usernames are not case-sensitive",
-                            color = if (available && signup) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) })
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 13.sp),
+                            color = if (available && signup) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.72f)) })
                     if (availability == "Could not check availability") SetupButton("Retry Username Check", { availabilityRetry++ }, enabled = !busy, compact = true)
                     AccountCredentialField(value = password, onValueChange = { password = it.take(128) }, label = "Password",
                         enabled = !busy, focusRequester = passwordFocus, password = true, visible = passwordVisible,

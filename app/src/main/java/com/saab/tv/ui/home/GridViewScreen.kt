@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -96,6 +97,8 @@ fun GridViewScreen(
     lastFocusedIndex: Int?,
     onFocusChange: (Int) -> Unit,
     onMovieClick: (MetaItem) -> Unit,
+    profileId: Int = 1,
+    onTrailerClick: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit,
     onLoadMore: () -> Unit = {},
     // Scroll position persistence for instant restoration
@@ -104,6 +107,8 @@ fun GridViewScreen(
     onScrollPositionChange: (Int, Int) -> Unit = { _, _ -> },
     watchedIds: Set<String> = emptySet()
 ) {
+    var actionItem by remember { mutableStateOf<MetaItem?>(null) }
+    var actionBounds by remember { mutableStateOf(Rect.Zero) }
     val context = LocalContext.current
     val density = LocalDensity.current
     
@@ -269,6 +274,7 @@ fun GridViewScreen(
                         title = item.name,
                         posterUrl = item.poster,
                         onClick = { onMovieClick(item) },
+                        onLongClick = { bounds -> actionBounds = bounds; actionItem = item },
                         isWatched = item.id in watchedIds,
                         modifier = Modifier
                             .aspectRatio(2f / 3f)
@@ -448,5 +454,9 @@ fun GridViewScreen(
                 )
             }
         }
+    }
+    actionItem?.let { item ->
+        CatalogQuickActionsPopup(item, actionBounds, profileId,
+            onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick)
     }
 }

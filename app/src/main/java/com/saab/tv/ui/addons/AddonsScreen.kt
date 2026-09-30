@@ -634,7 +634,7 @@ fun VoidDialog(
                     color = Color.White
                 )
                 Spacer(Modifier.height(8.dp))
-                content()
+                CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) { content() }
             }
         }
     }
@@ -652,7 +652,7 @@ fun VoidIconButton(
 
     val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
     val bgColor = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(0.1f)
-    val iconColor = if (isFocused) Color.Black else Color.White
+    val iconColor = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.White
 
     Box(
         modifier = modifier

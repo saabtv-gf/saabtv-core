@@ -369,24 +369,22 @@ fun HomeScreen(
             }
             val density = LocalDensity.current
             val screen = LocalConfiguration.current
-            val popupWidthPx = with(density) { 360.dp.roundToPx() }
+            val popupWidth = if (isContinue) 210.dp else 124.dp
+            val popupWidthPx = with(density) { popupWidth.roundToPx() }
             val popupHeightPx = with(density) {
-                (if (isContinue && pausedFrame != null) 270.dp else if (isContinue) 175.dp else 140.dp).roundToPx()
+                (if (confirmClear) 106.dp else if (isContinue && pausedFrame != null) 174.dp else if (isContinue) 100.dp else 60.dp).roundToPx()
             }
             val marginPx = with(density) { 12.dp.roundToPx() }
             val screenWidthPx = with(density) { screen.screenWidthDp.dp.roundToPx() }
             val screenHeightPx = with(density) { screen.screenHeightDp.dp.roundToPx() }
             val popupX = (longPressedBounds.center.x.toInt() - popupWidthPx / 2)
                 .coerceIn(marginPx, (screenWidthPx - popupWidthPx - marginPx).coerceAtLeast(marginPx))
-            val popupY = if (longPressedBounds.top.toInt() >= popupHeightPx + marginPx) {
-                longPressedBounds.top.toInt() - popupHeightPx - marginPx
-            } else {
-                longPressedBounds.bottom.toInt() + marginPx
-            }.coerceIn(marginPx, (screenHeightPx - popupHeightPx - marginPx).coerceAtLeast(marginPx))
+            val popupY = (longPressedBounds.center.y.toInt() - popupHeightPx / 2)
+                .coerceIn(marginPx, (screenHeightPx - popupHeightPx - marginPx).coerceAtLeast(marginPx))
             Popup(alignment = Alignment.TopStart, offset = IntOffset(popupX, popupY),
                 onDismissRequest = { longPressedItem = null }, properties = PopupProperties(focusable = true)) {
               Column(
-                  Modifier.width(360.dp)
+                  Modifier.width(popupWidth)
                       .onPreviewKeyEvent { event ->
                           if (suppressOpeningKeyUp && event.type == KeyEventType.KeyUp &&
                               (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
@@ -395,20 +393,18 @@ fun HomeScreen(
                               true
                           } else false
                       }
-                      .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
-                      .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(16.dp))
-                      .padding(16.dp),
-                  verticalArrangement = Arrangement.spacedBy(10.dp)
+                      .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                      .border(1.dp, Color.White.copy(alpha = 0.42f), RoundedCornerShape(12.dp))
+                      .padding(8.dp),
+                  verticalArrangement = Arrangement.spacedBy(5.dp)
               ) {
-                Text(item.name, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.titleMedium, color = Color.White)
                 if (confirmClear) {
-                    Text("Clear saved progress?", style = MaterialTheme.typography.bodyMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Clear progress?", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         CardActionIcon(Icons.Default.Delete, "Clear Progress", {
                             viewModel.clearContinueProgress(profileId, item)
                             longPressedItem = null
-                        }, Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
+                        }, Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester, destructive = true)
                         CardActionIcon(Icons.Default.Close, "Cancel", { confirmClear = false },
                             Modifier.weight(1f), enabled = actionsArmed)
                     }
@@ -417,23 +413,23 @@ fun HomeScreen(
                         val parts = historyEntry?.id?.split(":").orEmpty()
                         val season = parts.getOrNull(1)?.toIntOrNull() ?: nextUp?.nextSeason
                         val episode = parts.getOrNull(2)?.toIntOrNull() ?: nextUp?.nextEpisode
-                        if (season != null && episode != null) Text("Season $season · Episode $episode")
+                        if (season != null && episode != null) Text("S$season · E$episode", style = MaterialTheme.typography.bodySmall, color = Color.White)
                     }
                     historyEntry?.let {
                         val remainingMs = (it.duration - it.position).coerceAtLeast(0L)
                         Text("${remainingMs / 60_000} min remaining", style = MaterialTheme.typography.bodySmall, color = Color.White)
                     }
                     pausedFrame?.let { bitmap ->
-                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Paused scene", modifier = Modifier.fillMaxWidth().height(110.dp), contentScale = ContentScale.Fit)
+                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Paused scene", modifier = Modifier.fillMaxWidth().height(70.dp), contentScale = ContentScale.Fit)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         CardActionIcon(Icons.Default.PlayArrow, "Resume", { longPressedItem = null; onContinueClick(item) },
                             Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
                         CardActionIcon(Icons.Default.Delete, "Clear Progress", { confirmClear = true },
-                            Modifier.weight(1f), enabled = actionsArmed)
+                            Modifier.weight(1f), enabled = actionsArmed, destructive = true)
                     }
                 } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     CardActionIcon(Icons.Default.Theaters, "Watch Trailer", onClick = {
                         actionScope.launch {
                             val trailer = try {
@@ -453,7 +449,7 @@ fun HomeScreen(
                             if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
                             viewModel.toggleWatchlist(profileId, item)
                             longPressedItem = null
-                        }, modifier = Modifier.weight(1f), enabled = actionsArmed)
+                        }, modifier = Modifier.weight(1f), enabled = actionsArmed, destructive = saved)
                     }
                     }
                 }
@@ -466,13 +462,14 @@ fun HomeScreen(
 }
 
 @Composable
-private fun CardActionIcon(
+internal fun CardActionIcon(
     icon: ImageVector,
     description: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    destructive: Boolean = false
 ) {
     var focused by remember { mutableStateOf(false) }
     Button(
@@ -480,7 +477,7 @@ private fun CardActionIcon(
         enabled = true,
         modifier = modifier
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .height(52.dp)
+            .height(44.dp)
             .onFocusChanged { focused = it.isFocused },
         shape = RoundedCornerShape(10.dp),
         border = androidx.compose.foundation.BorderStroke(
@@ -488,8 +485,12 @@ private fun CardActionIcon(
             if (focused) Color.White else Color.White.copy(alpha = 0.3f)
         ),
         colors = ButtonDefaults.buttonColors(
-            containerColor = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+            containerColor = if (focused) {
+                if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            } else MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = if (focused) {
+                if (destructive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
+            } else Color.White
         ),
         contentPadding = PaddingValues(0.dp)
     ) {

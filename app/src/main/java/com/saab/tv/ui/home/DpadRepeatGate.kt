@@ -27,6 +27,13 @@ class DpadRepeatGate(
 
         if (event.type != KeyEventType.KeyDown) return false
 
+        // A new physical press must never be swallowed because it followed a
+        // previous press quickly. Only pace key-repeat events from a held key.
+        if (event.nativeKeyEvent.repeatCount == 0) {
+            lastAcceptedByKey[key] = SystemClock.uptimeMillis()
+            return false
+        }
+
         val eventTimeMs = SystemClock.uptimeMillis()
         val lastAcceptedEventTimeMs = lastAcceptedByKey[key]
         if (lastAcceptedEventTimeMs == null) {

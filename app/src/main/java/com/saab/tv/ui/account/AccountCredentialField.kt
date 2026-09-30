@@ -85,7 +85,7 @@ internal fun AccountCredentialField(
                 if (visible) "Hide $label" else "Show $label", modifier = Modifier.size(22.dp))
         }
       }
-      if (supportingText != null) Box(Modifier.padding(start = 16.dp, top = 4.dp)) {
+      if (supportingText != null) Box(Modifier.padding(start = 8.dp, top = 2.dp)) {
           CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) {
               supportingText()
           }

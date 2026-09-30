@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -29,6 +30,7 @@ import com.saab.tv.ui.addons.RemotePasteDialog
 import com.saab.tv.ui.components.SaabTvBackground
 import com.saab.tv.ui.components.SaabTvCard
 import com.saab.tv.ui.home.DpadRepeatGate
+import com.saab.tv.ui.home.CatalogQuickActionsPopup
 
 private fun FocusRequester.requestFocusSafely(): Boolean = runCatching { requestFocus(); true }.getOrDefault(false)
 
@@ -38,6 +40,7 @@ fun SearchScreen(
     entryRequester: FocusRequester, drawerRequester: FocusRequester,
     searchSessionId: Long = 0L, viewModel: SearchViewModel = hiltViewModel(),
     currentProfile: ProfileEntity?, onMovieClick: (MetaItem) -> Unit,
+    onTrailerClick: (String, String) -> Unit = { _, _ -> },
     onViewMore: (String, List<MetaItem>) -> Unit = { _, _ -> },
     moviesViewMoreRequester: FocusRequester = remember { FocusRequester() },
     seriesViewMoreRequester: FocusRequester = remember { FocusRequester() },
@@ -46,6 +49,12 @@ fun SearchScreen(
     watchedIds: Set<String> = emptySet()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    var actionItem by remember { mutableStateOf<MetaItem?>(null) }
+    var actionBounds by remember { mutableStateOf(Rect.Zero) }
+    val onLongClick: (MetaItem, Rect) -> Unit = { item, bounds ->
+        actionItem = item
+        actionBounds = bounds
+    }
     var remoteSearch by remember { mutableStateOf(false) }
     var hasFocus by remember { mutableStateOf(false) }
     var focusEstablished by remember { mutableStateOf(false) }
@@ -107,11 +116,11 @@ fun SearchScreen(
                     Column(Modifier.weight(1f)) {
                         SearchResultRow("Movies", state.movies, posterHeight, targetKey, resultsRequester,
                             entryRequester, drawerRequester, moviesViewMoreRequester, lastFocusedId, watchedIds,
-                            onMovieClick, onViewMore, onFocusedIdChange, Modifier.weight(1f), moviesEntry,
+                            onMovieClick, onLongClick, onViewMore, onFocusedIdChange, Modifier.weight(1f), moviesEntry,
                             drawerRequester, if (state.series.isNotEmpty()) seriesEntry else entryRequester)
                         SearchResultRow("Series", state.series, posterHeight, targetKey, resultsRequester,
                             entryRequester, drawerRequester, seriesViewMoreRequester, lastFocusedId, watchedIds,
-                            onMovieClick, onViewMore, onFocusedIdChange, Modifier.weight(1f), seriesEntry,
+                            onMovieClick, onLongClick, onViewMore, onFocusedIdChange, Modifier.weight(1f), seriesEntry,
                             if (state.movies.isNotEmpty()) moviesEntry else drawerRequester, entryRequester)
                     }
                 }
@@ -132,6 +141,10 @@ fun SearchScreen(
         onUrlReceived = viewModel::onQueryChange, mode = RemoteInputMode.SEARCH,
         title = "Remote Search", description = "Scan With Your Phone To Type A Search"
     )
+    actionItem?.let { item ->
+        CatalogQuickActionsPopup(item, actionBounds, currentProfile?.id ?: 1,
+            onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick)
+    }
 }
 
 @Composable
@@ -139,7 +152,8 @@ private fun SearchResultRow(
     title: String, items: List<MetaItem>, posterHeight: Dp, targetKey: String?,
     targetRequester: FocusRequester, keyboardRequester: FocusRequester, drawerRequester: FocusRequester,
     moreRequester: FocusRequester, lastFocusedId: String?, watchedIds: Set<String>,
-    onClick: (MetaItem) -> Unit, onMore: (String, List<MetaItem>) -> Unit,
+    onClick: (MetaItem) -> Unit, onLongClick: (MetaItem, Rect) -> Unit,
+    onMore: (String, List<MetaItem>) -> Unit,
     onFocused: (String?) -> Unit, modifier: Modifier,
     rowRequester: FocusRequester, upRequester: FocusRequester, downRequester: FocusRequester
 ) {
@@ -171,6 +185,7 @@ private fun SearchResultRow(
             contentPadding = PaddingValues(6.dp)) {
             itemsIndexed(items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
                 SaabTvCard(title = item.name, posterUrl = item.poster, onClick = { onClick(item) },
+                    onLongClick = { bounds -> onLongClick(item, bounds) },
                     isWatched = item.id in watchedIds,
                     onFocused = { focusedTitle = item.name; rowFocusedId = item.id; onFocused(item.id) },
                     modifier = Modifier.width(posterHeight * 2f / 3f).height(posterHeight)
