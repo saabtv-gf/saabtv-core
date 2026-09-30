@@ -627,13 +627,13 @@ fun VoidDialog(
                 .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
                 .padding(24.dp)
         ) {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     title,
                     style = MaterialTheme.typography.headlineSmall,
                     color = Color.White
                 )
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(8.dp))
                 content()
             }
         }

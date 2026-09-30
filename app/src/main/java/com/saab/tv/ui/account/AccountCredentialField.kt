@@ -45,10 +45,11 @@ internal fun AccountCredentialField(
         if (editing && enabled) { withFrameNanos { }; keyboard?.show() }
         else if (!enabled) { editing = false; keyboard?.hide() }
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth()) {
+      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(value = value, onValueChange = onValueChange,
             placeholder = { Text(label) }, enabled = enabled, singleLine = true,
-            readOnly = !editing, isError = isError, supportingText = supportingText,
+            readOnly = !editing, isError = isError,
             modifier = Modifier.weight(1f).semantics { contentDescription = label }.border(if (fieldFocused) 3.dp else 0.dp,
                 if (fieldFocused) Color.White else Color.Transparent, RoundedCornerShape(8.dp)).onFocusChanged {
                 fieldFocused = it.isFocused
@@ -83,5 +84,11 @@ internal fun AccountCredentialField(
             Icon(if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                 if (visible) "Hide $label" else "Show $label", modifier = Modifier.size(22.dp))
         }
+      }
+      if (supportingText != null) Box(Modifier.padding(start = 16.dp, top = 4.dp)) {
+          CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) {
+              supportingText()
+          }
+      }
     }
 }

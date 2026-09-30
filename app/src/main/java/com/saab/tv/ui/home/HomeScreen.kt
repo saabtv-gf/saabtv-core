@@ -24,12 +24,19 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawWithCache
@@ -42,12 +49,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -57,6 +66,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
+import coil.imageLoader
 import coil.request.ImageRequest
 import com.saab.tv.R
 import com.saab.tv.data.model.ProfileEntity
@@ -72,7 +82,9 @@ import com.saab.tv.domain.layoutFor
 import com.saab.tv.ui.components.SaabTvBackground
 import com.saab.tv.ui.components.SaabTvCard
 import com.saab.tv.ui.addons.VoidButton
-import com.saab.tv.ui.addons.VoidDialog
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -115,7 +127,9 @@ fun HomeScreen(
     val actionScope = rememberCoroutineScope()
     val homeContext = LocalContext.current
     var longPressedItem by remember { mutableStateOf<Pair<MetaItem, Boolean>?>(null) }
-    val onMovieLongClick: (MetaItem, Boolean) -> Unit = { item, isContinue ->
+    var longPressedBounds by remember { mutableStateOf(Rect.Zero) }
+    val onMovieLongClick: (MetaItem, Boolean, Rect) -> Unit = { item, isContinue, bounds ->
+        longPressedBounds = bounds
         longPressedItem = item to isContinue
     }
     val isOttScreen = screenNameOverride == "ott"
@@ -324,8 +338,13 @@ fun HomeScreen(
         longPressedItem?.let { (item, isContinue) ->
             var confirmClear by remember(item.id) { mutableStateOf(false) }
             val firstActionRequester = remember(item.id, isContinue, confirmClear) { FocusRequester() }
+            var actionsArmed by remember(item.id, isContinue, confirmClear) { mutableStateOf(false) }
+            var suppressOpeningKeyUp by remember(item.id, isContinue) { mutableStateOf(true) }
             LaunchedEffect(item.id, isContinue, confirmClear) {
-                delay(60)
+                // A held OK key must be released before an action can receive focus.
+                delay(if (confirmClear) 40 else 450)
+                actionsArmed = true
+                delay(30)
                 runCatching { firstActionRequester.requestFocus() }
             }
             val profileId = currentProfile?.id ?: 1
@@ -345,14 +364,50 @@ fun HomeScreen(
                     viewModel.cachedPauseFrame(profileId, it.id, it.position, currentProfile?.seekThumbnailIntervalSeconds ?: 30)
                 }
             }
-            VoidDialog(onDismissRequest = { longPressedItem = null }, title = item.name) {
+            val density = LocalDensity.current
+            val screen = LocalConfiguration.current
+            val popupWidthPx = with(density) { 360.dp.roundToPx() }
+            val popupHeightPx = with(density) {
+                (if (isContinue && pausedFrame != null) 270.dp else if (isContinue) 175.dp else 140.dp).roundToPx()
+            }
+            val marginPx = with(density) { 12.dp.roundToPx() }
+            val screenWidthPx = with(density) { screen.screenWidthDp.dp.roundToPx() }
+            val screenHeightPx = with(density) { screen.screenHeightDp.dp.roundToPx() }
+            val popupX = (longPressedBounds.center.x.toInt() - popupWidthPx / 2)
+                .coerceIn(marginPx, (screenWidthPx - popupWidthPx - marginPx).coerceAtLeast(marginPx))
+            val popupY = if (longPressedBounds.top.toInt() >= popupHeightPx + marginPx) {
+                longPressedBounds.top.toInt() - popupHeightPx - marginPx
+            } else {
+                longPressedBounds.bottom.toInt() + marginPx
+            }.coerceIn(marginPx, (screenHeightPx - popupHeightPx - marginPx).coerceAtLeast(marginPx))
+            Popup(alignment = Alignment.TopStart, offset = IntOffset(popupX, popupY),
+                onDismissRequest = { longPressedItem = null }, properties = PopupProperties(focusable = true)) {
+              Column(
+                  Modifier.width(360.dp)
+                      .onPreviewKeyEvent { event ->
+                          if (suppressOpeningKeyUp && event.type == KeyEventType.KeyUp &&
+                              (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
+                              suppressOpeningKeyUp = false
+                              true
+                          } else false
+                      }
+                      .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+                      .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(16.dp))
+                      .padding(16.dp),
+                  verticalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                Text(item.name, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium, color = Color.White)
                 if (confirmClear) {
-                    Text("Clear the saved playback progress for this title?")
-                    VoidButton("Clear Progress", onClick = {
-                        viewModel.clearContinueProgress(profileId, item)
-                        longPressedItem = null
-                    }, isDestructive = true, focusRequester = firstActionRequester)
-                    VoidButton("Cancel", onClick = { confirmClear = false })
+                    Text("Clear saved progress?", style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CardActionIcon(Icons.Default.Delete, "Clear Progress", {
+                            viewModel.clearContinueProgress(profileId, item)
+                            longPressedItem = null
+                        }, Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
+                        CardActionIcon(Icons.Default.Close, "Cancel", { confirmClear = false },
+                            Modifier.weight(1f), enabled = actionsArmed)
+                    }
                 } else if (isContinue) {
                     if (item.type == "series") {
                         val parts = historyEntry?.id?.split(":").orEmpty()
@@ -362,15 +417,20 @@ fun HomeScreen(
                     }
                     historyEntry?.let {
                         val remainingMs = (it.duration - it.position).coerceAtLeast(0L)
-                        Text("${remainingMs / 60_000} min remaining")
+                        Text("${remainingMs / 60_000} min remaining", style = MaterialTheme.typography.bodySmall)
                     }
                     pausedFrame?.let { bitmap ->
-                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Paused scene", modifier = Modifier.fillMaxWidth().height(150.dp), contentScale = ContentScale.Fit)
+                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Paused scene", modifier = Modifier.fillMaxWidth().height(110.dp), contentScale = ContentScale.Fit)
                     }
-                    VoidButton("Resume", onClick = { longPressedItem = null; onContinueClick(item) }, isPrimary = true, focusRequester = firstActionRequester)
-                    VoidButton("Clear Progress", onClick = { confirmClear = true }, isDestructive = true)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CardActionIcon(Icons.Default.PlayArrow, "Resume", { longPressedItem = null; onContinueClick(item) },
+                            Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
+                        CardActionIcon(Icons.Default.Delete, "Clear Progress", { confirmClear = true },
+                            Modifier.weight(1f), enabled = actionsArmed)
+                    }
                 } else {
-                    VoidButton("Watch Trailer", onClick = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CardActionIcon(Icons.Default.Theaters, "Watch Trailer", onClick = {
                         actionScope.launch {
                             val trailer = try {
                                 viewModel.trailerFor(item)
@@ -383,19 +443,54 @@ fun HomeScreen(
                             else android.widget.Toast.makeText(homeContext, "No trailer available", android.widget.Toast.LENGTH_SHORT).show()
                         }
                         longPressedItem = null
-                    }, isPrimary = true, focusRequester = firstActionRequester)
+                    }, modifier = Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
                     watchlisted?.let { saved ->
-                        VoidButton(if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
+                        CardActionIcon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                            if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
                             viewModel.toggleWatchlist(profileId, item)
                             longPressedItem = null
-                        })
+                        }, modifier = Modifier.weight(1f), enabled = actionsArmed)
+                    }
                     }
                 }
+              }
             }
         }
         } // CompositionLocalProvider
     }
 }
+}
+
+@Composable
+private fun CardActionIcon(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean,
+    focusRequester: FocusRequester? = null
+) {
+    var focused by remember { mutableStateOf(false) }
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .height(52.dp)
+            .onFocusChanged { focused = it.isFocused },
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            if (focused) 3.dp else 1.dp,
+            if (focused) Color.White else Color.White.copy(alpha = 0.3f)
+        ),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+        ),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Icon(icon, contentDescription = description)
+    }
 }
 
 @Composable
@@ -445,7 +540,7 @@ fun CinematicLayout(
     state: HomeViewModel.HomeState,
     onMovieClick: (MetaItem) -> Unit,
     onContinueClick: (MetaItem) -> Unit,
-    onMovieLongClick: (MetaItem, Boolean) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean, Rect) -> Unit,
     onViewMore: (String, List<MetaItem>, String) -> Unit,
     onHubClick: (com.saab.tv.domain.HubItem) -> Unit,
     onLoadMore: (String) -> Unit,
@@ -531,7 +626,6 @@ fun CinematicLayout(
 
     LaunchedEffect(instantFocusItem) {
         val target = instantFocusItem ?: return@LaunchedEffect
-        delay(160)
         displayedItem = target
     }
 
@@ -1083,7 +1177,7 @@ fun SimpleLayout(
     heroAutoScrollSeconds: Int = 0,
     onMovieClick: (MetaItem) -> Unit,
     onContinueClick: (MetaItem) -> Unit,
-    onMovieLongClick: (MetaItem, Boolean) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean, Rect) -> Unit,
     onViewMore: (String, List<MetaItem>, String) -> Unit,
     onHubClick: (com.saab.tv.domain.HubItem) -> Unit,
     onLoadMore: (String) -> Unit,
@@ -1471,6 +1565,25 @@ private fun PersistLazyListPosition(
 fun CinematicBackground(item: MetaItem?) {
     // Use the theme's actual background color
     val backgroundColor = androidx.compose.material3.MaterialTheme.colorScheme.background
+    val context = LocalContext.current
+    var readyImage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(item?.background, item?.poster) {
+        val next = item ?: return@LaunchedEffect
+        val url = next.background ?: next.poster
+        if (!url.isNullOrBlank()) {
+            try {
+                context.imageLoader.execute(
+                    ImageRequest.Builder(context).data(url).size(1280, 720)
+                        .memoryCacheKey(url).build()
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Keep navigation responsive even when backdrop artwork is unavailable.
+            }
+        }
+        readyImage = url
+    }
     
     // Only fade LEFT and BOTTOM edges - top/right are at screen edge
     val leftFade = Brush.horizontalGradient(
@@ -1508,18 +1621,17 @@ fun CinematicBackground(item: MetaItem?) {
     Box(modifier = Modifier.fillMaxSize().zIndex(0f)) {
         Box(modifier = Modifier.align(Alignment.TopEnd).fillMaxWidth(0.65f).fillMaxHeight(0.65f)) {
             Crossfade(
-                targetState = item, 
-                animationSpec = tween(420),
+                targetState = readyImage,
+                animationSpec = tween(700),
                 label = "HeroBg"
-            ) { currentItem ->
-                if (currentItem != null) {
-                    val image = currentItem.background ?: currentItem.poster
-                    val context = LocalContext.current
+            ) { image ->
+                if (image != null) {
                     val imageRequest = remember(image) {
                         ImageRequest.Builder(context)
                             .data(image)
-                            .crossfade(false)
-                            .size(1920, 1080)
+                            .crossfade(true)
+                            .size(1280, 720)
+                            .memoryCacheKey(image)
                             .build()
                     }
 

@@ -27,6 +27,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -77,10 +79,11 @@ fun SaabTvLandscapeCard(
     progress: Float = 0f,
     hasNewEpisode: Boolean = false,
     onFocused: (() -> Unit)? = null,
-    onLongClick: (() -> Unit)? = null
+    onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
     var longPressHandled by remember { mutableStateOf(false) }
+    val cardCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     val roundCorners = LocalRoundCorners.current
 
     val cardShape = if (roundCorners) RoundedCornerShape(12.dp) else RectangleShape
@@ -90,6 +93,7 @@ fun SaabTvLandscapeCard(
         modifier = modifier
             .width(190.dp)
             .aspectRatio(16f / 9f)
+            .onGloballyPositioned { cardCoordinates[0] = it }
             .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
     ) {
@@ -100,7 +104,7 @@ fun SaabTvLandscapeCard(
                 .onPreviewKeyEvent { event ->
                     if (onLongClick == null || (event.key != Key.Enter && event.key != Key.DirectionCenter)) false
                     else if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
-                        if (!longPressHandled) onLongClick()
+                        if (!longPressHandled) onLongClick(cardCoordinates[0]?.boundsInWindow() ?: androidx.compose.ui.geometry.Rect.Zero)
                         longPressHandled = true
                         true
                     } else if (event.type == KeyEventType.KeyUp && longPressHandled) {
@@ -111,6 +115,7 @@ fun SaabTvLandscapeCard(
                 .cardFocusSound()
                 .onFocusChanged {
                     isFocused = it.isFocused
+                    if (!it.isFocused) longPressHandled = false
                     if (it.isFocused) onFocused?.invoke()
                 },
             shape = ClickableSurfaceDefaults.shape(

@@ -19,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,8 +27,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.navigation.NavType
@@ -38,10 +41,13 @@ import androidx.navigation.navArgument
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import coil.compose.AsyncImage
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -1090,7 +1096,7 @@ class MainActivity : ComponentActivity() {
                                                                 selectedPlaybackTitle = movie.name
                                                                 autoResumeFromContinue = true
                                                                 previousView = "menu"
-                                                                activeView = "details"
+                                                                activeView = "resume"
                                                             },
                                                             onTrailerClick = { youtubeKey, trailerName ->
                                                                 YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
@@ -1254,7 +1260,7 @@ class MainActivity : ComponentActivity() {
                                                                 selectedPlaybackTitle = movie.name
                                                                 autoResumeFromContinue = true
                                                                 previousView = "menu"
-                                                                activeView = "details"
+                                                                activeView = "resume"
                                                             },
                                                             onTrailerClick = { youtubeKey, trailerName ->
                                                                 YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
@@ -1413,7 +1419,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
-                        } else if (view == "details" || (view == "player" && selectedPlaybackId.startsWith("trailer_"))) {
+                        } else if (view == "details" || view == "resume" || (view == "player" && selectedPlaybackId.startsWith("trailer_"))) {
                             val detailsNavController = rememberNavController()
                             val startRoute = "detail/${java.net.URLEncoder.encode(selectedMovieType, "UTF-8")}/${java.net.URLEncoder.encode(selectedMovieId, "UTF-8")}?addon=${java.net.URLEncoder.encode(selectedAddonBaseUrl ?: "", "UTF-8")}&resume=${java.net.URLEncoder.encode(detailsResumePlaybackHint ?: "", "UTF-8")}"
 
@@ -1544,6 +1550,7 @@ class MainActivity : ComponentActivity() {
                             NavHost(
                                 navController = detailsNavController,
                                 startDestination = "detail_start",
+                                modifier = Modifier.alpha(if (view == "resume") 0f else 1f),
                             ) {
                                 composable("detail_start") { }
                                 composable(
@@ -1566,6 +1573,10 @@ class MainActivity : ComponentActivity() {
                                         addonBaseUrl = detailAddon,
                                         resumePlaybackHint = detailResume,
                                         autoStartPlayback = autoResumeFromContinue,
+                                        onAutoResumeNeedsSelection = {
+                                            autoResumeFromContinue = false
+                                            activeView = "details"
+                                        },
                                         autoSelectSource = currentProfile?.autoSelectSource ?: false,
                                         rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true,
                                         onPosterResolved = { selectedMoviePoster = it },
@@ -1644,6 +1655,22 @@ class MainActivity : ComponentActivity() {
                                             detailsNavController.navigate(route)
                                         }
                                     )
+                                }
+                            }
+                            if (view == "resume") {
+                                Box(Modifier.fillMaxSize().background(Color.Black)) {
+                                    val artwork = selectedMovieBackground.ifBlank { selectedMoviePoster }
+                                    if (artwork.isNotBlank()) AsyncImage(
+                                        model = artwork,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize().alpha(0.28f)
+                                    )
+                                    Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                                        CircularProgressIndicator(Modifier.size(42.dp))
+                                        Text("Opening ${selectedMovieTitle}", style = MaterialTheme.typography.titleLarge)
+                                    }
                                 }
                             }
                         }

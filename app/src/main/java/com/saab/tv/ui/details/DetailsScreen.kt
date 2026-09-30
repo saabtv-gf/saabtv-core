@@ -121,6 +121,7 @@ fun DetailsScreen(
     addonBaseUrl: String? = null,
     resumePlaybackHint: String? = null,
     autoStartPlayback: Boolean = false,
+    onAutoResumeNeedsSelection: () -> Unit = {},
     autoSelectSource: Boolean = false,
     rememberSourceSelection: Boolean = true,
     onPlayClick: (String, String, String, String, String, String, Stream, List<AddonSubtitle>, List<Stream>, List<MetaVideo>) -> Unit,
@@ -245,6 +246,13 @@ fun DetailsScreen(
             pendingPlaybackTitle = readyMovie.name
             viewModel.loadStreams(type, streamId, readyMovie.name,
                 autoSelectSource = true, rememberSourceSelection = rememberSourceSelection)
+        }
+    }
+    LaunchedEffect(autoStartPlayback, autoStartRequested, state.isLoading, state.isLoadingStreams, sidebarState) {
+        if (autoStartPlayback &&
+            ((!state.isLoading && movie == null) ||
+                (autoStartRequested && !state.isLoadingStreams && sidebarState is SidebarState.Sources))) {
+            onAutoResumeNeedsSelection()
         }
     }
 

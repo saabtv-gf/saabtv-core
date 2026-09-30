@@ -32,6 +32,20 @@ object ImagePrefetcher {
     )
     private var lastAroundPrefetchAtMs = 0L
 
+    /** Warm only the nearest hero backdrops; poster requests do not populate this size's cache. */
+    fun prefetchBackdrop(context: Context, url: String?) {
+        if (url.isNullOrBlank() || !shouldEnqueue("backdrop:$url")) return
+        context.imageLoader.enqueue(
+            ImageRequest.Builder(context)
+                .data(url)
+                .size(1280, 720)
+                .memoryCacheKey(url)
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .build()
+        )
+    }
+
     @Synchronized
     private fun shouldEnqueue(url: String): Boolean {
         val now = System.currentTimeMillis()

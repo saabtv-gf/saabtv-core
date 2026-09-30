@@ -89,23 +89,28 @@ private val ITEM_SPACING = 20.dp
 private fun Modifier.coverflowCard(distanceFromFocus: Int): Modifier {
     val side = distanceFromFocus.coerceIn(-2, 2)
     val rotation by animateFloatAsState(
-        targetValue = when { side < 0 -> 17f; side > 0 -> -17f; else -> 0f },
-        animationSpec = tween(210), label = "coverflowRotation"
+        targetValue = when { side < 0 -> 30f; side > 0 -> -30f; else -> 0f },
+        animationSpec = tween(360), label = "coverflowRotation"
     )
     val scale by animateFloatAsState(
-        targetValue = if (side == 0) 1f else if (kotlin.math.abs(side) == 1) 0.91f else 0.84f,
-        animationSpec = tween(210), label = "coverflowScale"
+        targetValue = if (side == 0) 1.04f else if (kotlin.math.abs(side) == 1) 0.82f else 0.72f,
+        animationSpec = tween(360), label = "coverflowScale"
     )
     val opacity by animateFloatAsState(
-        targetValue = if (side == 0) 1f else if (kotlin.math.abs(side) == 1) 0.9f else 0.76f,
-        animationSpec = tween(210), label = "coverflowOpacity"
+        targetValue = if (side == 0) 1f else if (kotlin.math.abs(side) == 1) 0.72f else 0.48f,
+        animationSpec = tween(360), label = "coverflowOpacity"
+    )
+    val shift by animateFloatAsState(
+        targetValue = when { side < 0 -> 18f; side > 0 -> -18f; else -> 0f },
+        animationSpec = tween(360), label = "coverflowShift"
     )
     return this.graphicsLayer {
         rotationY = rotation
         scaleX = scale
         scaleY = scale
         alpha = opacity
-        cameraDistance = 10_000f
+        translationX = shift * density
+        cameraDistance = 2_400f * density
     }
 }
 
@@ -135,7 +140,7 @@ fun InfiniteLoopRow(
     title: String,
     items: List<MetaItem>,
     onMovieClick: (MetaItem) -> Unit,
-    onMovieLongClick: (MetaItem, Boolean) -> Unit = { _, _ -> },
+    onMovieLongClick: (MetaItem, Boolean, androidx.compose.ui.geometry.Rect) -> Unit = { _, _, _ -> },
     onViewMore: () -> Unit,
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
@@ -156,6 +161,12 @@ fun InfiniteLoopRow(
 ) {
     val density = LocalDensity.current
     val paddingPx = remember(density, startPadding) { with(density) { startPadding.toPx() } }
+    val configuration = LocalConfiguration.current
+    val effectiveItemWidth = if (isLandscapeCards) 190.dp else 140.dp
+    val screenWidth = configuration.screenWidthDp.dp
+    val centerPivotPx = remember(density, screenWidth, effectiveItemWidth) {
+        with(density) { ((screenWidth - effectiveItemWidth) / 2).toPx() }
+    }
     
     // Detect if this is a restoration (coming back from details screen)
     // We check if we have a local focus target AND a saved scroll position
@@ -174,9 +185,9 @@ fun InfiniteLoopRow(
     }
     
     // Create pivot spec with skip provider and dynamic stiffness
-    val pivotSpec = remember(paddingPx) { 
+    val pivotSpec = remember(centerPivotPx) {
         FocusPivotSpec(
-            customOffset = paddingPx,
+            customOffset = centerPivotPx,
             skipScrollProvider = { skipBringIntoViewScroll },
             stiffnessProvider = { Spring.StiffnessLow }
         ) 
@@ -184,12 +195,10 @@ fun InfiniteLoopRow(
 
     // Calculate end padding to allow last item to align to left (pivot position)
     // End padding = Screen Width - Start Padding - Item Width
-    val effectiveItemWidth = if (isLandscapeCards) 190.dp else ITEM_WIDTH
-    val configuration = LocalConfiguration.current
-    val screenWidth = configuration.screenWidthDp.dp
     val endPadding = remember(screenWidth, startPadding, effectiveItemWidth) {
-        (screenWidth - startPadding - effectiveItemWidth).coerceAtLeast(120.dp)
+        ((screenWidth - effectiveItemWidth) / 2).coerceAtLeast(120.dp)
     }
+    val cardStartPadding = ((screenWidth - effectiveItemWidth) / 2).coerceAtLeast(startPadding)
 
     // Use external state if provided, otherwise create local state
     val internalListState = rememberLazyListState()
@@ -218,7 +227,18 @@ fun InfiniteLoopRow(
         )
 
         // Stable reference to avoid recomposition from lambda re-allocation
-        val wrappedOnFocused = onFocused
+        val context = LocalContext.current
+        val wrappedOnFocused: (MetaItem?, String) -> Unit = { focused, key ->
+            val focusedIndex = items.indexOfFirst { it.id == focused?.id && it.type == focused?.type }
+            if (focusedIndex >= 0) {
+                for (nearby in (focusedIndex - 1).coerceAtLeast(0)..(focusedIndex + 1).coerceAtMost(items.lastIndex)) {
+                    val nearbyItem = items[nearby]
+                    ImagePrefetcher.prefetchBackdrop(context,
+                        enrichedItems["${nearbyItem.type}:${nearbyItem.id}"]?.background ?: nearbyItem.background)
+                }
+            }
+            onFocused(focused, key)
+        }
         
         when {
             // CASE A: Grid View OFF - Standard linear list
@@ -227,7 +247,7 @@ fun InfiniteLoopRow(
                 CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
                     LinearContent(
                         listState = listState,
-                        startPadding = startPadding,
+                        startPadding = cardStartPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
@@ -257,7 +277,7 @@ fun InfiniteLoopRow(
                 CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
                     InfiniteGridContent(
                         listState = listState,
-                        startPadding = startPadding,
+                        startPadding = cardStartPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
@@ -286,7 +306,7 @@ fun InfiniteLoopRow(
                 CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
                     FiniteGridContent(
                         listState = listState,
-                        startPadding = startPadding,
+                        startPadding = cardStartPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
@@ -331,7 +351,7 @@ private fun LinearContent(
     rowIndex: Int,
     items: List<MetaItem>,
     onMovieClick: (MetaItem) -> Unit,
-    onMovieLongClick: (MetaItem, Boolean) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean, androidx.compose.ui.geometry.Rect) -> Unit,
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
     drawerRequester: FocusRequester,
@@ -450,7 +470,7 @@ private fun LinearContent(
                         logoUrl = enriched?.logo,
                         posterUrl = item.poster,
                         onClick = { onMovieClick(item) },
-                        onLongClick = { onMovieLongClick(item, rowIndex == -1) },
+                        onLongClick = { bounds -> onMovieLongClick(item, rowIndex == -1, bounds) },
                         progress = item.progress,
                         hasNewEpisode = item.hasNewEpisode,
                         onFocused = {
@@ -470,7 +490,7 @@ private fun LinearContent(
                         title = item.name,
                         posterUrl = item.poster,
                         onClick = { onMovieClick(item) },
-                        onLongClick = { onMovieLongClick(item, rowIndex == -1) },
+                        onLongClick = { bounds -> onMovieLongClick(item, rowIndex == -1, bounds) },
                         progress = item.progress,
                         isWatched = rowIndex != -1 && item.id in watchedIds,
                         hasNewEpisode = item.hasNewEpisode,
@@ -523,7 +543,7 @@ private fun InfiniteGridContent(
     items: List<MetaItem>,
     visibleItemCount: Int,
     onMovieClick: (MetaItem) -> Unit,
-    onMovieLongClick: (MetaItem, Boolean) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean, androidx.compose.ui.geometry.Rect) -> Unit,
     onViewMore: () -> Unit,
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
@@ -686,7 +706,7 @@ private fun InfiniteGridContent(
                             title = item.movie.name,
                             posterUrl = item.movie.poster,
                             onClick = { onMovieClick(item.movie) },
-                            onLongClick = { onMovieLongClick(item.movie, rowIndex == -1) },
+                            onLongClick = { bounds -> onMovieLongClick(item.movie, rowIndex == -1, bounds) },
                             progress = item.movie.progress,
                             isWatched = rowIndex != -1 && item.movie.id in watchedIds,
                             onFocused = {
@@ -766,7 +786,7 @@ private fun FiniteGridContent(
     items: List<MetaItem>,
     visibleItemCount: Int,
     onMovieClick: (MetaItem) -> Unit,
-    onMovieLongClick: (MetaItem, Boolean) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean, androidx.compose.ui.geometry.Rect) -> Unit,
     onViewMore: () -> Unit,
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
@@ -888,7 +908,7 @@ private fun FiniteGridContent(
                             title = item.movie.name,
                             posterUrl = item.movie.poster,
                             onClick = { onMovieClick(item.movie) },
-                            onLongClick = { onMovieLongClick(item.movie, rowIndex == -1) },
+                            onLongClick = { bounds -> onMovieLongClick(item.movie, rowIndex == -1, bounds) },
                             progress = item.movie.progress,
                             isWatched = rowIndex != -1 && item.movie.id in watchedIds,
                             onFocused = {

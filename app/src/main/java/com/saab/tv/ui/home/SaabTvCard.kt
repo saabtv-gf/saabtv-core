@@ -27,6 +27,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -73,10 +75,11 @@ fun SaabTvCard(
     isWatched: Boolean = false,
     hasNewEpisode: Boolean = false,
     onFocused: (() -> Unit)? = null,
-    onLongClick: (() -> Unit)? = null
+    onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
     var longPressHandled by remember { mutableStateOf(false) }
+    val cardCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     val roundCorners = LocalRoundCorners.current
     
     // Shape based on user preference
@@ -87,6 +90,7 @@ fun SaabTvCard(
         modifier = modifier
             .width(140.dp)
             .aspectRatio(2f / 3f)
+            .onGloballyPositioned { cardCoordinates[0] = it }
             .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
     ) {
@@ -97,7 +101,7 @@ fun SaabTvCard(
                 .onPreviewKeyEvent { event ->
                     if (onLongClick == null || (event.key != Key.Enter && event.key != Key.DirectionCenter)) false
                     else if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
-                        if (!longPressHandled) onLongClick()
+                        if (!longPressHandled) onLongClick(cardCoordinates[0]?.boundsInWindow() ?: androidx.compose.ui.geometry.Rect.Zero)
                         longPressHandled = true
                         true
                     } else if (event.type == KeyEventType.KeyUp && longPressHandled) {
@@ -108,6 +112,7 @@ fun SaabTvCard(
                 .cardFocusSound()
                 .onFocusChanged {
                     isFocused = it.isFocused
+                    if (!it.isFocused) longPressHandled = false
                     if (it.isFocused) onFocused?.invoke()
                 },
             shape = ClickableSurfaceDefaults.shape(
