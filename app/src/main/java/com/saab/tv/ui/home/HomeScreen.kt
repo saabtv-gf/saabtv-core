@@ -333,11 +333,15 @@ fun HomeScreen(
                 it.id == item.id || (item.type == "series" && canonicalSeriesId(it.id) == item.id && !it.watched)
             }
             val nextUp = state.seriesNextUp.firstOrNull { it.seriesId == item.id }
-            val watchlisted by produceState<Boolean?>(initialValue = null, item.id, profileId) {
-                value = viewModel.isWatchlisted(profileId, item.id)
+            var watchlisted by remember(item.id, profileId) { mutableStateOf<Boolean?>(null) }
+            LaunchedEffect(item.id, profileId) {
+                watchlisted = viewModel.isWatchlisted(profileId, item.id)
             }
-            val pausedFrame by produceState<android.graphics.Bitmap?>(initialValue = null, historyEntry?.id, historyEntry?.position) {
-                value = historyEntry?.takeIf { !it.watched }?.let {
+            var pausedFrame by remember(historyEntry?.id, historyEntry?.position) {
+                mutableStateOf<android.graphics.Bitmap?>(null)
+            }
+            LaunchedEffect(historyEntry?.id, historyEntry?.position, profileId) {
+                pausedFrame = historyEntry?.takeIf { !it.watched }?.let {
                     viewModel.cachedPauseFrame(profileId, it.id, it.position, currentProfile?.seekThumbnailIntervalSeconds ?: 30)
                 }
             }
