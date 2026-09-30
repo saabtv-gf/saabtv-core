@@ -2,7 +2,6 @@ package com.saab.tv.ui.home
 
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -81,38 +80,8 @@ import kotlinx.coroutines.delay
  * ============================================================================
  */
 
-private val ITEM_WIDTH = 120.dp
+private val ITEM_WIDTH = 140.dp
 private val ITEM_SPACING = 20.dp
-
-/** Lightweight TV-native coverflow: only visible cards animate when focus changes. */
-@Composable
-private fun Modifier.coverflowCard(distanceFromFocus: Int): Modifier {
-    val side = distanceFromFocus.coerceIn(-2, 2)
-    val rotation by animateFloatAsState(
-        targetValue = when { side < 0 -> 30f; side > 0 -> -30f; else -> 0f },
-        animationSpec = tween(360), label = "coverflowRotation"
-    )
-    val scale by animateFloatAsState(
-        targetValue = if (side == 0) 1.04f else if (kotlin.math.abs(side) == 1) 0.82f else 0.72f,
-        animationSpec = tween(360), label = "coverflowScale"
-    )
-    val opacity by animateFloatAsState(
-        targetValue = if (side == 0) 1f else if (kotlin.math.abs(side) == 1) 0.72f else 0.48f,
-        animationSpec = tween(360), label = "coverflowOpacity"
-    )
-    val shift by animateFloatAsState(
-        targetValue = when { side < 0 -> 18f; side > 0 -> -18f; else -> 0f },
-        animationSpec = tween(360), label = "coverflowShift"
-    )
-    return this.graphicsLayer {
-        rotationY = rotation
-        scaleX = scale
-        scaleY = scale
-        alpha = opacity
-        translationX = shift * density
-        cameraDistance = 2_400f * density
-    }
-}
 
 private fun FocusRequester.requestFocusSafely() {
     runCatching { requestFocus() }
@@ -164,9 +133,6 @@ fun InfiniteLoopRow(
     val configuration = LocalConfiguration.current
     val effectiveItemWidth = if (isLandscapeCards) 190.dp else 140.dp
     val screenWidth = configuration.screenWidthDp.dp
-    val centerPivotPx = remember(density, screenWidth, effectiveItemWidth) {
-        with(density) { ((screenWidth - effectiveItemWidth) / 2).toPx() }
-    }
     
     // Detect if this is a restoration (coming back from details screen)
     // We check if we have a local focus target AND a saved scroll position
@@ -185,9 +151,9 @@ fun InfiniteLoopRow(
     }
     
     // Create pivot spec with skip provider and dynamic stiffness
-    val pivotSpec = remember(centerPivotPx) {
+    val pivotSpec = remember(paddingPx) {
         FocusPivotSpec(
-            customOffset = centerPivotPx,
+            customOffset = paddingPx,
             skipScrollProvider = { skipBringIntoViewScroll },
             stiffnessProvider = { Spring.StiffnessLow }
         ) 
@@ -196,9 +162,8 @@ fun InfiniteLoopRow(
     // Calculate end padding to allow last item to align to left (pivot position)
     // End padding = Screen Width - Start Padding - Item Width
     val endPadding = remember(screenWidth, startPadding, effectiveItemWidth) {
-        ((screenWidth - effectiveItemWidth) / 2).coerceAtLeast(120.dp)
+        (screenWidth - startPadding - effectiveItemWidth).coerceAtLeast(120.dp)
     }
-    val cardStartPadding = ((screenWidth - effectiveItemWidth) / 2).coerceAtLeast(startPadding)
 
     // Use external state if provided, otherwise create local state
     val internalListState = rememberLazyListState()
@@ -247,7 +212,7 @@ fun InfiniteLoopRow(
                 CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
                     LinearContent(
                         listState = listState,
-                        startPadding = cardStartPadding,
+                        startPadding = startPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
@@ -277,7 +242,7 @@ fun InfiniteLoopRow(
                 CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
                     InfiniteGridContent(
                         listState = listState,
-                        startPadding = cardStartPadding,
+                        startPadding = startPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
@@ -306,7 +271,7 @@ fun InfiniteLoopRow(
                 CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
                     FiniteGridContent(
                         listState = listState,
-                        startPadding = cardStartPadding,
+                        startPadding = startPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
@@ -367,8 +332,6 @@ private fun LinearContent(
     effectiveItemWidth: Dp = ITEM_WIDTH
 ) {
     val context = LocalContext.current
-    var currentFocusedIndex by remember(listState) { mutableIntStateOf(listState.firstVisibleItemIndex) }
-
     // Prefetch image URLs list (cached to avoid allocation during scroll)
     val imageUrls = remember(items, isLandscapeCards, enrichedItems) {
         if (isLandscapeCards) {
@@ -474,11 +437,10 @@ private fun LinearContent(
                         progress = item.progress,
                         hasNewEpisode = item.hasNewEpisode,
                         onFocused = {
-                            currentFocusedIndex = index
                             ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index)
                             onFocused(item, uniqueKey)
                         },
-                        modifier = Modifier.coverflowCard(index - currentFocusedIndex).then(
+                        modifier = Modifier.then(
                             if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                             else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                             else Modifier
@@ -495,11 +457,10 @@ private fun LinearContent(
                         isWatched = rowIndex != -1 && item.id in watchedIds,
                         hasNewEpisode = item.hasNewEpisode,
                         onFocused = {
-                            currentFocusedIndex = index
                             ImagePrefetcher.prefetchAround(context, imageUrls, index)
                             onFocused(item, uniqueKey)
                         },
-                        modifier = Modifier.coverflowCard(index - currentFocusedIndex).then(
+                        modifier = Modifier.then(
                             if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                             else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                             else Modifier
@@ -717,7 +678,7 @@ private fun InfiniteGridContent(
                                 }
                                 onFocused(item.movie, uniqueKey)
                             },
-                            modifier = Modifier.coverflowCard(scrollIndex - currentFocusedIndex).then(
+                            modifier = Modifier.then(
                                 if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                                 else if (pivotFocusRequester != null && scrollIndex == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                                 else Modifier
@@ -800,8 +761,6 @@ private fun FiniteGridContent(
     pivotFocusRequester: FocusRequester? = null
 ) {
     val context = LocalContext.current
-    var currentFocusedIndex by remember(listState) { mutableIntStateOf(listState.firstVisibleItemIndex) }
-    
     val truncatedMovies = remember(items, visibleItemCount) { 
         items.take(visibleItemCount.coerceIn(5, 50)) 
     }
@@ -912,11 +871,10 @@ private fun FiniteGridContent(
                             progress = item.movie.progress,
                             isWatched = rowIndex != -1 && item.movie.id in watchedIds,
                             onFocused = {
-                                currentFocusedIndex = index
                                 ImagePrefetcher.prefetchAround(context, imageUrls, index)
                                 onFocused(item.movie, uniqueKey)
                             },
-                            modifier = Modifier.coverflowCard(index - currentFocusedIndex).then(
+                            modifier = Modifier.then(
                                 if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                                 else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                                 else Modifier

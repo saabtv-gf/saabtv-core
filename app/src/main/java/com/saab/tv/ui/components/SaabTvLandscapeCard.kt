@@ -1,5 +1,7 @@
 package com.saab.tv.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -82,6 +84,7 @@ fun SaabTvLandscapeCard(
     onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val focusLift by animateFloatAsState(if (isFocused) -4f else 0f, tween(170), label = "landscapeFocusLift")
     var longPressHandled by remember { mutableStateOf(false) }
     val cardCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     val roundCorners = LocalRoundCorners.current
@@ -95,7 +98,7 @@ fun SaabTvLandscapeCard(
             .aspectRatio(16f / 9f)
             .onGloballyPositioned { cardCoordinates[0] = it }
             .zIndex(if (isFocused) 10f else 0f)
-            .graphicsLayer { clip = false }
+            .graphicsLayer { clip = false; translationY = focusLift * density }
     ) {
         Surface(
             onClick = onClick,

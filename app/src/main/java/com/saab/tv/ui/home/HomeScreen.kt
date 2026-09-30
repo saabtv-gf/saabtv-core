@@ -4,11 +4,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -341,11 +341,14 @@ fun HomeScreen(
             var actionsArmed by remember(item.id, isContinue, confirmClear) { mutableStateOf(false) }
             var suppressOpeningKeyUp by remember(item.id, isContinue) { mutableStateOf(true) }
             LaunchedEffect(item.id, isContinue, confirmClear) {
-                // A held OK key must be released before an action can receive focus.
-                delay(if (confirmClear) 40 else 450)
-                actionsArmed = true
-                delay(30)
+                // Focus an enabled icon; disabling every icon made focus requests fail on TV.
+                delay(80)
                 runCatching { firstActionRequester.requestFocus() }
+                if (confirmClear) actionsArmed = true
+                else {
+                    delay(420)
+                    actionsArmed = true // Key-up may still be delivered to the original card.
+                }
             }
             val profileId = currentProfile?.id ?: 1
             val historyEntry = state.history.firstOrNull {
@@ -388,6 +391,7 @@ fun HomeScreen(
                           if (suppressOpeningKeyUp && event.type == KeyEventType.KeyUp &&
                               (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
                               suppressOpeningKeyUp = false
+                              actionsArmed = true
                               true
                           } else false
                       }
@@ -417,7 +421,7 @@ fun HomeScreen(
                     }
                     historyEntry?.let {
                         val remainingMs = (it.duration - it.position).coerceAtLeast(0L)
-                        Text("${remainingMs / 60_000} min remaining", style = MaterialTheme.typography.bodySmall)
+                        Text("${remainingMs / 60_000} min remaining", style = MaterialTheme.typography.bodySmall, color = Color.White)
                     }
                     pausedFrame?.let { bitmap ->
                         Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Paused scene", modifier = Modifier.fillMaxWidth().height(110.dp), contentScale = ContentScale.Fit)
@@ -472,8 +476,8 @@ private fun CardActionIcon(
 ) {
     var focused by remember { mutableStateOf(false) }
     Button(
-        onClick = onClick,
-        enabled = enabled,
+        onClick = { if (enabled) onClick() },
+        enabled = true,
         modifier = modifier
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .height(52.dp)
@@ -1620,9 +1624,12 @@ fun CinematicBackground(item: MetaItem?) {
 
     Box(modifier = Modifier.fillMaxSize().zIndex(0f)) {
         Box(modifier = Modifier.align(Alignment.TopEnd).fillMaxWidth(0.65f).fillMaxHeight(0.65f)) {
-            Crossfade(
+            AnimatedContent(
                 targetState = readyImage,
-                animationSpec = tween(700),
+                transitionSpec = {
+                    (fadeIn(tween(620)) + slideInHorizontally(tween(620), initialOffsetX = { it / 20 }))
+                        .togetherWith(fadeOut(tween(620)))
+                },
                 label = "HeroBg"
             ) { image ->
                 if (image != null) {
