@@ -6,6 +6,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.local.AddonDao
 import com.saab.tv.data.model.WatchHistoryEntity
+import com.saab.tv.data.model.WatchlistEntity
+import com.saab.tv.data.cache.SeekThumbnailCache
+import com.saab.tv.data.account.AccountSyncManager
+import com.saab.tv.data.player.SourceSelectionStore
+import com.saab.tv.data.player.PlaybackTrackSelectionStore
+import com.saab.tv.data.trakt.TraktSyncManager
 import com.saab.tv.data.ott.OttCatalogException
 import com.saab.tv.data.ott.OttCatalogRepository
 import com.saab.tv.data.repository.AddonRepository
@@ -40,8 +46,71 @@ class HomeViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val tmdbService: TmdbService,
     private val tmdbMetadataService: TmdbMetadataService,
-    private val ottCatalogRepository: OttCatalogRepository
+    private val ottCatalogRepository: OttCatalogRepository,
+    private val seekThumbnailCache: SeekThumbnailCache,
+    private val accountSync: AccountSyncManager,
+    private val sourceSelectionStore: SourceSelectionStore,
+    private val playbackTrackSelectionStore: PlaybackTrackSelectionStore,
+    private val traktSyncManager: TraktSyncManager
 ) : ViewModel() {
+
+    suspend fun isWatchlisted(profileId: Int, id: String): Boolean = dao.isInWatchlist(profileId, id)
+
+    fun toggleWatchlist(profileId: Int, item: MetaItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (dao.isInWatchlist(profileId, item.id)) dao.removeFromWatchlist(profileId, item.id)
+            else dao.addToWatchlist(WatchlistEntity(profileId, item.id, item.type, item.name, item.poster, System.currentTimeMillis()))
+            accountSync.historyChanged(urgent = true)
+        }
+    }
+
+    fun clearContinueProgress(profileId: Int, item: MetaItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val existing = if (item.type == "series") dao.getSeriesEpisodeHistory("${item.id}:%")
+                else listOfNotNull(dao.getHistoryItemForProfile(profileId, item.id))
+            if (item.type == "series") {
+                dao.deleteSeriesHistory("${item.id}:%")
+                dao.deleteHistoryItem(item.id)
+                dao.deleteSeriesNextUp(item.id)
+                sourceSelectionStore.clearSelectionsForPrefix(item.id)
+                playbackTrackSelectionStore.clearSelectionsForPrefix(item.id)
+                seekThumbnailCache.clearContentPrefix(profileId, item.id)
+            } else {
+                dao.deleteHistoryItem(item.id)
+                sourceSelectionStore.clearSelection(item.id)
+                playbackTrackSelectionStore.clearSelection(item.id)
+                seekThumbnailCache.clearContent(profileId, item.id)
+            }
+            existing.filter { it.scrobbled }.forEach { traktSyncManager.deletePlaybackFromTrakt(it.id) }
+            existing.filter { it.watched && it.type == "series" }.forEach { entry ->
+                val parts = entry.id.split(":")
+                val hasStreamIndex = parts.size >= 4 && parts.lastOrNull()?.toIntOrNull() != null
+                val season = parts.getOrNull(parts.size - if (hasStreamIndex) 3 else 2)?.toIntOrNull()
+                val episode = parts.getOrNull(parts.size - if (hasStreamIndex) 2 else 1)?.toIntOrNull()
+                if (season != null && episode != null) traktSyncManager.pushEpisodeUnwatched(item.id, season, episode)
+            }
+            accountSync.historyChanged(urgent = true)
+        }
+    }
+
+    suspend fun cachedPauseFrame(profileId: Int, contentId: String, positionMs: Long, intervalSeconds: Int) =
+        seekThumbnailCache.loadNearest(profileId, contentId, positionMs, intervalSeconds)
+
+    suspend fun trailerFor(item: MetaItem): Pair<String, String>? {
+        val details = repository.resolveMetaDetails(item.type, item.id, item.addonBaseUrl)
+        val streamTrailer = details?.trailerStreams.orEmpty().firstOrNull {
+            !it.ytId.isNullOrBlank() || !it.externalUrl.isNullOrBlank() || !it.url.isNullOrBlank()
+        }
+        val streamKey = streamTrailer?.ytId ?: streamTrailer?.externalUrl ?: streamTrailer?.url
+        if (!streamKey.isNullOrBlank()) return streamKey to (streamTrailer?.title ?: "${item.name} Trailer")
+        val legacyTrailer = details?.trailers.orEmpty().firstOrNull {
+            it.type.equals("Trailer", ignoreCase = true) && !it.source.isNullOrBlank()
+        }
+        legacyTrailer?.source?.takeIf { it.isNotBlank() }?.let { return it to "${item.name} Trailer" }
+        val tmdbId = tmdbService.ensureTmdbId(item.id, item.type) ?: return null
+        val trailer = tmdbMetadataService.fetchBestTrailerKey(tmdbId, item.type) ?: return null
+        return trailer.key to trailer.name
+    }
 
     private var loadJob: Job? = null
     private var screenGeneration = 0L

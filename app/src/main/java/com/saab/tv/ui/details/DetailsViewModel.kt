@@ -434,6 +434,9 @@ class DetailsViewModel @Inject constructor(
         } else {
             // All local episodes watched — mark as complete locally.
             // If Trakt knows about a future episode, syncSeriesNextUp will correct this.
+            activeProfileId.value?.let { profileId ->
+                dao.removeFromWatchlist(profileId, seriesId)
+            }
             val alreadyComplete = existing?.isComplete == true
             dao.upsertSeriesNextUp(
                 SeriesNextUpEntity(
@@ -663,6 +666,9 @@ class DetailsViewModel @Inject constructor(
                         scrobbled = true
                     )
                 )
+                activeProfileId.value?.let { profileId ->
+                    dao.removeFromWatchlist(profileId, itemId)
+                }
                 accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushMovieWatched(itemId)
             }

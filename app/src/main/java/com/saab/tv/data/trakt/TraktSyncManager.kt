@@ -393,6 +393,7 @@ class TraktSyncManager @Inject constructor(
                     if (onTraktWatched) {
                         // Finished on another app → mark as watched locally
                         dao.upsertHistory(local.copy(watched = true))
+                        if (local.type == "movie") dao.getActiveProfileId()?.let { dao.removeFromWatchlist(it, local.id) }
                         clearSeekThumbnails(local.id)
                         markedWatched++
                         Log.d(TAG, "Marked watched (finished elsewhere): ${local.title}")
@@ -498,6 +499,7 @@ class TraktSyncManager @Inject constructor(
                             dao.upsertHistory(existing.copy(watched = true))
                             clearSeekThumbnails(imdbId)
                         }
+                        dao.getActiveProfileId()?.let { dao.removeFromWatchlist(it, imdbId) }
                     }
                 }
 

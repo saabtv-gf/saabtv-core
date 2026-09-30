@@ -27,6 +27,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,9 +76,11 @@ fun SaabTvLandscapeCard(
     modifier: Modifier = Modifier,
     progress: Float = 0f,
     hasNewEpisode: Boolean = false,
-    onFocused: (() -> Unit)? = null
+    onFocused: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    var longPressHandled by remember { mutableStateOf(false) }
     val roundCorners = LocalRoundCorners.current
 
     val cardShape = if (roundCorners) RoundedCornerShape(12.dp) else RectangleShape
@@ -90,6 +97,17 @@ fun SaabTvLandscapeCard(
             onClick = onClick,
             modifier = Modifier
                 .fillMaxSize()
+                .onPreviewKeyEvent { event ->
+                    if (onLongClick == null || (event.key != Key.Enter && event.key != Key.DirectionCenter)) false
+                    else if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
+                        if (!longPressHandled) onLongClick()
+                        longPressHandled = true
+                        true
+                    } else if (event.type == KeyEventType.KeyUp && longPressHandled) {
+                        longPressHandled = false
+                        true
+                    } else false
+                }
                 .cardFocusSound()
                 .onFocusChanged {
                     isFocused = it.isFocused
@@ -99,7 +117,7 @@ fun SaabTvLandscapeCard(
                 shape = cardShape,
                 focusedShape = focusedCardShape
             ),
-            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.09f),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = MaterialTheme.colorScheme.surface,
                 focusedContainerColor = MaterialTheme.colorScheme.surface,

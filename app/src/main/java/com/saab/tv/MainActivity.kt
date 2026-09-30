@@ -824,6 +824,7 @@ class MainActivity : ComponentActivity() {
             var selectedMovieLogo by rememberSaveable { mutableStateOf("") }
             var selectedAddonBaseUrl by rememberSaveable { mutableStateOf<String?>(null) }
             var detailsResumePlaybackHint by rememberSaveable { mutableStateOf<String?>(null) }
+            var autoResumeFromContinue by rememberSaveable { mutableStateOf(false) }
             var trailerReturnToken by rememberSaveable { mutableStateOf(0) }
             var showTrailerError by remember { mutableStateOf(false) }
             var showExitConfirmation by rememberSaveable { mutableStateOf(false) }
@@ -1059,6 +1060,7 @@ class MainActivity : ComponentActivity() {
                                                             entryRequester = homeEntryRequester,
                                                             drawerRequester = drawerRequesters[currentNav]!!,
                                                             onMovieClick = { movie ->
+                                                                autoResumeFromContinue = false
                                                                 selectedMovieId = movie.id
                                                                 selectedMovieType = movie.type
                                                                 selectedMovieTitle = movie.name
@@ -1073,6 +1075,25 @@ class MainActivity : ComponentActivity() {
                                                                 selectedPlaybackPoster = movie.poster ?: ""
                                                                 previousView = "menu"
                                                                 activeView = "details"
+                                                            },
+                                                            onContinueClick = { movie ->
+                                                                selectedMovieId = movie.id
+                                                                selectedMovieType = movie.type
+                                                                selectedMovieTitle = movie.name
+                                                                selectedMoviePoster = movie.poster ?: ""
+                                                                selectedMovieBackground = movie.background ?: ""
+                                                                selectedMovieLogo = movie.logo ?: ""
+                                                                selectedAddonBaseUrl = movie.addonBaseUrl
+                                                                detailsResumePlaybackHint = null
+                                                                selectedPlaybackId = movie.id
+                                                                selectedPlaybackType = movie.type
+                                                                selectedPlaybackTitle = movie.name
+                                                                autoResumeFromContinue = true
+                                                                previousView = "menu"
+                                                                activeView = "details"
+                                                            },
+                                                            onTrailerClick = { youtubeKey, trailerName ->
+                                                                YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
                                                             },
                                                             onViewMore = { title, items, configId ->
                                                                 gridViewTitle = title
@@ -1203,6 +1224,7 @@ class MainActivity : ComponentActivity() {
                                                             entryRequester = homeEntryRequester,
                                                             drawerRequester = drawerRequesters[currentNav]!!,
                                                             onMovieClick = { movie ->
+                                                                autoResumeFromContinue = false
                                                                 selectedMovieId = movie.id
                                                                 selectedMovieType = movie.type
                                                                 selectedMovieTitle = movie.name
@@ -1217,6 +1239,25 @@ class MainActivity : ComponentActivity() {
                                                                 selectedPlaybackPoster = movie.poster ?: ""
                                                                 previousView = "menu"
                                                                 activeView = "details"
+                                                            },
+                                                            onContinueClick = { movie ->
+                                                                selectedMovieId = movie.id
+                                                                selectedMovieType = movie.type
+                                                                selectedMovieTitle = movie.name
+                                                                selectedMoviePoster = movie.poster ?: ""
+                                                                selectedMovieBackground = movie.background ?: ""
+                                                                selectedMovieLogo = movie.logo ?: ""
+                                                                selectedAddonBaseUrl = movie.addonBaseUrl
+                                                                detailsResumePlaybackHint = null
+                                                                selectedPlaybackId = movie.id
+                                                                selectedPlaybackType = movie.type
+                                                                selectedPlaybackTitle = movie.name
+                                                                autoResumeFromContinue = true
+                                                                previousView = "menu"
+                                                                activeView = "details"
+                                                            },
+                                                            onTrailerClick = { youtubeKey, trailerName ->
+                                                                YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
                                                             },
                                                             onViewMore = { title, items, configId ->
                                                                 gridViewTitle = title
@@ -1388,6 +1429,7 @@ class MainActivity : ComponentActivity() {
 
                             BackHandler {
                                 if (!detailsNavController.popBackStack()) {
+                                    autoResumeFromContinue = false
                                     activeView = previousView
                                 }
                             }
@@ -1430,6 +1472,7 @@ class MainActivity : ComponentActivity() {
                                         selectedTrailerVariants = emptyList()
                                         selectedVideoUrl = ""
                                         torrentProgress = TorrentProgress("Connecting to peers...")
+                                        autoResumeFromContinue = false
                                         activeView = "player"
                                         startTorrentWithFallback(
                                             selectedStream = stream,
@@ -1481,9 +1524,18 @@ class MainActivity : ComponentActivity() {
                                         playerState.selectedPlayerSources = sourcePayload
                                         selectedVideoUrl = url
                                         when (currentProfile?.playerPreference) {
-                                            "external" -> launchExternalPlayer(this@MainActivity, url)
-                                            "ask" -> playerState.showPlayerChoiceDialog = true
-                                            else -> activeView = "player"
+                                            "external" -> {
+                                                autoResumeFromContinue = false
+                                                launchExternalPlayer(this@MainActivity, url)
+                                            }
+                                            "ask" -> {
+                                                autoResumeFromContinue = false
+                                                playerState.showPlayerChoiceDialog = true
+                                            }
+                                            else -> {
+                                                autoResumeFromContinue = false
+                                                activeView = "player"
+                                            }
                                         }
                                     }
                                 }
@@ -1513,11 +1565,13 @@ class MainActivity : ComponentActivity() {
                                         id = detailId,
                                         addonBaseUrl = detailAddon,
                                         resumePlaybackHint = detailResume,
+                                        autoStartPlayback = autoResumeFromContinue,
                                         autoSelectSource = currentProfile?.autoSelectSource ?: false,
                                         rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true,
                                         onPosterResolved = { selectedMoviePoster = it },
                                         onPlayClick = onPlayClick,
                                         onNavigateToDetails = { navType, navId ->
+                                            autoResumeFromContinue = false
                                             val route = "detail/${java.net.URLEncoder.encode(navType, "UTF-8")}/${java.net.URLEncoder.encode(navId, "UTF-8")}"
                                             detailsNavController.navigate(route)
                                         },

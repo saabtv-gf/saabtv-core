@@ -94,6 +94,9 @@ class PlayerViewModel @Inject constructor(
                     scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
                 )
                 dao.insertHistory(entry)
+                if (entry.watched && entry.type != "series") {
+                    dao.removeFromWatchlist(profileId, id)
+                }
                 accountSync.historyChanged(progressOnly = !syncBoundary,
                     urgent = syncBoundary || (progress.isCompleted && existing?.watched != true))
                 if (progress.isCompleted) {
@@ -141,6 +144,9 @@ class PlayerViewModel @Inject constructor(
                         scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
                     )
                 )
+                if (progress.isCompleted && type != "series") {
+                    dao.removeFromWatchlist(profileId, id)
+                }
                 accountSync.historyChanged(urgent = true)
                 if (progress.isCompleted) {
                     seekThumbnailCache.clearContent(profileId, id)

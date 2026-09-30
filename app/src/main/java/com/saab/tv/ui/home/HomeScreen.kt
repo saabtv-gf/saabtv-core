@@ -38,6 +38,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -70,7 +71,11 @@ import com.saab.tv.domain.heroFor
 import com.saab.tv.domain.layoutFor
 import com.saab.tv.ui.components.SaabTvBackground
 import com.saab.tv.ui.components.SaabTvCard
+import com.saab.tv.ui.addons.VoidButton
+import com.saab.tv.ui.addons.VoidDialog
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 private const val RAPID_VERTICAL_NAV_WINDOW_MS = 220L
 private const val RAPID_PREVIEW_UPDATE_MIN_INTERVAL_MS = 120L
@@ -102,9 +107,17 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
     currentProfile: ProfileEntity?,
     onMovieClick: (MetaItem) -> Unit,
+    onContinueClick: (MetaItem) -> Unit = onMovieClick,
+    onTrailerClick: (String, String) -> Unit = { _, _ -> },
     onViewMore: (String, List<MetaItem>, String) -> Unit = { _, _, _ -> }
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val actionScope = rememberCoroutineScope()
+    val homeContext = LocalContext.current
+    var longPressedItem by remember { mutableStateOf<Pair<MetaItem, Boolean>?>(null) }
+    val onMovieLongClick: (MetaItem, Boolean) -> Unit = { item, isContinue ->
+        longPressedItem = item to isContinue
+    }
     val isOttScreen = screenNameOverride == "ott"
     val ottContentEntryRequester = remember { FocusRequester() }
     val contentEntryRequester = if (isOttScreen) ottContentEntryRequester else entryRequester
@@ -241,6 +254,8 @@ fun HomeScreen(
                     isTopNav = isTopNav,
                     state = state,
                     onMovieClick = onMovieClick,
+                    onContinueClick = onContinueClick,
+                    onMovieLongClick = onMovieLongClick,
                     onViewMore = onViewMore,
                     onHubClick = { hubItem ->
                         viewModel.openHub(hubItem) { title, items ->
@@ -274,6 +289,8 @@ fun HomeScreen(
                     heroItems = heroItems,
                     heroAutoScrollSeconds = heroConfig.autoScrollSeconds,
                     onMovieClick = onMovieClick,
+                    onContinueClick = onContinueClick,
+                    onMovieLongClick = onMovieLongClick,
                     onViewMore = onViewMore,
                     onHubClick = { hubItem ->
                         viewModel.openHub(hubItem) { title, items ->
@@ -302,6 +319,74 @@ fun HomeScreen(
                     },
                     isLandscapeContinueWatching = isLandscapeContinueWatching
                 )
+            }
+        }
+        longPressedItem?.let { (item, isContinue) ->
+            var confirmClear by remember(item.id) { mutableStateOf(false) }
+            val firstActionRequester = remember(item.id, isContinue, confirmClear) { FocusRequester() }
+            LaunchedEffect(item.id, isContinue, confirmClear) {
+                delay(60)
+                runCatching { firstActionRequester.requestFocus() }
+            }
+            val profileId = currentProfile?.id ?: 1
+            val historyEntry = state.history.firstOrNull {
+                it.id == item.id || (item.type == "series" && canonicalSeriesId(it.id) == item.id && !it.watched)
+            }
+            val nextUp = state.seriesNextUp.firstOrNull { it.seriesId == item.id }
+            val watchlisted by produceState<Boolean?>(initialValue = null, item.id, profileId) {
+                value = viewModel.isWatchlisted(profileId, item.id)
+            }
+            val pausedFrame by produceState<android.graphics.Bitmap?>(initialValue = null, historyEntry?.id, historyEntry?.position) {
+                value = historyEntry?.takeIf { !it.watched }?.let {
+                    viewModel.cachedPauseFrame(profileId, it.id, it.position, currentProfile?.seekThumbnailIntervalSeconds ?: 30)
+                }
+            }
+            VoidDialog(onDismissRequest = { longPressedItem = null }, title = item.name) {
+                if (confirmClear) {
+                    Text("Clear the saved playback progress for this title?")
+                    VoidButton("Clear Progress", onClick = {
+                        viewModel.clearContinueProgress(profileId, item)
+                        longPressedItem = null
+                    }, isDestructive = true, focusRequester = firstActionRequester)
+                    VoidButton("Cancel", onClick = { confirmClear = false })
+                } else if (isContinue) {
+                    if (item.type == "series") {
+                        val parts = historyEntry?.id?.split(":").orEmpty()
+                        val season = parts.getOrNull(1)?.toIntOrNull() ?: nextUp?.nextSeason
+                        val episode = parts.getOrNull(2)?.toIntOrNull() ?: nextUp?.nextEpisode
+                        if (season != null && episode != null) Text("Season $season · Episode $episode")
+                    }
+                    historyEntry?.let {
+                        val remainingMs = (it.duration - it.position).coerceAtLeast(0L)
+                        Text("${remainingMs / 60_000} min remaining")
+                    }
+                    pausedFrame?.let { bitmap ->
+                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Paused scene", modifier = Modifier.fillMaxWidth().height(150.dp), contentScale = ContentScale.Fit)
+                    }
+                    VoidButton("Resume", onClick = { longPressedItem = null; onContinueClick(item) }, isPrimary = true, focusRequester = firstActionRequester)
+                    VoidButton("Clear Progress", onClick = { confirmClear = true }, isDestructive = true)
+                } else {
+                    VoidButton("Watch Trailer", onClick = {
+                        actionScope.launch {
+                            val trailer = try {
+                                viewModel.trailerFor(item)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (trailer != null) onTrailerClick(trailer.first, trailer.second)
+                            else android.widget.Toast.makeText(homeContext, "No trailer available", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                        longPressedItem = null
+                    }, isPrimary = true, focusRequester = firstActionRequester)
+                    watchlisted?.let { saved ->
+                        VoidButton(if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
+                            viewModel.toggleWatchlist(profileId, item)
+                            longPressedItem = null
+                        })
+                    }
+                }
             }
         }
         } // CompositionLocalProvider
@@ -355,6 +440,8 @@ fun CinematicLayout(
     isTopNav: Boolean,
     state: HomeViewModel.HomeState,
     onMovieClick: (MetaItem) -> Unit,
+    onContinueClick: (MetaItem) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean) -> Unit,
     onViewMore: (String, List<MetaItem>, String) -> Unit,
     onHubClick: (com.saab.tv.domain.HubItem) -> Unit,
     onLoadMore: (String) -> Unit,
@@ -440,7 +527,7 @@ fun CinematicLayout(
 
     LaunchedEffect(instantFocusItem) {
         val target = instantFocusItem ?: return@LaunchedEffect
-        delay(300)
+        delay(160)
         displayedItem = target
     }
 
@@ -494,12 +581,9 @@ fun CinematicLayout(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Only show background when TMDB enrichment is done (or disabled) to prevent flash
-        val bgItem = if (!state.tmdbEnabled || renderedPreviewItem == null ||
-            state.tmdbEnrichedIds.contains("${renderedPreviewItem.type}:${renderedPreviewItem.id}")) {
-            renderedPreviewItem
-        } else null
-        CinematicBackground(bgItem)
+        // Keep the catalog backdrop visible while optional enrichment arrives;
+        // crossfade to the richer artwork instead of flashing through black.
+        CinematicBackground(renderedPreviewItem)
 
         Column(modifier = Modifier.fillMaxSize().zIndex(2f)) {
             // INFO SECTION
@@ -640,7 +724,8 @@ fun CinematicLayout(
                                     rowIndex = -1,
                                     title = "Continue Watching",
                                     items = historyItems,
-                                    onMovieClick = onMovieClick,
+                                    onMovieClick = onContinueClick,
+                                    onMovieLongClick = onMovieLongClick,
                                     onViewMore = { onViewMore("Continue Watching", historyItems, "") },
                                     onFocused = remember(wrappedOnFocusChange) {
                                         { item: MetaItem?, key: String ->
@@ -767,6 +852,7 @@ fun CinematicLayout(
                                         title = item.title,
                                         items = item.items,
                                         onMovieClick = onMovieClick,
+                                        onMovieLongClick = onMovieLongClick,
                                         onViewMore = remember(item.title, item.items, item.id, onViewMore) {
                                             { onViewMore(item.title, item.items, item.id) }
                                         },
@@ -992,6 +1078,8 @@ fun SimpleLayout(
     heroItems: List<MetaItem> = emptyList(),
     heroAutoScrollSeconds: Int = 0,
     onMovieClick: (MetaItem) -> Unit,
+    onContinueClick: (MetaItem) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean) -> Unit,
     onViewMore: (String, List<MetaItem>, String) -> Unit,
     onHubClick: (com.saab.tv.domain.HubItem) -> Unit,
     onLoadMore: (String) -> Unit,
@@ -1173,7 +1261,8 @@ fun SimpleLayout(
                         rowIndex = -1,
                         title = "Continue Watching",
                         items = historyItems,
-                        onMovieClick = onMovieClick,
+                        onMovieClick = onContinueClick,
+                        onMovieLongClick = onMovieLongClick,
                         onViewMore = { onViewMore("Continue Watching", historyItems, "") },
                         onFocused = remember(wrappedOnFocusChange) {
                             { _: MetaItem?, key: String -> wrappedOnFocusChange(key) }
@@ -1312,6 +1401,7 @@ fun SimpleLayout(
                             title = item.title,
                             items = item.items,
                             onMovieClick = onMovieClick,
+                            onMovieLongClick = onMovieLongClick,
                             onViewMore = onRowViewMore,
                             onFocused = onRowFocused,
                             entryRequester = entryRequester,
@@ -1415,7 +1505,7 @@ fun CinematicBackground(item: MetaItem?) {
         Box(modifier = Modifier.align(Alignment.TopEnd).fillMaxWidth(0.65f).fillMaxHeight(0.65f)) {
             Crossfade(
                 targetState = item, 
-                animationSpec = tween(700), 
+                animationSpec = tween(420),
                 label = "HeroBg"
             ) { currentItem ->
                 if (currentItem != null) {

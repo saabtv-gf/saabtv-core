@@ -120,6 +120,7 @@ fun DetailsScreen(
     id: String,
     addonBaseUrl: String? = null,
     resumePlaybackHint: String? = null,
+    autoStartPlayback: Boolean = false,
     autoSelectSource: Boolean = false,
     rememberSourceSelection: Boolean = true,
     onPlayClick: (String, String, String, String, String, String, Stream, List<AddonSubtitle>, List<Stream>, List<MetaVideo>) -> Unit,
@@ -221,6 +222,31 @@ fun DetailsScreen(
 
     val tmdbPending = state.tmdbEnabled && state.tmdbLoading
     val contentReady = showMovieContent && !tmdbPending
+    var autoStartRequested by remember(type, id) { mutableStateOf(false) }
+    LaunchedEffect(showMovieContent, autoStartPlayback, state.resumePlaybackId, streamId) {
+        if (!showMovieContent || !autoStartPlayback || autoStartRequested) return@LaunchedEffect
+        val readyMovie = movie ?: return@LaunchedEffect
+        if (type == "series") {
+            val episode = resolveEpisodeForPlaybackId(readyMovie.id, readyMovie.videos, state.resumePlaybackId)
+                ?: findFirstEpisode(readyMovie.videos) ?: return@LaunchedEffect
+            autoStartRequested = true
+            val playbackId = state.resumePlaybackId ?: episodePlaybackId(streamId, episode)
+            val episodeTitle = episodeDisplayTitle(episode)
+            pendingPlaybackId = playbackId
+            pendingPlaybackType = type
+            pendingPlaybackTitle = episodeTitle
+            viewModel.loadStreams(type, episodeStreamId(streamId, episode), episodeTitle,
+                sourceSelectionId = playbackId, fallbackStreamId = playbackId,
+                autoSelectSource = true, rememberSourceSelection = rememberSourceSelection)
+        } else {
+            autoStartRequested = true
+            pendingPlaybackId = streamId
+            pendingPlaybackType = type
+            pendingPlaybackTitle = readyMovie.name
+            viewModel.loadStreams(type, streamId, readyMovie.name,
+                autoSelectSource = true, rememberSourceSelection = rememberSourceSelection)
+        }
+    }
 
     // Track whether focus is inside the hero area (any button).
     // While hero has focus, suppress vertical pivot scrolling (viewport stays fixed,
@@ -278,10 +304,10 @@ fun DetailsScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(bg)) {
         // Loading sweep — solid bg with subtle light sweep while data loads
-        if (!contentReady) {
+        if (!contentReady || (autoStartPlayback && sidebarState is SidebarState.Closed)) {
             com.saab.tv.ui.components.DetailsLoadingSweep()
         }
-        if (showMovieContent && !tmdbPending) {
+        if (showMovieContent && !tmdbPending && (!autoStartPlayback || sidebarState !is SidebarState.Closed)) {
             val currentMovie = requireNotNull(movie)
             val bgImage = currentMovie.background ?: currentMovie.poster
             Box(modifier = Modifier.alpha(contentAlpha)) {
@@ -997,7 +1023,7 @@ private fun ExpandableIconButton(
     )
 
     val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.05f else 1f,
+        targetValue = if (isFocused) 1.08f else 1f,
         label = "btnScale"
     )
 

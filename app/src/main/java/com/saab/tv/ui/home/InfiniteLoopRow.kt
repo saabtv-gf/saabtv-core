@@ -2,6 +2,7 @@ package com.saab.tv.ui.home
 
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -83,6 +84,31 @@ import kotlinx.coroutines.delay
 private val ITEM_WIDTH = 120.dp
 private val ITEM_SPACING = 20.dp
 
+/** Lightweight TV-native coverflow: only visible cards animate when focus changes. */
+@Composable
+private fun Modifier.coverflowCard(distanceFromFocus: Int): Modifier {
+    val side = distanceFromFocus.coerceIn(-2, 2)
+    val rotation by animateFloatAsState(
+        targetValue = when { side < 0 -> 17f; side > 0 -> -17f; else -> 0f },
+        animationSpec = tween(210), label = "coverflowRotation"
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (side == 0) 1f else if (kotlin.math.abs(side) == 1) 0.91f else 0.84f,
+        animationSpec = tween(210), label = "coverflowScale"
+    )
+    val opacity by animateFloatAsState(
+        targetValue = if (side == 0) 1f else if (kotlin.math.abs(side) == 1) 0.9f else 0.76f,
+        animationSpec = tween(210), label = "coverflowOpacity"
+    )
+    return this.graphicsLayer {
+        rotationY = rotation
+        scaleX = scale
+        scaleY = scale
+        alpha = opacity
+        cameraDistance = 10_000f
+    }
+}
+
 private fun FocusRequester.requestFocusSafely() {
     runCatching { requestFocus() }
 }
@@ -109,6 +135,7 @@ fun InfiniteLoopRow(
     title: String,
     items: List<MetaItem>,
     onMovieClick: (MetaItem) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean) -> Unit = { _, _ -> },
     onViewMore: () -> Unit,
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
@@ -206,6 +233,7 @@ fun InfiniteLoopRow(
                         rowIndex = rowIndex,
                         items = items,
                         onMovieClick = onMovieClick,
+                        onMovieLongClick = onMovieLongClick,
                         onFocused = wrappedOnFocused,
                         entryRequester = entryRequester,
                         drawerRequester = drawerRequester,
@@ -236,6 +264,7 @@ fun InfiniteLoopRow(
                         items = items,
                         visibleItemCount = visibleItemCount,
                         onMovieClick = onMovieClick,
+                        onMovieLongClick = onMovieLongClick,
                         onViewMore = onViewMore,
                         onFocused = wrappedOnFocused,
                         entryRequester = entryRequester,
@@ -264,6 +293,7 @@ fun InfiniteLoopRow(
                         items = items,
                         visibleItemCount = visibleItemCount,
                         onMovieClick = onMovieClick,
+                        onMovieLongClick = onMovieLongClick,
                         onViewMore = onViewMore,
                         onFocused = wrappedOnFocused,
                         entryRequester = entryRequester,
@@ -301,6 +331,7 @@ private fun LinearContent(
     rowIndex: Int,
     items: List<MetaItem>,
     onMovieClick: (MetaItem) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean) -> Unit,
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
     drawerRequester: FocusRequester,
@@ -316,6 +347,7 @@ private fun LinearContent(
     effectiveItemWidth: Dp = ITEM_WIDTH
 ) {
     val context = LocalContext.current
+    var currentFocusedIndex by remember(listState) { mutableIntStateOf(listState.firstVisibleItemIndex) }
 
     // Prefetch image URLs list (cached to avoid allocation during scroll)
     val imageUrls = remember(items, isLandscapeCards, enrichedItems) {
@@ -418,13 +450,15 @@ private fun LinearContent(
                         logoUrl = enriched?.logo,
                         posterUrl = item.poster,
                         onClick = { onMovieClick(item) },
+                        onLongClick = { onMovieLongClick(item, rowIndex == -1) },
                         progress = item.progress,
                         hasNewEpisode = item.hasNewEpisode,
                         onFocused = {
+                            currentFocusedIndex = index
                             ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index)
                             onFocused(item, uniqueKey)
                         },
-                        modifier = Modifier.then(
+                        modifier = Modifier.coverflowCard(index - currentFocusedIndex).then(
                             if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                             else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                             else Modifier
@@ -436,14 +470,16 @@ private fun LinearContent(
                         title = item.name,
                         posterUrl = item.poster,
                         onClick = { onMovieClick(item) },
+                        onLongClick = { onMovieLongClick(item, rowIndex == -1) },
                         progress = item.progress,
                         isWatched = rowIndex != -1 && item.id in watchedIds,
                         hasNewEpisode = item.hasNewEpisode,
                         onFocused = {
+                            currentFocusedIndex = index
                             ImagePrefetcher.prefetchAround(context, imageUrls, index)
                             onFocused(item, uniqueKey)
                         },
-                        modifier = Modifier.then(
+                        modifier = Modifier.coverflowCard(index - currentFocusedIndex).then(
                             if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                             else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                             else Modifier
@@ -487,6 +523,7 @@ private fun InfiniteGridContent(
     items: List<MetaItem>,
     visibleItemCount: Int,
     onMovieClick: (MetaItem) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean) -> Unit,
     onViewMore: () -> Unit,
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
@@ -649,6 +686,7 @@ private fun InfiniteGridContent(
                             title = item.movie.name,
                             posterUrl = item.movie.poster,
                             onClick = { onMovieClick(item.movie) },
+                            onLongClick = { onMovieLongClick(item.movie, rowIndex == -1) },
                             progress = item.movie.progress,
                             isWatched = rowIndex != -1 && item.movie.id in watchedIds,
                             onFocused = {
@@ -659,7 +697,7 @@ private fun InfiniteGridContent(
                                 }
                                 onFocused(item.movie, uniqueKey)
                             },
-                            modifier = Modifier.then(
+                            modifier = Modifier.coverflowCard(scrollIndex - currentFocusedIndex).then(
                                 if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                                 else if (pivotFocusRequester != null && scrollIndex == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                                 else Modifier
@@ -728,6 +766,7 @@ private fun FiniteGridContent(
     items: List<MetaItem>,
     visibleItemCount: Int,
     onMovieClick: (MetaItem) -> Unit,
+    onMovieLongClick: (MetaItem, Boolean) -> Unit,
     onViewMore: () -> Unit,
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
@@ -741,6 +780,7 @@ private fun FiniteGridContent(
     pivotFocusRequester: FocusRequester? = null
 ) {
     val context = LocalContext.current
+    var currentFocusedIndex by remember(listState) { mutableIntStateOf(listState.firstVisibleItemIndex) }
     
     val truncatedMovies = remember(items, visibleItemCount) { 
         items.take(visibleItemCount.coerceIn(5, 50)) 
@@ -848,13 +888,15 @@ private fun FiniteGridContent(
                             title = item.movie.name,
                             posterUrl = item.movie.poster,
                             onClick = { onMovieClick(item.movie) },
+                            onLongClick = { onMovieLongClick(item.movie, rowIndex == -1) },
                             progress = item.movie.progress,
                             isWatched = rowIndex != -1 && item.movie.id in watchedIds,
                             onFocused = {
+                                currentFocusedIndex = index
                                 ImagePrefetcher.prefetchAround(context, imageUrls, index)
                                 onFocused(item.movie, uniqueKey)
                             },
-                            modifier = Modifier.then(
+                            modifier = Modifier.coverflowCard(index - currentFocusedIndex).then(
                                 if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                                 else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                                 else Modifier

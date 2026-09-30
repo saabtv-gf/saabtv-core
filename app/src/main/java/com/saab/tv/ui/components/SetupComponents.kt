@@ -42,7 +42,7 @@ fun SetupButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (focused && enabled) 1.02f else 1f, tween(120), label = "setupButtonFocus")
+    val scale by animateFloatAsState(if (focused && enabled) 1.05f else 1f, tween(180), label = "setupButtonFocus")
     val accent = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Button(
         onClick = onClick,
