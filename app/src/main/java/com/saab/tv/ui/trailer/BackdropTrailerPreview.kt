@@ -284,6 +284,8 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
     }
     DisposableEffect(player) { onDispose { player.release() } }
     LaunchedEffect(player, inline) {
+        com.saab.tv.AppDiagnostics.event("Trailer Preview", "Presentation Changed",
+            "mode=${if (inline) "inline" else "fullscreen"} positionMs=${player.currentPosition} playing=${player.isPlaying}")
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints()
             .apply { if (inline) setMaxVideoSize(1280, 720) }
@@ -314,6 +316,10 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
             player.prepare(); player.playWhenReady = true
         }
         val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                com.saab.tv.AppDiagnostics.event("Trailer Preview", "First Frame",
+                    "variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel}")
+            }
             override fun onIsPlayingChanged(isPlaying: Boolean) { if (isPlaying) latestStarted() }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) latestEnded() }
             override fun onPlayerError(error: PlaybackException) {

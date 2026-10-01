@@ -53,8 +53,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 82
-        versionName = "0.1.81-beta"
+        versionCode = 83
+        versionName = "0.1.82-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -126,6 +126,7 @@ android {
         checkReleaseBuilds = true
     }
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -220,6 +221,12 @@ dependencies {
 
     // OkHttp is already available via Retrofit, but declare explicitly for TorrServer API
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5") {
+        // The extractor calls Rhino Context directly in interpreted mode.
+        // Its optional desktop javax.script adapter is not an Android runtime.
+        exclude(group = "org.mozilla", module = "rhino-engine")
+    }
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 
     // --- LOCAL WEB SERVER (used by remote input hub) ---
 
@@ -234,6 +241,7 @@ dependencies {
     implementation("ch.acra:acra-toast:5.11.4")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:core-ktx:1.6.1")
     androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")

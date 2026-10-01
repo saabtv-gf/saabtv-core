@@ -5,7 +5,7 @@ import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 
@@ -20,10 +20,7 @@ class YoutubeChunkedDataSourceFactory(
     }
 
     override fun createDataSource(): DataSource {
-        val upstream = DefaultHttpDataSource.Factory()
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(15_000)
-            .setAllowCrossProtocolRedirects(true)
+        val upstream = OkHttpDataSource.Factory(TrailerHttpTransport.client)
             .setDefaultRequestProperties(requestHeaders)
             .setUserAgent(
                 requestHeaders["User-Agent"] ?: ("com.google.android.youtube/20.10.35 " +
@@ -34,7 +31,7 @@ class YoutubeChunkedDataSourceFactory(
     }
 
     private class YoutubeChunkedDataSource(
-        private val upstream: DefaultHttpDataSource,
+        private val upstream: HttpDataSource,
         private val chunkSize: Long
     ) : DataSource {
 

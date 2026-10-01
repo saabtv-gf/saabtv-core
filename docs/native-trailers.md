@@ -71,3 +71,32 @@ Test a Cinemeta movie and series with 4K, 1080p and unavailable trailers; confir
 audio, reported resolution, remote seek/pause, retry, Back, background/return,
 and decoder fallback on a 1080p Fire TV. YouTube's undocumented player endpoint
 can change or reject requests; native extraction cannot guarantee availability.
+# CDN rejection handling (October 2026)
+
+Trailer metadata alone does not prove its media URLs are playable. The 0.1.81
+diagnostic report identifies HTTP 403 before the first frame, rather than a
+decoder failure. Native resolution now uses pinned NewPipe Extractor v0.26.5
+(GPL-3.0-or-later) for maintained player-parameter handling, keeping the existing
+client ladder as an optional higher-resolution fallback. Both video and separate
+audio URLs must pass a small byte-range probe before selection. Rejected higher
+resolutions never outrank readable lower ones. A readable lower rendition is
+retained if the optional higher-resolution resolver fails.
+
+Extraction and playback use the same OkHttp transport, connection pool and
+IPv4-first DNS ordering. This removes a transport mismatch; the report alone
+does not establish an IP-family mismatch as the cause of its 403 responses.
+No iframe, hosted resolver or user YouTube credentials are introduced.
+
+Inline expansion preserves the active media source and timestamp. Presentation
+changes and first-frame events are available with optional diagnostics enabled.
+For progressive media, expanding does not force a source switch. Adaptive
+manifests can change rendition through track selection.
+
+Validation: an opt-in JVM smoke test fetched readable native media for the exact
+reported video ID, QftAW9TTmuQ. That test returned a 360p rendition; it does not
+demonstrate 4K availability, TV decoding or successful fullscreen rendering.
+Local HTTP regression tests verify rejection of 403 video/audio and deduplication
+of shared-audio probes. Physical TV confirmation is still required.
+
+Dependency and Android desugaring requirements:
+https://github.com/TeamNewPipe/NewPipeExtractor/tree/v0.26.5

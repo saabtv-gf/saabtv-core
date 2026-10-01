@@ -86,3 +86,12 @@
 # ─── General ───
 -dontwarn javax.annotation.**
 -dontwarn kotlin.reflect.jvm.internal.**
+
+# NewPipe's bounded interpreted player-JavaScript runtime (upstream rules).
+-keep class org.mozilla.javascript.** { *; }
+-keep class org.mozilla.classfile.ClassFileWriter
+-dontwarn org.mozilla.javascript.tools.**
+# Optional desktop optimizer/Java-bean adapters are unused by NewPipe's
+# interpreted mode and initSafeStandardObjects; Android does not supply them.
+-dontwarn jdk.dynalink.**
+-dontwarn java.beans.**

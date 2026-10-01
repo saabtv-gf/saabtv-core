@@ -13,6 +13,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Headers
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -121,14 +122,8 @@ private val CLIENTS = listOf(
 class YouTubeExtractor @Inject constructor() {
     private val gson = Gson()
 
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
-        .callTimeout(6, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+    private val httpClient = TrailerHttpTransport.client.newBuilder()
+        .callTimeout(6, TimeUnit.SECONDS).build()
 
     suspend fun extractPlaybackSource(youtubeKey: String): TrailerPlaybackSource? = withContext(Dispatchers.IO) {
         if (youtubeKey.isBlank()) return@withContext null
@@ -150,6 +145,30 @@ class YouTubeExtractor @Inject constructor() {
 
     private suspend fun extractInternal(videoKey: String): TrailerPlaybackSource? {
         val videoId = TrailerPolicy.videoId(videoKey) ?: return null
+
+        val maintained = TrailerPolicy.rank(MaintainedYoutubeResolver.resolve(videoId)).take(16)
+        val verified = TrailerUrlVerifier.playable(maintained)
+        // Keep the verified maintained rendition even if the optional client
+        // ladder fails. Only readable higher-resolution URLs can outrank it.
+        val legacy = if ((verified.firstOrNull()?.height ?: 0) < 2160) {
+            try { withTimeoutOrNull(12_000) { extractLegacy(videoId) } }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        } else null
+        val candidates = verified + legacy?.let { source ->
+            listOf(TrailerPlaybackVariant(source.videoUrl, source.audioUrl, source.qualityLabel,
+                Regex("(\\d{2,4})p").find(source.qualityLabel)?.groupValues?.get(1)?.toIntOrNull() ?: 0,
+                source.requestHeaders)) + source.fallbackVariants
+        }.orEmpty()
+        val ranked = TrailerPolicy.rank(candidates)
+        val primary = ranked.firstOrNull() ?: return null
+        com.saab.tv.AppDiagnostics.event("Trailer", "Verified Source Selected",
+            "quality=${primary.qualityLabel} playable=${ranked.size} maintainedPlayable=${verified.size}/${maintained.size}")
+        return TrailerPlaybackSource(primary.videoUrl, primary.audioUrl, ranked.drop(1),
+            primary.qualityLabel, primary.requestHeaders)
+    }
+
+    private suspend fun extractLegacy(videoId: String): TrailerPlaybackSource? {
 
         val watchUrl = "https://www.youtube.com/watch?v=$videoId&hl=en"
         val watchResponse = performRequest(watchUrl, "GET", DEFAULT_HEADERS)
@@ -310,7 +329,7 @@ class YouTubeExtractor @Inject constructor() {
             )
         }
 
-        val distinctVariants = TrailerPolicy.rank(variants).take(16)
+        val distinctVariants = TrailerUrlVerifier.playable(TrailerPolicy.rank(variants).take(16))
         val primary = distinctVariants.firstOrNull() ?: return null
         com.saab.tv.AppDiagnostics.event("Trailer", "Selected Quality",
             "videoId=$videoId selected=${primary.qualityLabel} available=" +
