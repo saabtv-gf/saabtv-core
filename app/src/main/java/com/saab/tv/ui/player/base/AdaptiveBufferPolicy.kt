@@ -25,7 +25,7 @@ internal object AdaptiveBufferPolicy {
             return AdaptiveBufferConfig(
                 minBufferMs = if (isTorrent) 6_000 else 8_000,
                 maxBufferMs = if (isTorrent) 20_000 else 24_000,
-                bufferForPlaybackMs = 750,
+                bufferForPlaybackMs = if (isTorrent) 500 else 250,
                 bufferForPlaybackAfterRebufferMs = 2_000,
                 targetBufferBytes = 48 * 1024 * 1024,
                 backBufferMs = 1_500
@@ -40,7 +40,7 @@ internal object AdaptiveBufferPolicy {
                 isTorrent -> 30_000
                 else -> 35_000
             },
-            bufferForPlaybackMs = if (isTorrent) 750 else 1_000,
+            bufferForPlaybackMs = if (isTorrent) 500 else 250,
             bufferForPlaybackAfterRebufferMs = if (isTorrent) 3_000 else 2_500,
             targetBufferBytes = targetBytes,
             backBufferMs = if (isTorrent) 3_000 else 5_000

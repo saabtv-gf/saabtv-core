@@ -25,11 +25,12 @@ fun ManualTrailerHost(profileId: Int, content: @Composable () -> Unit) {
     LaunchedEffect(profileId) { request = null }
     val context = androidx.compose.ui.platform.LocalContext.current
     val startWatching = LocalTrailerStartWatching.current
-    androidx.activity.compose.BackHandler(enabled = request != null) { request = null }
     Box(Modifier.fillMaxSize()) {
         CompositionLocalProvider(LocalManualTrailerActive provides (request != null), LocalManualTrailerLauncher provides { item, trailer, episodes ->
             request = ManualTrailerRequest(item, trailer, episodes)
         }) { content() }
+        // Register after underlying screens so Back during resolution closes this overlay first.
+        androidx.activity.compose.BackHandler(enabled = request != null) { request = null }
         request?.let { current ->
             if (!playing) {
                 Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black),
@@ -38,7 +39,10 @@ fun ManualTrailerHost(profileId: Int, content: @Composable () -> Unit) {
                 }
             }
             key(current) {
-                CompositionLocalProvider(LocalTrailerEpisodesAction provides current.onEpisodes?.let { action ->
+                CompositionLocalProvider(LocalTrailerStartWatching provides { item ->
+                    request = null
+                    startWatching?.invoke(item)
+                }, LocalTrailerEpisodesAction provides current.onEpisodes?.let { action ->
                     { request = null; action() }
                 }) {
                 BackdropTrailerPreview(

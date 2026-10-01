@@ -138,9 +138,10 @@ class DetailsViewModel @Inject constructor(
     private var prefetchSubtitlesJob: Job? = null
 
 
-    fun loadDetails(type: String, id: String, addonBaseUrl: String? = null) {
+    fun loadDetails(type: String, id: String, addonBaseUrl: String? = null, playbackOnly: Boolean = false) {
         activeProfileId.value = profileConfigurationManager.getLastActiveProfileId()
         val requestKey = "$type:$id"
+        accountSync.preparePlaybackResume()
 
         // Keep current details when reopening the same item (e.g., returning from player).
         if (
@@ -180,6 +181,8 @@ class DetailsViewModel @Inject constructor(
                     tmdbNumericId?.let { tmdbService.tmdbToImdb(it, mediaType) } ?: id
                 } else id
 
+                // Movie source lookup does not depend on decorative metadata.
+                if (type == "movie" && resolvedId.startsWith("tt")) prefetchStreams(type, resolvedId)
                 val details = repository.resolveMetaDetails(type, resolvedId, addonBaseUrl)
                     ?: throw Exception("No meta found")
                 if (requestVersion != loadRequestVersion) return@launch
@@ -189,9 +192,9 @@ class DetailsViewModel @Inject constructor(
                 if (details.type == "series") computeAndStoreNextUp(streamFetchId, details.name, details.poster, details.videos)
                 val episodeProgressMap = if (details.type == "series") buildEpisodeProgressMap(streamFetchId) else emptyMap()
                 val lastPlayedEpisodeId = if (details.type == "series")
-                    dao.getLatestSeriesEpisodeHistory("${streamFetchId}:%")?.id else null
+                    freshSeriesHistory(streamFetchId).maxByOrNull { it.lastWatched }?.id else null
                 val resumePlaybackId = if (details.type == "series") {
-                    val latest = dao.getLatestSeriesEpisodeHistory("${streamFetchId}:%")
+                    val latest = freshSeriesHistory(streamFetchId).maxByOrNull { it.lastWatched }
                     if (latest != null && !latest.watched && !episodeHistoryIsWatched(streamFetchId, latest.id, episodeProgressMap)) {
                         latest.id // In-progress episode — resume it
                     } else {
@@ -228,23 +231,18 @@ class DetailsViewModel @Inject constructor(
                     tmdbEnrichment = null,
                     tmdbRecommendations = emptyList(),
                     cinemetaRecommendations = emptyList(),
-                    cinemetaRecommendationsLoading = true,
+                    cinemetaRecommendationsLoading = !playbackOnly,
                     trailer = details.bestAvailableTrailer(),
                     tmdbCollection = emptyList(),
                     tmdbCollectionName = null,
                     tmdbEnabled = isTmdbEnabled,
-                    tmdbLoading = isTmdbEnabled
+                    tmdbLoading = isTmdbEnabled && !playbackOnly
                 )
-                // Update next-up entry when details load
-                if (details.type == "series") {
-                    computeAndStoreNextUp(streamFetchId, details.name, details.poster, details.videos)
+                if (!playbackOnly) {
+                    loadTmdbEnrichment(details.type, streamFetchId, requestKey)
+                    loadCinemetaTrailer(details.type, streamFetchId, requestKey)
+                    loadCinemetaRecommendations(details, streamFetchId, requestKey)
                 }
-                // Fire TMDB enrichment in background (non-blocking)
-                loadTmdbEnrichment(details.type, streamFetchId, requestKey)
-                // Some catalog addons omit trailer fields. Cinemeta can supply them
-                // independently, without requiring a TMDB API key.
-                loadCinemetaTrailer(details.type, streamFetchId, requestKey)
-                loadCinemetaRecommendations(details, streamFetchId, requestKey)
 
                 // Prefetch streams so they're ready when the user hits Play
                 val prefetchId = if (resumePlaybackId != null) {
@@ -289,9 +287,9 @@ class DetailsViewModel @Inject constructor(
             if (meta.type == "series") computeAndStoreNextUp(seriesId, meta.name, meta.poster, meta.videos)
             val episodeProgressMap = if (meta.type == "series") buildEpisodeProgressMap(seriesId) else emptyMap()
             val lastPlayedEpisodeId = if (meta.type == "series")
-                dao.getLatestSeriesEpisodeHistory("$seriesId:%")?.id else null
+                freshSeriesHistory(seriesId).maxByOrNull { it.lastWatched }?.id else null
             val resumePlaybackId = if (meta.type == "series") {
-                val latest = dao.getLatestSeriesEpisodeHistory("$seriesId:%")
+                val latest = freshSeriesHistory(seriesId).maxByOrNull { it.lastWatched }
                 if (latest != null && !latest.watched && !episodeHistoryIsWatched(seriesId, latest.id, episodeProgressMap)) {
                     latest.id
                 } else {
@@ -337,8 +335,15 @@ class DetailsViewModel @Inject constructor(
      * Build a map of "S{season}:E{episode}" → EpisodeProgress from watch history.
      * Checks both with and without stream index suffix.
      */
+    private suspend fun freshSeriesHistory(seriesId: String): List<WatchHistoryEntity> {
+        val profileId = profileConfigurationManager.getLastActiveProfileId() ?: return emptyList()
+        val local = dao.getSeriesEpisodeHistory("$seriesId:%")
+        return accountSync.freshestPlaybackHistory(local, profileId)
+            .filter { it.type == "series" && it.id.startsWith("$seriesId:") }
+    }
+
     private suspend fun buildEpisodeProgressMap(seriesId: String): Map<String, EpisodeProgress> {
-        val historyItems = dao.getSeriesEpisodeHistory("$seriesId:%")
+        val historyItems = freshSeriesHistory(seriesId)
         if (historyItems.isEmpty()) return emptyMap()
 
         val map = mutableMapOf<String, EpisodeProgress>()
@@ -731,8 +736,9 @@ class DetailsViewModel @Inject constructor(
     }
 
     private fun prefetchStreams(type: String, id: String) {
-        prefetchStreamsJob?.cancel()
         val key = "$type:$id"
+        if (prefetchedStreamKey == key && (prefetchedStreams != null || prefetchStreamsJob?.isActive == true)) return
+        prefetchStreamsJob?.cancel()
         prefetchedStreamKey = key
         prefetchedStreams = null
         prefetchedSubtitles = null
@@ -746,7 +752,10 @@ class DetailsViewModel @Inject constructor(
         }
         prefetchStreamsJob = viewModelScope.launch {
             try {
-                prefetchedStreams = repository.getStreams(type, id)
+                val streams = repository.getStreams(type, id)
+                if (prefetchedStreamKey == key) prefetchedStreams = streams
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 // Prefetch failed silently — loadStreams will fetch fresh
             }
@@ -789,32 +798,16 @@ class DetailsViewModel @Inject constructor(
                 val prefetchKey = "$type:$id"
                 var streamOrigin = "fresh"
 
-                if (prefetchedStreamKey == prefetchKey) {
-                    if (prefetchedStreams == null) prefetchStreamsJob?.join()
-                    val completedPrefetch = prefetchedStreams
-                    if (completedPrefetch != null) {
-                        streamOrigin = "prefetch"
-                        rawStreams = completedPrefetch
-                        addonSubtitles = prefetchedSubtitles ?: emptyList()
-                    } else {
-                        val streamsDeferred = async { repository.getStreams(type, id) }
-                        val subtitlesDeferred = async {
-                            try { subtitleRepository.getSubtitles(type, id) }
-                            catch (cancelled: CancellationException) { throw cancelled }
-                            catch (_: Exception) { emptyList() }
-                        }
-                        rawStreams = streamsDeferred.await()
-                        addonSubtitles = kotlinx.coroutines.withTimeoutOrNull(150L) { subtitlesDeferred.await() } ?: emptyList()
-                    }
+                if (prefetchedStreamKey == prefetchKey && prefetchedStreams == null) prefetchStreamsJob?.join()
+                val completedPrefetch = prefetchedStreams.takeIf { prefetchedStreamKey == prefetchKey }
+                if (completedPrefetch != null) {
+                    streamOrigin = "prefetch"
+                    rawStreams = completedPrefetch
+                    addonSubtitles = prefetchedSubtitles ?: emptyList()
                 } else {
-                    val streamsDeferred = async { repository.getStreams(type, id) }
-                    val subtitlesDeferred = async {
-                            try { subtitleRepository.getSubtitles(type, id) }
-                            catch (cancelled: CancellationException) { throw cancelled }
-                            catch (_: Exception) { emptyList() }
-                        }
-                    rawStreams = streamsDeferred.await()
-                    addonSubtitles = kotlinx.coroutines.withTimeoutOrNull(150L) { subtitlesDeferred.await() } ?: emptyList()
+                    rawStreams = repository.getStreams(type, id)
+                    // The player resolves release-matched subtitles after the first frame.
+                    addonSubtitles = emptyList()
                 }
 
                 val episodeStreams = if (rawStreams.isEmpty() && !fallbackStreamId.isNullOrBlank() && fallbackStreamId != id) {

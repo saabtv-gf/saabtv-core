@@ -63,6 +63,7 @@ data class PlayerSessionResult(
 @Composable
 fun PlayerScreen(
     videoUrl: String,
+    onFirstFrame: () -> Unit = {},
     trailerAudioUrl: String? = null,
     trailerVariants: List<TrailerPlaybackVariant> = emptyList(),
     title: String,
@@ -117,14 +118,17 @@ fun PlayerScreen(
         (playbackController as? ExoPlayerBackend)?.onMagnetSourceSelected = onMagnetSourceSelected
     }
 
-    // Pre-create ExoPlayer + OkHttpClient while torrent pieces are still downloading.
-    // By the time the URL arrives, the player is ready — prepareSource() just calls prepare().
-    LaunchedEffect(playbackController, videoUrl) {
-        if (videoUrl.isBlank()) {
-            (playbackController as? ExoPlayerBackend)?.warmup()
-        }
+    // Warm both direct/debrid and torrent playback without waiting for secondary work.
+    LaunchedEffect(playbackController) {
+        (playbackController as? ExoPlayerBackend)?.warmup(
+            isLocalhost = videoUrl.isBlank() || videoUrl.startsWith("http://127.0.0.1") || videoUrl.startsWith("http://localhost")
+        )
     }
     val uiState by playbackController.uiState.collectAsStateWithLifecycle()
+    val latestFirstFrame by rememberUpdatedState(onFirstFrame)
+    LaunchedEffect(playbackController, uiState.hasRenderedFirstFrame) {
+        if (uiState.hasRenderedFirstFrame) latestFirstFrame()
+    }
     val liveSources by playbackController.sourceOptions.collectAsStateWithLifecycle()
     val activeSource = liveSources.firstOrNull { it.id == uiState.currentSourceId }
     val latestSourceCallback by rememberUpdatedState(onActiveSourceChanged)
@@ -374,12 +378,15 @@ fun PlayerScreen(
         if (uiState.isPlaying) {
             viewModel.scrobbleStart(movieId, mediaType, uiState.positionMs, uiState.durationMs)
         } else if (uiState.isReady) {
-            viewModel.saveProgress(movieId, mediaType, title, poster, uiState.positionMs, uiState.durationMs, syncBoundary = true)
+            viewModel.saveProgress(movieId, mediaType, title, poster, uiState.positionMs, uiState.durationMs, syncBoundary = true, profileId = playbackSettings.profileId)
             viewModel.scrobblePause(movieId, mediaType, uiState.positionMs, uiState.durationMs)
         }
     }
 
-    DisposableEffect(playbackController, movieId, mediaType, title, poster) {
+    val latestPlaybackTitle by rememberUpdatedState(title)
+    val latestPlaybackPoster by rememberUpdatedState(poster)
+    // Metadata may arrive after source lookup. It must never release the active backend.
+    DisposableEffect(playbackController) {
         onDispose {
             val state = playbackController.uiState.value
             PlaybackDiagnostics.event(
@@ -391,11 +398,11 @@ fun PlayerScreen(
                     PlaybackDiagnostics.memorySummary()
             )
             if (state.positionMs >= 5_000L) {
-                viewModel.saveProgress(
+                viewModel.saveProgress(profileId = playbackSettings.profileId,
                     id = movieId,
                     type = mediaType,
-                    title = title,
-                    poster = poster,
+                    title = latestPlaybackTitle,
+                    poster = latestPlaybackPoster,
                     position = state.positionMs,
                     duration = state.durationMs.takeIf { it > 0L },
                     syncBoundary = true
@@ -412,7 +419,7 @@ fun PlayerScreen(
                 val state = playbackController.uiState.value
                 val pos = state.positionMs.coerceAtLeast(0L)
                 val dur = state.durationMs.takeIf { it > 0L }
-                viewModel.saveProgress(
+                viewModel.saveProgress(profileId = playbackSettings.profileId,
                     id = movieId,
                     type = mediaType,
                     title = title,
@@ -435,7 +442,7 @@ fun PlayerScreen(
             if (!isActive) break
             val state = playbackController.uiState.value
             if ((state.isPlaying || state.isBuffering || state.isReady) && state.positionMs > 0L) {
-                viewModel.saveProgress(
+                viewModel.saveProgress(profileId = playbackSettings.profileId,
                     id = movieId,
                     type = mediaType,
                     title = title,
@@ -487,9 +494,9 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(movieId, effectiveVideoUrl, effectiveTrailerAudioUrl, backendType) {
+    LaunchedEffect(playbackController, movieId, effectiveVideoUrl, effectiveTrailerAudioUrl, backendType) {
         if (effectiveVideoUrl.isBlank()) return@LaunchedEffect // Wait for torrent stream URL
-        val resumePosition = viewModel.getResumePosition(movieId)
+        val resumePosition = viewModel.getResumePosition(movieId, playbackSettings.profileId)
         thumbnailPriorityMs = resumePosition
         playbackController.load(
             PlayerLoadRequest(
@@ -555,9 +562,9 @@ fun PlayerScreen(
         }
 
         if (isCompleted) {
-            viewModel.markCompleted(movieId, mediaType, title, poster, position, duration)
+            viewModel.markCompleted(movieId, mediaType, title, poster, position, duration, profileId = playbackSettings.profileId)
         } else {
-            viewModel.saveProgress(
+            viewModel.saveProgress(profileId = playbackSettings.profileId,
                 id = movieId,
                 type = mediaType,
                 title = title,
@@ -593,9 +600,9 @@ fun PlayerScreen(
                 watchedThreshold = playbackSettings.watchedThresholdPercent.coerceIn(50, 99) / 100.0
             ).isCompleted
             if (isCompleted) {
-                viewModel.markCompleted(movieId, mediaType, title, poster, positionMs, duration)
+                viewModel.markCompleted(movieId, mediaType, title, poster, positionMs, duration, profileId = playbackSettings.profileId)
             } else {
-                viewModel.saveProgress(movieId, mediaType, title, poster, positionMs, duration)
+                viewModel.saveProgress(movieId, mediaType, title, poster, positionMs, duration, profileId = playbackSettings.profileId)
             }
             duration?.let {
                 if (isCompleted) viewModel.scrobbleStop(movieId, mediaType, positionMs, it)
@@ -606,7 +613,7 @@ fun PlayerScreen(
         }
         val transitionToSelectedEpisode = { episode: MetaVideo, sourceUrl: String?, positionMs: Long, durationMs: Long? ->
             finalizedTransitionId = movieId
-            viewModel.saveProgress(movieId, mediaType, title, poster, positionMs, durationMs)
+            viewModel.saveProgress(movieId, mediaType, title, poster, positionMs, durationMs, profileId = playbackSettings.profileId)
             durationMs?.takeIf { it > 0L }?.let {
                 viewModel.scrobblePause(movieId, mediaType, positionMs, it, force = true)
             }

@@ -6,6 +6,18 @@ import org.junit.Test
 
 class AdaptiveBufferPolicyTest {
     @Test
+    fun startupNeedsOnlySmallBufferWithoutReducingRecoverySafety() {
+        for (memory in listOf(128, 512, 1024)) {
+            val direct = AdaptiveBufferPolicy.choose(false, memory, memory <= 256, 2160)
+            val torrent = AdaptiveBufferPolicy.choose(true, memory, memory <= 256, 2160)
+            assertEquals(250, direct.bufferForPlaybackMs)
+            assertEquals(500, torrent.bufferForPlaybackMs)
+            assertTrue(direct.bufferForPlaybackAfterRebufferMs >= 2_000)
+            assertTrue(torrent.bufferForPlaybackAfterRebufferMs >= 2_000)
+        }
+    }
+
+    @Test
     fun lowRamTvUsesStrictMemoryCap() {
         val config = AdaptiveBufferPolicy.choose(true, 256, true, 2160)
         assertEquals(48 * 1024 * 1024, config.targetBufferBytes)

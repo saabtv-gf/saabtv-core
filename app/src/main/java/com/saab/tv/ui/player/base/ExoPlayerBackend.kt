@@ -1118,14 +1118,13 @@ class ExoPlayerBackend(
     }
 
     /**
-     * Pre-create ExoPlayer and localhost OkHttpClient so they're ready when
-     * the torrent stream URL arrives. Called while pieces are still downloading.
+     * Pre-create ExoPlayer and the appropriate HTTP client for direct or torrent playback.
      */
-    fun warmup() {
+    fun warmup(isLocalhost: Boolean = true) {
         if (released) return
-        isTorrentStream = true
+        isTorrentStream = isLocalhost
         scope.launch {
-            withContext(Dispatchers.IO) { getOrCreateOkHttpClient(isLocalhost = true) }
+            withContext(Dispatchers.IO) { getOrCreateOkHttpClient(isLocalhost = isLocalhost) }
             ensurePlayer()
         }
     }

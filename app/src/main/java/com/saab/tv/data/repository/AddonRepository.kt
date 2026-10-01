@@ -30,6 +30,44 @@ class AddonRepository @Inject constructor(
     private val torBox: com.saab.tv.data.stream.TorBoxAvailabilityService
 ) {
     private val gson = Gson()
+    private val previewStreams = com.saab.tv.data.cache.PreviewWarmupCache<List<Stream>>(
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
+        android.os.SystemClock::elapsedRealtime
+    )
+    private val previewMetadata = com.saab.tv.data.cache.PreviewWarmupCache<MetaItem?>(
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
+        android.os.SystemClock::elapsedRealtime
+    )
+
+    private suspend fun previewMetadataKey(type: String, id: String, addon: String?): String =
+        "${previewStreamKey(type, id)}:${if (type == "series") "cinemeta" else addon.orEmpty()}"
+
+    suspend fun prefetchTrailerMetadata(type: String, id: String, addon: String?): MetaItem? =
+        withContext(Dispatchers.IO) {
+            val key = previewMetadataKey(type, id, addon)
+            previewMetadata.prefetch(key) {
+                val meta = fetchMetaDetails(type, id, addon)
+                meta.takeIf { previewMetadataKey(type, id, addon) == key }
+            }
+            previewMetadata.awaitIfPresent(key)
+        }
+
+    private suspend fun previewStreamKey(type: String, id: String): String {
+        val addons = dao.getAllAddons().firstOrNull().orEmpty()
+            .filter { it.isEnabled && it.supportsStream }
+            .map { it.transportUrl }.sorted()
+        return "${dao.getActiveProfileId()}:$type:$id:${addons.hashCode()}"
+    }
+
+    suspend fun prefetchTrailerStreams(type: String, id: String) = withContext(Dispatchers.IO) {
+        val key = previewStreamKey(type, id)
+        previewStreams.prefetch(key) {
+            if (previewStreamKey(type, id) != key) emptyList() else {
+                val streams = fetchStreams(type, id)
+                streams.takeIf { previewStreamKey(type, id) == key }.orEmpty()
+            }
+        }
+    }
     private val MAX_CATALOG_PAGES = 30
 
     /** Filter out MetaItems where Gson injected null into non-null Kotlin fields */
@@ -401,6 +439,11 @@ class AddonRepository @Inject constructor(
     }
 
     suspend fun getStreams(type: String, id: String): List<Stream> = withContext(Dispatchers.IO) {
+        previewStreams.awaitIfPresent(previewStreamKey(type, id))?.takeIf { it.isNotEmpty() }
+            ?: fetchStreams(type, id)
+    }
+
+    private suspend fun fetchStreams(type: String, id: String): List<Stream> = withContext(Dispatchers.IO) {
         val addons = dao.getAllAddons().firstOrNull()
             ?.filter { it.isEnabled && it.supportsStream }
             ?: emptyList()
@@ -503,6 +546,15 @@ class AddonRepository @Inject constructor(
      * 3. Last resort: Cinemeta for standard types
      */
     suspend fun resolveMetaDetails(
+        type: String,
+        id: String,
+        preferredAddonBaseUrl: String? = null
+    ): MetaItem? = withContext(Dispatchers.IO) {
+        previewMetadata.awaitIfPresent(previewMetadataKey(type, id, preferredAddonBaseUrl))
+            ?: fetchMetaDetails(type, id, preferredAddonBaseUrl)
+    }
+
+    private suspend fun fetchMetaDetails(
         type: String,
         id: String,
         preferredAddonBaseUrl: String? = null

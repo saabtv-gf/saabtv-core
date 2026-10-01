@@ -100,7 +100,7 @@ fun SettingsScreen(
     // 1. Side Nav (Always)
     // 2. Top Nav AND Screen is Focused (Handle = Open Nav/Go Back)
     // Disabled when Top Nav AND Screen NOT Focused (Nav is focused) -> Let Nav handle Close.
-    BackHandler(enabled = !isTopNav || isScreenFocused) {
+    BackHandler(enabled = isScreenFocused) {
         if (isContentFocused) {
             itemRequesters[selectedSection]?.requestFocus()
         } else {
@@ -134,6 +134,7 @@ fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .onFocusChanged { isScreenFocused = it.hasFocus; onScreenFocusChanged(it.hasFocus) }
+            .focusGroup()
     ) {
         Row(
             modifier = Modifier

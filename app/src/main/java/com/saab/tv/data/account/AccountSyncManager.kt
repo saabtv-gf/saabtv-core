@@ -128,6 +128,27 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
         restoreCloud(cloud)
     }
 
+    internal suspend fun playbackHistory(): RemotePlaybackHistory {
+        val userId = requireNotNull(auth.userId)
+        val cloud = remote() ?: return RemotePlaybackHistory(emptyList(), false)
+        val snapshot = payload(cloud)
+        require(auth.userId == userId && snapshot.get("userId").asString == userId)
+        val rows = snapshot.getAsJsonObject("tables").getAsJsonArray("watch_history")
+        val gson = com.google.gson.Gson()
+        val items = rows.map { gson.fromJson(it, com.saab.tv.data.model.WatchHistoryEntity::class.java) }
+            .filter { !it.id.isNullOrBlank() && it.position >= 0 && it.duration >= 0 }
+        // Do not resurrect locally cleared rows from the already-applied revision.
+        val revision = cloud.get("revision").asLong
+        return RemotePlaybackHistory(items, canFillMissingProgress(revision), revision)
+    }
+
+    internal fun canFillMissingProgress(revision: Long): Boolean = revision >
+        maxOf(metadata.getLong("revision", 0), metadata.getLong("progress_revision", 0))
+
+    internal fun markProgressApplied(revision: Long) {
+        check(metadata.edit().putLong("progress_revision", maxOf(revision, metadata.getLong("progress_revision", 0))).commit())
+    }
+
     /** Read-only probe; the launcher performs any replacement before opening repositories. */
     suspend fun hasNewerCleanBackup(): Boolean {
         val cloud = remote() ?: return false
@@ -158,6 +179,7 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
 
     private fun saveMetadata(revision: Long, hash: String) {
         check(metadata.edit().putLong("revision", revision).putString("hash", hash)
+            .putLong("progress_revision", maxOf(revision, metadata.getLong("progress_revision", 0)))
             .putLong("synced_at", System.currentTimeMillis()).commit())
     }
 }
@@ -173,6 +195,41 @@ class AccountSyncManager @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     private val mutex = Mutex()
     private val cloud = AccountCloudStore(context, auth, db)
+    private val playbackHistoryCache = com.saab.tv.data.cache.PreviewWarmupCache<RemotePlaybackHistory>(
+        scope, SystemClock::elapsedRealtime, ttlMs = 10_000L, capacity = 1
+    )
+
+    fun preparePlaybackResume() {
+        val userId = auth.userId ?: return
+        if (!auth.hasSession || suspended) return
+        playbackHistoryCache.prefetch(userId) { withTimeout(5_000L) { cloud.playbackHistory() } }
+    }
+
+    suspend fun freshestPlaybackHistory(
+        local: List<com.saab.tv.data.model.WatchHistoryEntity>, profileId: Int
+    ): List<com.saab.tv.data.model.WatchHistoryEntity> {
+        val userId = auth.userId ?: return local
+        if (!auth.hasSession || suspended) return local
+        preparePlaybackResume()
+        val remote = withTimeoutOrNull(1_500L) { playbackHistoryCache.awaitIfPresent(userId) } ?: return local
+        if (auth.userId != userId) return local
+        if (!mutex.tryLock()) return newestPlaybackHistory(local, remote, profileId)
+        return try {
+            if (auth.userId != userId || suspended) return local
+            val effective = remote.copy(canFillMissing = cloud.canFillMissingProgress(remote.revision))
+            // Import progress, not device/profile preferences or the whole account snapshot.
+            // Preserve remote timestamps so this is not mistaken for a new local watch event.
+            importedHistoryInvalidation.set(true)
+            db.addonDao().mergeRemotePlaybackHistory(effective.items, effective.canFillMissing)
+            cloud.markProgressApplied(remote.revision)
+            val current = local.mapNotNull { db.addonDao().getHistoryItemForProfile(profileId, it.id) }
+            newestPlaybackHistory(current, effective, profileId)
+        } catch (cancelled: CancellationException) { throw cancelled }
+          catch (failure: Exception) {
+            com.saab.tv.AppDiagnostics.failure("Cloud Sync", "Progress Import Failed", failure)
+            newestPlaybackHistory(local, remote, profileId)
+        } finally { mutex.unlock() }
+    }
     private val _status = MutableStateFlow("Not synced yet")
     val status: StateFlow<String> = _status
     private var started = false
@@ -184,11 +241,18 @@ class AccountSyncManager @Inject constructor(
         override fun onAvailable(network: android.net.Network) { requestSync(urgent = true) }
     }
     @Volatile private var suspended = false
+    private val importedHistoryInvalidation = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var conflictPending = false
     private val preferenceStores = AccountSnapshotStore(context, db).preferenceStores()
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> cloud.noteLocalChange(); requestSync() }
     private val databaseObserver = object : InvalidationTracker.Observer(AccountSnapshotStore.TABLES.toTypedArray()) {
-        override fun onInvalidated(tables: Set<String>) { cloud.noteLocalChange(); requestSync(progressOnly = tables.all { it == "watch_history" || it == "series_next_up" }) }
+        override fun onInvalidated(tables: Set<String>) {
+            // Player saves notify historyChanged explicitly, even if Room coalesces
+            // an import with a concurrent local progress write into this callback.
+            if (tables.all { it == "watch_history" } && importedHistoryInvalidation.getAndSet(false)) return
+            cloud.noteLocalChange()
+            requestSync(progressOnly = tables.all { it == "watch_history" || it == "series_next_up" })
+        }
     }
 
     fun start() {

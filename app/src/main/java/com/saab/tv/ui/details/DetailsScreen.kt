@@ -143,7 +143,7 @@ fun DetailsScreen(
         onEpisodes = { viewModel.openEpisodes() },
         defaultEnabled = !state.isLoadingStreams && state.sidebarState is SidebarState.Closed && !autoStartPlayback) {
 
-    LaunchedEffect(type, id) { viewModel.loadDetails(type, id, addonBaseUrl) }
+    LaunchedEffect(type, id, autoStartPlayback) { viewModel.loadDetails(type, id, addonBaseUrl, playbackOnly = autoStartPlayback) }
 
     val movie = state.meta
     val streamId = state.resolvedId ?: movie?.id ?: id // Resolved IMDb ID for stream/subtitle requests

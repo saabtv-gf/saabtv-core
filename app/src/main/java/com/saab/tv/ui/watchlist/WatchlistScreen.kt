@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -85,7 +86,7 @@ fun WatchlistScreen(
         actionItem = item
     }
 
-    androidx.activity.compose.BackHandler { runCatching { drawerRequester.requestFocus() } }
+    androidx.activity.compose.BackHandler(enabled = hasContentFocus) { runCatching { drawerRequester.requestFocus() } }
 
     val upKeyDebouncer = remember { UpKeyDebouncer() }
     val dpadRepeatGate = remember { DpadRepeatGate() }
@@ -155,7 +156,7 @@ fun WatchlistScreen(
 
     androidx.compose.runtime.CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides watchedIds,
         com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
-    Box(modifier = Modifier.fillMaxSize().onFocusChanged { hasContentFocus = it.hasFocus }) {
+    Box(modifier = Modifier.fillMaxSize().onFocusChanged { hasContentFocus = it.hasFocus }.focusGroup()) {
         if (movies.isEmpty() && series.isEmpty()) {
             Box(
                 Modifier

@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -175,7 +176,7 @@ fun HomeScreen(
     // 3. Top-Nav mode AND focus not yet established (transition guard)
     // If Top-Nav mode AND content is NOT focused AND focus was already set, disable this
     // handler so TopNavigationBar's handler can "Close Nav" (return to content).
-    BackHandler(enabled = !isTopNav || isContentFocused || !focusEverSet) {
+    BackHandler(enabled = isContentFocused) {
         drawerRequester.requestFocus()
     }
 
@@ -186,6 +187,7 @@ fun HomeScreen(
                 isContentFocused = it.hasFocus
                 if (it.hasFocus) focusEverSet = true
             }
+            .focusGroup()
     ) {
         SaabTvBackground {
         CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides state.watchedIds,

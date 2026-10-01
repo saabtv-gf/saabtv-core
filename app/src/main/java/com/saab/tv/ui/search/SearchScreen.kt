@@ -16,6 +16,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,7 +33,12 @@ import com.saab.tv.ui.components.SaabTvCard
 import com.saab.tv.ui.home.DpadRepeatGate
 import com.saab.tv.ui.home.CatalogQuickActionsPopup
 
-private fun FocusRequester.requestFocusSafely(): Boolean = runCatching { requestFocus(); true }.getOrDefault(false)
+private fun FocusRequester.requestFocusSafely(): Boolean = runCatching {
+    requestFocus()
+    val focused = captureFocus()
+    if (focused) freeFocus()
+    focused
+}.getOrDefault(false)
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,7 +70,6 @@ fun SearchScreen(
     val previewViewModel = androidx.hilt.navigation.compose.hiltViewModel<com.saab.tv.ui.home.HomeViewModel>()
     val focusedResult: (String?) -> Unit = { id -> previewId = id; onFocusedIdChange(id) }
     var hasFocus by remember { mutableStateOf(false) }
-    var focusEstablished by remember { mutableStateOf(false) }
     var restoreResultFocus by remember { mutableStateOf(lastFocusedId != null) }
     val moviesEntry = remember { FocusRequester() }
     val seriesEntry = remember { FocusRequester() }
@@ -73,7 +78,7 @@ fun SearchScreen(
     val focusTarget = state.results.firstOrNull { it.id == lastFocusedId } ?: firstResult
     val targetKey = focusTarget?.let { "${it.type}:${it.id}" }
 
-    BackHandler(enabled = !topNav || hasFocus || !focusEstablished) { drawerRequester.requestFocusSafely() }
+    BackHandler(enabled = hasFocus) { drawerRequester.requestFocusSafely() }
     LaunchedEffect(searchSessionId) {
         if (viewModel.beginSearchSession(searchSessionId)) {
             restoreResultFocus = false
@@ -99,8 +104,7 @@ fun SearchScreen(
             com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
         BoxWithConstraints(Modifier.fillMaxSize().onFocusChanged {
             hasFocus = it.hasFocus
-            if (hasFocus) focusEstablished = true
-        }) {
+        }.focusGroup()) {
             val top = if (topNav) 48.dp else 8.dp
             val posterHeight = ((maxHeight - top - 236.dp) / 2f - 42.dp).coerceIn(60.dp, 155.dp)
             Column(Modifier.fillMaxSize().padding(

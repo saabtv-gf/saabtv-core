@@ -73,7 +73,10 @@ fun NavDrawer(
     hideNavigation: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    var isMenuFocused by remember { mutableStateOf(false) }
+    var drawerHasFocus by remember { mutableStateOf(false) }
+    val navigationBlocked = hideNavigation || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
+        com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
+    val isMenuFocused = drawerHasFocus && !navigationBlocked
 
     val width by animateDpAsState(
         targetValue = if (isMenuFocused) 200.dp else 80.dp,
@@ -179,7 +182,7 @@ fun NavDrawer(
                 .then(Modifier.focusProperties { canFocus = !hideNavigation })
                 .fillMaxHeight()
                 .zIndex(2f)
-                .onFocusChanged { isMenuFocused = it.hasFocus }
+                .onFocusChanged { drawerHasFocus = it.hasFocus }
                 .padding(top = 30.dp, bottom = 30.dp)
         ) {
             Column(
@@ -202,10 +205,11 @@ fun NavDrawer(
                         isDrawerActive = isMenuFocused,
                         onNavigate = onNavigate,
                         modifier = Modifier
+                            .focusProperties { canFocus = !navigationBlocked }
                             .focusRequester(drawerRequesters[dest]!!)
                             .onPreviewKeyEvent {
                                 if (it.type == KeyEventType.KeyDown) {
-                                    if (it.key == Key.DirectionRight || it.key == Key.Back) {
+                                    if (it.key == Key.DirectionRight) {
                                         onClose()
                                         true
                                     } else {
@@ -229,10 +233,11 @@ fun NavDrawer(
                             isMenuExpanded = isMenuFocused,
                             onNavigate = { onNavigate(NavDestination.Profile) },
                             modifier = Modifier
+                                .focusProperties { canFocus = !navigationBlocked }
                                 .focusRequester(drawerRequesters[NavDestination.Profile]!!)
                                 .onPreviewKeyEvent {
                                     if (it.type == KeyEventType.KeyDown) {
-                                        if (it.key == Key.DirectionRight || it.key == Key.Back) {
+                                        if (it.key == Key.DirectionRight) {
                                             onClose()
                                             true
                                         } else {

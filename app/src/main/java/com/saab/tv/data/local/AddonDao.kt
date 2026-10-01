@@ -88,6 +88,16 @@ interface AddonDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHistoryItems(items: List<WatchHistoryEntity>)
 
+    @Transaction
+    suspend fun mergeRemotePlaybackHistory(items: List<WatchHistoryEntity>, allowMissing: Boolean) {
+        for (incoming in items) {
+            if (getProfileById(incoming.profileId) == null || incoming.lastWatched <= 0) continue
+            val current = getHistoryItemForProfile(incoming.profileId, incoming.id)
+            if ((current == null && allowMissing) ||
+                (current != null && incoming.lastWatched > current.lastWatched)) insertHistory(incoming)
+        }
+    }
+
     @Query("DELETE FROM watch_history WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1)")
     suspend fun clearWatchHistory()
 

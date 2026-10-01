@@ -85,7 +85,9 @@ fun TopNavigationBar(
     var isSettingsAreaFocused by remember { mutableStateOf(false) }
     var isCenterAreaFocused by remember { mutableStateOf(false) }
     // Combined: navbar is active if either section has focus
-    val isTopNavActive = isSettingsAreaFocused || isCenterAreaFocused
+    val navigationBlocked = hideNavigation || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
+        com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
+    val isTopNavActive = (isSettingsAreaFocused || isCenterAreaFocused) && !navigationBlocked
     
     // Back from the navigation surface is an app-exit request and must confirm.
     androidx.activity.compose.BackHandler(enabled = isTopNavActive) {
@@ -185,9 +187,8 @@ fun TopNavigationBar(
                 .then(Modifier.focusProperties { canFocus = !hideNavigation })
                 .zIndex(2f)
                 .onFocusChanged { 
-                    isSettingsAreaFocused = it.hasFocus
-                    isCenterAreaFocused = it.hasFocus 
-                }
+                    isCenterAreaFocused = it.hasFocus
+                }.focusGroup()
         ) {
             // Profile Button (Left aligned) - fades with navbar
             val profileAlpha by animateFloatAsState(
@@ -206,6 +207,7 @@ fun TopNavigationBar(
                     profile = currentProfile,
                     onNavigate = onLogout,
                     modifier = Modifier
+                        .focusProperties { canFocus = !navigationBlocked }
                         .focusRequester(topNavRequesters[profileItem]!!)
                         .onFocusChanged { isProfileFocused = it.isFocused }
                         .onPreviewKeyEvent { event ->
@@ -247,6 +249,7 @@ fun TopNavigationBar(
                              else onNavigate(destination)
                          },
                          modifier = Modifier
+                             .focusProperties { canFocus = !navigationBlocked }
                              .focusRequester(topNavRequesters[destination]!!)
                              .onPreviewKeyEvent { event ->
                                  if (event.type == KeyEventType.KeyDown) {
@@ -283,7 +286,7 @@ fun TopNavigationBar(
                 .padding(start = 24.dp, top = 70.dp)
                 .zIndex(if (showSettingsMenu) 5f else -1f) // Behind everything when hidden
                 .graphicsLayer { alpha = if (hideNavigation) 0f else dropdownAlpha }
-                .onFocusChanged { isSettingsAreaFocused = it.hasFocus }
+                .onFocusChanged { isSettingsAreaFocused = it.hasFocus }.focusGroup()
         ) {
             Column(
                 horizontalAlignment = Alignment.Start,
@@ -299,6 +302,7 @@ fun TopNavigationBar(
                         else onNavigate(settingsItem)
                     },
                     modifier = Modifier
+                        .focusProperties { canFocus = !navigationBlocked }
                         .focusRequester(topNavRequesters[settingsItem]!!)
                         .onFocusChanged { isSettingsFocused = it.isFocused }
                         .onPreviewKeyEvent { event ->
@@ -335,6 +339,7 @@ fun TopNavigationBar(
                     isTopNavActive = true,
                     onNavigate = onExit,
                     modifier = Modifier
+                        .focusProperties { canFocus = !navigationBlocked }
                         .focusRequester(topNavRequesters[exitItem]!!)
                         .onFocusChanged { isExitFocused = it.isFocused }
                         .onPreviewKeyEvent { event ->

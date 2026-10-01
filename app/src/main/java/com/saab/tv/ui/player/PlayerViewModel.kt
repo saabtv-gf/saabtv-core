@@ -29,12 +29,6 @@ class PlayerViewModel @Inject constructor(
 ) : ViewModel() {
     private val completedThisSession = ConcurrentHashMap.newKeySet<String>()
     private val historyWriteMutex = Mutex()
-    // Bind writes to the playback owner, not a different profile selected while
-    // final non-cancellable saves are still draining after leaving the player.
-    private val playbackProfileId = viewModelScope.async(Dispatchers.IO + NonCancellable) {
-        dao.getActiveProfileId() ?: 1
-    }
-
     suspend fun streamSubtitles(
         mediaType: String,
         playbackId: String,
@@ -61,22 +55,24 @@ class PlayerViewModel @Inject constructor(
         poster: String?,
         position: Long,
         duration: Long?,
-        syncBoundary: Boolean = false
+        syncBoundary: Boolean = false,
+        profileId: Int
     ) {
+        val recordedAt = System.currentTimeMillis()
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             if (id.startsWith("trailer_")) return@launch
             val safePosition = position.coerceAtLeast(0L)
             if (safePosition < 5_000L) return@launch
             historyWriteMutex.withLock {
-                val profileId = playbackProfileId.await()
                 val existing = dao.getHistoryItemForProfile(profileId, id)
-                val watchedThreshold = watchedThresholdRatio()
+                if (existing != null && existing.lastWatched > recordedAt) return@withLock
+                val watchedThreshold = watchedThresholdRatio(profileId)
                 val progress = WatchProgressPolicy.evaluate(
                     positionMs = safePosition,
                     reportedDurationMs = duration,
                     existingDurationMs = existing?.duration,
                     watchedThreshold = watchedThreshold,
-                    forceCompleted = completedThisSession.contains(id)
+                    forceCompleted = completedThisSession.contains("$profileId:$id")
                 )
 
                 val entry = WatchHistoryEntity(
@@ -88,7 +84,7 @@ class PlayerViewModel @Inject constructor(
                     logo = existing?.logo,
                     position = safePosition,
                     duration = progress.storedDurationMs,
-                    lastWatched = System.currentTimeMillis(),
+                    lastWatched = recordedAt,
                     type = type.ifBlank { "movie" },
                     watched = WatchProgressPolicy.preserveWatched(progress.isCompleted, existing?.watched == true),
                     scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
@@ -112,22 +108,24 @@ class PlayerViewModel @Inject constructor(
         title: String,
         poster: String?,
         position: Long,
-        duration: Long?
+        duration: Long?,
+        profileId: Int
     ) {
+        val recordedAt = System.currentTimeMillis()
         if (id.startsWith("trailer_")) return
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             historyWriteMutex.withLock {
-                val profileId = playbackProfileId.await()
                 val existing = dao.getHistoryItemForProfile(profileId, id)
+                if (existing != null && existing.lastWatched > recordedAt) return@withLock
                 val safePosition = position.coerceAtLeast(0L)
                 val progress = WatchProgressPolicy.evaluate(
                     positionMs = safePosition,
                     reportedDurationMs = duration,
                     existingDurationMs = existing?.duration,
-                    watchedThreshold = watchedThresholdRatio(),
+                    watchedThreshold = watchedThresholdRatio(profileId),
                     forceCompleted = true
                 )
-                if (progress.isCompleted) completedThisSession.add(id)
+                if (progress.isCompleted) completedThisSession.add("$profileId:$id")
                 dao.insertHistory(
                     WatchHistoryEntity(
                         profileId = profileId,
@@ -138,7 +136,7 @@ class PlayerViewModel @Inject constructor(
                         logo = existing?.logo,
                         position = safePosition,
                         duration = progress.storedDurationMs,
-                        lastWatched = System.currentTimeMillis(),
+                        lastWatched = recordedAt,
                         type = type.ifBlank { existing?.type ?: "movie" },
                         watched = WatchProgressPolicy.preserveWatched(progress.isCompleted, existing?.watched == true),
                         scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
@@ -213,10 +211,11 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    suspend fun getResumePosition(id: String): Long {
+    suspend fun getResumePosition(id: String, profileId: Int): Long {
         return withContext(Dispatchers.IO) {
-            val item = dao.getHistoryItemForProfile(playbackProfileId.await(), id)
-            val watchedThreshold = watchedThresholdRatio()
+            val local = dao.getHistoryItemForProfile(profileId, id)
+            val item = accountSync.freshestPlaybackHistory(listOfNotNull(local), profileId).firstOrNull { it.id == id }
+            val watchedThreshold = watchedThresholdRatio(profileId)
             val canResume = item != null && WatchProgressPolicy.canResume(
                 positionMs = item.position,
                 durationMs = item.duration,
@@ -227,8 +226,7 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private suspend fun watchedThresholdRatio(): Double {
-        val profileId = playbackProfileId.await()
+    private suspend fun watchedThresholdRatio(profileId: Int): Double {
         val percent = dao.getProfileById(profileId)?.watchedThreshold ?: 95
         return percent.coerceIn(50, 99) / 100.0
     }

@@ -51,7 +51,10 @@ internal fun InlineTrailerCard(session: InlineTrailerSession) {
     }
     Column(Modifier.fillMaxSize().background(Color(0xFF151515))
         .onPreviewKeyEvent { event ->
-            if (event.key == Key.Back || event.key == Key.Escape) return@onPreviewKeyEvent false
+            if (event.key == Key.Back || event.key == Key.Escape) {
+                if (event.type == KeyEventType.KeyUp) session.onDismiss()
+                return@onPreviewKeyEvent true
+            }
             if (event.key == revealingKey) {
                 if (event.type == KeyEventType.KeyUp) revealingKey = null
                 return@onPreviewKeyEvent true

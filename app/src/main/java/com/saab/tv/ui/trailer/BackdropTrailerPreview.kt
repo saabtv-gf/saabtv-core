@@ -117,6 +117,12 @@ fun BackdropTrailerPreview(
         return
     }
     val item = activeItem ?: return
+    LaunchedEffect(profileId, item.type, item.id) {
+        try {
+            homeModel.prefetchTrailerSources(item)
+        } catch (cancelled: CancellationException) { throw cancelled }
+          catch (_: Exception) { /* Playback falls back to a fresh lookup. */ }
+    }
     var muted by remember(key) { mutableStateOf(settings.muted) }
     var started by remember(key) { mutableStateOf(false) }
     var controlsVisible by remember(key) { mutableStateOf(true) }
@@ -201,7 +207,10 @@ fun BackdropTrailerPreview(
     }
     Box(Modifier.fillMaxSize().background(Color.Black).zIndex(20f)
         .onPreviewKeyEvent { event ->
-            if (event.key == Key.Back || event.key == Key.Escape) return@onPreviewKeyEvent false
+            if (event.key == Key.Back || event.key == Key.Escape) {
+                if (event.type == KeyEventType.KeyUp) session.onDismiss()
+                return@onPreviewKeyEvent true
+            }
             if (event.key == revealingKey) {
                 if (event.type == KeyEventType.KeyUp) revealingKey = null
                 return@onPreviewKeyEvent true

@@ -57,6 +57,34 @@ class HomeViewModel @Inject constructor(
     suspend fun isWatchlisted(profileId: Int, id: String): Boolean = dao.isInWatchlist(profileId, id)
     suspend fun activeProfileId(): Int? = dao.getActiveProfileId()
 
+    /** Resolve only the episode actually targeted by Start Watching; never start a torrent. */
+    suspend fun prefetchTrailerSources(item: MetaItem) {
+        val profileId = dao.getActiveProfileId() ?: return
+        val resolvedId = if (item.id.startsWith("tmdb:")) {
+            val numericId = item.id.substringAfter(':').substringBefore(':').toIntOrNull()
+            numericId?.let { tmdbService.tmdbToImdb(it, tmdbService.normalizeMediaType(item.type)) } ?: item.id
+        } else item.id
+        val streamId = if (item.type == "series") {
+            val meta = repository.prefetchTrailerMetadata("series", resolvedId, item.addonBaseUrl) ?: return
+            val episodes = com.saab.tv.domain.normalizeEpisodeList(meta.videos.orEmpty())
+            val history = dao.getSeriesEpisodeHistory("${meta.id}:%")
+            val latest = dao.getLatestSeriesEpisodeHistory("${meta.id}:%")
+            fun watched(episode: com.saab.tv.data.model.stremio.MetaVideo) = history.any {
+                it.watched && com.saab.tv.domain.episodeMatchesPlaybackId(meta.id, it.id, episode)
+            }
+            val resumed = episodes.firstOrNull {
+                latest != null && !latest.watched && !watched(it) &&
+                    com.saab.tv.domain.episodeMatchesPlaybackId(meta.id, latest.id, it)
+            }
+            val target = resumed ?: episodes.firstOrNull { !watched(it) } ?: episodes.firstOrNull() ?: return
+            com.saab.tv.domain.episodeStreamId(meta.id, target)
+        } else resolvedId
+        // A profile change while metadata resolves must not warm the new account's sources.
+        if (dao.getActiveProfileId() != profileId) return
+        repository.prefetchTrailerStreams(item.type, streamId)
+        if (item.type != "series") repository.prefetchTrailerMetadata(item.type, resolvedId, item.addonBaseUrl)
+    }
+
     fun toggleWatchlist(profileId: Int, item: MetaItem) {
         viewModelScope.launch(Dispatchers.IO) {
             if (dao.isInWatchlist(profileId, item.id)) dao.removeFromWatchlist(profileId, item.id)

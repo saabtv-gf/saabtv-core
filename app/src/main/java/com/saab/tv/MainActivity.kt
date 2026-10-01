@@ -130,10 +130,16 @@ private const val SOURCE_SELECTION_COMMIT_MIN_POSITION_MS = 5_000L
 private const val SOURCE_SELECTION_FAILURE_RESET_MAX_POSITION_MS = 1_000L
 
 private fun FocusRequester.requestFocusSafely(): Boolean =
-    runCatching { requestFocus(); true }.getOrDefault(false)
+    runCatching {
+        requestFocus()
+        // Compose 1.7 requestFocus returns Unit; capture verifies actual focus.
+        val focused = captureFocus()
+        if (focused) freeFocus()
+        focused
+    }.getOrDefault(false)
 
 private suspend fun FocusRequester.requestFocusWhenAttached(hasFocus: () -> Boolean = { true }): Boolean {
-    repeat(14) {
+    repeat(40) {
         androidx.compose.runtime.withFrameNanos { }
         if (requestFocusSafely()) {
             androidx.compose.runtime.withFrameNanos { }
@@ -999,7 +1005,7 @@ class MainActivity : ComponentActivity() {
                             selectedPlaybackType = movie.type
                             selectedPlaybackTitle = movie.name
                             autoResumeFromContinue = true
-                            previousView = activeView
+                            previousView = com.saab.tv.ui.navigation.BrowseReturnPolicy.forPlayback(activeView, previousView)
                             selectedVideoUrl = ""
                             torrentProgress = TorrentProgress("Finding your source...")
                             activeView = "resume"
@@ -1010,36 +1016,35 @@ class MainActivity : ComponentActivity() {
                             if (view == "menu") {
                                 var settingsContentFocused by remember { mutableStateOf(false) }
 
-                                // Shared content composable
-                                // Shared navigation handler
+                                val pendingEntry = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
+                                DisposableEffect(Unit) { onDispose { pendingEntry[0]?.cancel() } }
+                                val handleEnterContent: () -> Unit = {
+                                    pendingEntry[0]?.cancel()
+                                    val destination = currentNav
+                                    pendingEntry[0] = uiScope.launch {
+                                        androidx.compose.runtime.withFrameNanos { }
+                                        if (currentNav != destination || activeView != "menu") return@launch
+                                        when (destination) {
+                                            NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott ->
+                                                homeEntryRequester.requestFocusWhenAttached()
+                                            NavDestination.Search -> searchEntryRequester.requestFocusWhenAttached()
+                                            NavDestination.Settings -> settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused }
+                                            NavDestination.Watchlist -> watchlistEntryRequester.requestFocusWhenAttached()
+                                            else -> Unit
+                                        }
+                                    }
+                                }
                                 val handleNavigate: (NavDestination) -> Unit = { destination ->
+                                    pendingEntry[0]?.cancel()
                                     if (destination == NavDestination.Exit) {
                                         showExitConfirmation = true
                                     } else if (currentNav == destination) {
-                                        // Already here - just focus content
-                                        when(destination) {
-                                            NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> homeEntryRequester.requestFocusSafely()
-                                            NavDestination.Search -> searchEntryRequester.requestFocusSafely()
-                                            NavDestination.Settings -> uiScope.launch { settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused } }
-                                            NavDestination.Watchlist -> watchlistEntryRequester.requestFocusSafely()
-                                            else -> {}
-                                        }
+                                        handleEnterContent()
                                     } else {
                                         if (currentNav == NavDestination.Search) searchFocusTarget = null
                                         if (currentNav == NavDestination.Settings) settingsContentFocused = false
                                         if (destination == NavDestination.Search) searchSessionId++
                                         currentNav = destination
-                                    }
-                                }
-
-                                // Shared enter content handler
-                                val handleEnterContent: () -> Unit = {
-                                    when(currentNav) {
-                                        NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> homeEntryRequester.requestFocusSafely()
-                                        NavDestination.Search -> searchEntryRequester.requestFocusSafely()
-                                        NavDestination.Settings -> uiScope.launch { settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused } }
-                                        NavDestination.Watchlist -> watchlistEntryRequester.requestFocusSafely()
-                                        else -> {}
                                     }
                                 }
 
@@ -1502,7 +1507,7 @@ class MainActivity : ComponentActivity() {
                             BackHandler {
                                 if (!detailsNavController.popBackStack()) {
                                     autoResumeFromContinue = false
-                                    activeView = previousView
+                                    activeView = com.saab.tv.ui.navigation.BrowseReturnPolicy.onBack(previousView)
                                 }
                             }
 
@@ -1535,7 +1540,6 @@ class MainActivity : ComponentActivity() {
                                 )
                                 if (url.startsWith("magnet:")) {
                                     uiScope.launch {
-                                        launch { mainViewModel.persistActiveProfileState() }
                                         selectedPlaybackId = playbackId
                                         selectedPlaybackType = playbackType
                                         selectedPlaybackTitle = resolvedPlaybackTitle
@@ -1585,7 +1589,6 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     stopService(Intent(this@MainActivity, TorrentService::class.java))
                                     uiScope.launch {
-                                        launch { mainViewModel.persistActiveProfileState() }
                                         selectedPlaybackId = playbackId
                                         selectedPlaybackType = playbackType
                                         selectedPlaybackTitle = resolvedPlaybackTitle
@@ -1730,6 +1733,10 @@ class MainActivity : ComponentActivity() {
                             if (selectedVideoUrl.isBlank() && torrentProgress == null) {
                                 LaunchedEffect(Unit) { activeView = "details" }
                             } else {
+                            var playbackStarted by remember(selectedPlaybackId, selectedVideoUrl) { mutableStateOf(false) }
+                            LaunchedEffect(playbackStarted, selectedPlaybackId) {
+                                if (playbackStarted) mainViewModel.persistActiveProfileState()
+                            }
                             val rememberedTrackSelection = remember(selectedPlaybackId) {
                                 playbackTrackSelectionStore.getSelection(selectedPlaybackId)
                             }
@@ -1766,7 +1773,8 @@ class MainActivity : ComponentActivity() {
 
                             // Fetch the next episode while the current one is playing. This removes
                             // addon and subtitle network latency from autoplay/Next Episode.
-                            LaunchedEffect(selectedMovieId, selectedPlaybackId, nextEpisode?.id) {
+                            LaunchedEffect(selectedMovieId, selectedPlaybackId, nextEpisode?.id, playbackStarted) {
+                                if (!playbackStarted) return@LaunchedEffect
                                 val episode = nextEpisode ?: run {
                                     playerState.prefetchedEpisodeData = null
                                     return@LaunchedEffect
@@ -1806,9 +1814,9 @@ class MainActivity : ComponentActivity() {
                                 skipIntroEnabled || (autoplayEnabled && nextEpisode != null)
                             )
                             var skipSegmentInfo by remember { mutableStateOf<SkipSegmentInfo?>(null) }
-                            LaunchedEffect(selectedPlaybackId, needIntroDB, skipIntroEnabled) {
+                            LaunchedEffect(selectedPlaybackId, needIntroDB, skipIntroEnabled, playbackStarted) {
                                 skipSegmentInfo = null
-                                if (!needIntroDB) return@LaunchedEffect
+                                if (!needIntroDB || !playbackStarted) return@LaunchedEffect
                                 if (!isSeries || selectedPlaybackId.isBlank()) return@LaunchedEffect
                                 val parts = selectedPlaybackId.split(":")
                                 if (parts.size < 3) return@LaunchedEffect
@@ -1827,6 +1835,7 @@ class MainActivity : ComponentActivity() {
                             }
 
                             PlayerScreen(
+                                onFirstFrame = { playbackStarted = true },
                                 videoUrl = selectedVideoUrl,
                                 trailerAudioUrl = selectedTrailerAudioUrl.takeIf { it.isNotBlank() },
                                 trailerVariants = selectedTrailerVariants,
