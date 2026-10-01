@@ -53,8 +53,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 83
-        versionName = "0.1.82-beta"
+        versionCode = 84
+        versionName = "0.1.83-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -170,7 +170,7 @@ kapt {
 
 dependencies {
     // 0. ASS/SSA subtitle renderer
-    implementation("com.github.LumeraD3v:assrender:1.0.2")
+    implementation(libs.assrender)
 
     // 1. Android TV UI (Compose)
     implementation(platform(libs.androidx.compose.bom))
@@ -183,25 +183,25 @@ dependencies {
     implementation(libs.androidx.tv.material)
 
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation(libs.catalog.androidx.lifecycle.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
 
     // 2. Networking
-    implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation(libs.catalog.com.squareup.retrofit2.retrofit)
+    implementation(libs.catalog.com.squareup.retrofit2.converter.gson)
     // 4. Image Loading
-    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation(libs.catalog.io.coil.kt.coil.compose)
 
     // 5. Database
-    implementation("androidx.room:room-runtime:2.7.0")
-    implementation("androidx.room:room-ktx:2.7.0")
+    implementation(libs.catalog.androidx.room.room.runtime)
+    implementation(libs.catalog.androidx.room.room.ktx)
     implementation(libs.androidx.compose.animation.core)
-    kapt("androidx.room:room-compiler:2.7.0")
+    kapt(libs.catalog.androidx.room.room.compiler)
 
     // 6. Dependency Injection
-    implementation("com.google.dagger:hilt-android:2.51.1")
-    kapt("com.google.dagger:hilt-android-compiler:2.51.1")
-    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+    implementation(libs.catalog.com.google.dagger.hilt.android)
+    kapt(libs.catalog.com.google.dagger.hilt.android.compiler)
+    implementation(libs.catalog.androidx.hilt.hilt.navigation.compose)
 
     // 7. Video Player
     implementation(project(":playbackcore"))
@@ -216,38 +216,38 @@ dependencies {
     // 8. Testing & Debugging
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation("androidx.compose.material3:material3:1.2.0")
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation(libs.catalog.androidx.compose.material3.material3)
+    implementation(libs.catalog.androidx.compose.material.material.icons.extended)
 
     // OkHttp is already available via Retrofit, but declare explicitly for TorrServer API
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5") {
+    implementation(libs.okhttp.client)
+    implementation(libs.newpipe.extractor) {
         // The extractor calls Rhino Context directly in interpreted mode.
         // Its optional desktop javax.script adapter is not an Android runtime.
         exclude(group = "org.mozilla", module = "rhino-engine")
     }
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
+    coreLibraryDesugaring(libs.android.desugar.jdk.libs.nio)
 
     // --- LOCAL WEB SERVER (used by remote input hub) ---
 
     // --- QR CODE GENERATION ---
-    implementation("com.google.zxing:core:3.5.2")
+    implementation(libs.catalog.com.google.zxing.core)
 
     // --- ENCRYPTED SHARED PREFERENCES ---
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation(libs.catalog.androidx.security.security.crypto)
 
     // --- CRASH REPORTING (ACRA) ---
-    implementation("ch.acra:acra-http:5.11.4")
-    implementation("ch.acra:acra-toast:5.11.4")
+    implementation(libs.catalog.ch.acra.acra.http)
+    implementation(libs.catalog.ch.acra.acra.toast)
 
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test:core-ktx:1.6.1")
-    androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
-    androidTestImplementation("androidx.test:rules:1.6.1")
-    androidTestImplementation("androidx.room:room-testing:2.7.0")
-    androidTestImplementation("androidx.sqlite:sqlite-framework:2.4.0")
+    testImplementation(libs.catalog.junit.junit)
+    testImplementation(libs.okhttp.mockwebserver)
+    androidTestImplementation(libs.catalog.androidx.test.runner)
+    androidTestImplementation(libs.catalog.androidx.test.core.ktx)
+    androidTestImplementation(libs.catalog.androidx.test.ext.junit.ktx)
+    androidTestImplementation(libs.catalog.androidx.test.rules)
+    androidTestImplementation(libs.catalog.androidx.room.room.testing)
+    androidTestImplementation(libs.catalog.androidx.sqlite.sqlite.framework)
 
 }
 

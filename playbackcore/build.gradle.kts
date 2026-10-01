@@ -29,19 +29,17 @@ android {
 }
 
 dependencies {
-    val media3Version = "1.10.0-beta01"
-
-    api("androidx.media3:media3-common:$media3Version")
-    api("androidx.media3:media3-container:$media3Version")
-    api("androidx.media3:media3-datasource:$media3Version")
-    api("androidx.media3:media3-datasource-okhttp:$media3Version")
-    api("androidx.media3:media3-decoder:$media3Version")
-    api("androidx.media3:media3-exoplayer-dash:$media3Version") {
+    api(libs.catalog.androidx.media3.media3.common)
+    api(libs.catalog.androidx.media3.media3.container)
+    api(libs.catalog.androidx.media3.media3.datasource)
+    api(libs.catalog.androidx.media3.media3.datasource.okhttp)
+    api(libs.catalog.androidx.media3.media3.decoder)
+    api(libs.catalog.androidx.media3.media3.exoplayer.dash) {
         exclude(group = "androidx.media3", module = "media3-exoplayer")
     }
-    api("androidx.media3:media3-exoplayer-hls:$media3Version") {
+    api(libs.catalog.androidx.media3.media3.exoplayer.hls) {
         exclude(group = "androidx.media3", module = "media3-exoplayer")
     }
-    api("androidx.media3:media3-extractor:$media3Version")
-    api("androidx.media3:media3-ui:$media3Version")
+    api(libs.catalog.androidx.media3.media3.extractor)
+    api(libs.catalog.androidx.media3.media3.ui)
 }
