@@ -29,11 +29,11 @@ private class AccountSyncConflict(message: String) : IOException(message)
 class AccountCloudStore(private val context: Context, private val auth: AccountAuthManager, private val db: SaabTvDatabase) {
     private val metadata = AccountStorage.preferences(context, "account_sync_metadata")
     private val snapshots = AccountSnapshotStore(context, db)
+    private val components = AccountComponentCloud(context, auth)
     private val restoreJournal = AtomicFile(File(AccountStorage.files(context), "pending_cloud_restore.json"))
     private fun hash(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
         .joinToString("") { "%02x".format(it) }
-    private suspend fun remote(): JsonObject? = JsonParser.parseString(auth.dataRequest(
-        "saabtv_account_state?select=revision,ciphertext,updated_at&limit=1")).asJsonArray.firstOrNull()?.asJsonObject
+    private suspend fun remote(): JsonObject? = components.fullRemote()
 
     private fun payload(cloud: JsonObject): JsonObject = JsonParser.parseString(
         AccountSnapshotCrypto.decrypt(Base64.decode(cloud.get("ciphertext").asString, Base64.NO_WRAP),
@@ -59,9 +59,10 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
             val pending = JsonParser.parseString(restoreJournal.openRead().use { it.readBytes().toString(Charsets.UTF_8) }).asJsonObject
             restoreCloud(pending)
         }
-        val cloud = remote()
-        val revision = cloud?.get("revision")?.asLong ?: 0
         val localRevision = metadata.getLong("revision", 0)
+        val head = components.head()
+        val revision = head?.get("revision")?.asLong ?: 0
+        val cloud = if (head != null && revision != localRevision) remote() else head
         if (cloud != null && revision != localRevision) {
             val hasLocalProfiles = db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM profiles").use { it.moveToFirst(); it.getInt(0) > 0 }
             val current = snapshots.capture()
@@ -98,12 +99,7 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
         val snapshot = JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject.apply {
             addProperty("changedAt", changedAt)
         }.toString().toByteArray(Charsets.UTF_8)
-        val body = JsonObject().apply {
-            addProperty("expected_revision", metadata.getLong("revision", 0))
-            addProperty("encrypted_state", Base64.encodeToString(AccountSnapshotCrypto.encrypt(snapshot, auth.syncKey,
-                requireNotNull(auth.userId)), Base64.NO_WRAP))
-        }
-        val result = JsonParser.parseString(auth.dataRequest("rpc/saabtv_save_account", body)).asJsonObject
+        val result = components.save(snapshot, metadata.getLong("revision", 0))
         if (result.get("conflict").asBoolean) {
             val latest = remote() ?: throw IOException("Cloud backup changed during sync. Please retry.")
             val latestSnapshot = payload(latest)
@@ -113,8 +109,7 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
             }
             if (!localSnapshotIsNewer(changedAt, cloudChangedAt(latest, latestSnapshot)))
                 throw AccountSyncConflict("A newer cloud copy is available. Reopen Saab TV to load it automatically.")
-            body.addProperty("expected_revision", latest.get("revision").asLong)
-            val retry = JsonParser.parseString(auth.dataRequest("rpc/saabtv_save_account", body)).asJsonObject
+            val retry = components.save(snapshot, latest.get("revision").asLong)
             if (retry.get("conflict").asBoolean) throw IOException("Cloud backup changed again. Please retry.")
             saveMetadata(retry.get("revision").asLong, digest)
             return true
@@ -130,15 +125,12 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
 
     internal suspend fun playbackHistory(): RemotePlaybackHistory {
         val userId = requireNotNull(auth.userId)
-        val cloud = remote() ?: return RemotePlaybackHistory(emptyList(), false)
-        val snapshot = payload(cloud)
-        require(auth.userId == userId && snapshot.get("userId").asString == userId)
-        val rows = snapshot.getAsJsonObject("tables").getAsJsonArray("watch_history")
+        val (revision, rows) = components.history()
+        require(auth.userId == userId)
         val gson = com.google.gson.Gson()
         val items = rows.map { gson.fromJson(it, com.saab.tv.data.model.WatchHistoryEntity::class.java) }
             .filter { !it.id.isNullOrBlank() && it.position >= 0 && it.duration >= 0 }
         // Do not resurrect locally cleared rows from the already-applied revision.
-        val revision = cloud.get("revision").asLong
         return RemotePlaybackHistory(items, canFillMissingProgress(revision), revision)
     }
 
@@ -151,8 +143,9 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
 
     /** Read-only probe; the launcher performs any replacement before opening repositories. */
     suspend fun hasNewerCleanBackup(): Boolean {
+        val head = components.head() ?: return false
+        if (head.get("revision").asLong <= metadata.getLong("revision", 0)) return false
         val cloud = remote() ?: return false
-        if (cloud.get("revision").asLong <= metadata.getLong("revision", 0)) return false
         return metadata.getString("hash", null) == hash(snapshots.capture()) ||
             !localSnapshotIsNewer(metadata.getLong("local_changed_at", 0), cloudChangedAt(cloud, payload(cloud)))
     }
@@ -172,7 +165,7 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
     }
 
     suspend fun keepLocalCopy() {
-        val revision = remote()?.get("revision")?.asLong ?: 0
+        val revision = components.head()?.get("revision")?.asLong ?: 0
         check(metadata.edit().putLong("revision", revision).remove("hash").commit())
         upload()
     }

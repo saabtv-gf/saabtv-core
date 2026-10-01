@@ -50,6 +50,7 @@ import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -780,6 +781,7 @@ class MainActivity : ComponentActivity() {
         scheduleSplashDismiss()
     }
 
+    @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         // Sanitize saved state: R8 can obfuscate Parcelable class names, causing
         // BadParcelableException on process-death restore. Clear the bundle if corrupt.
@@ -1050,20 +1052,39 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
 
-                                var menuHasFocus by remember { mutableStateOf(false) }
+                                var browseHasFocus by remember { mutableStateOf(false) }
                                 val manualTrailerActive = com.saab.tv.ui.trailer.LocalManualTrailerActive.current
                                 Box(
                                     modifier = Modifier.fillMaxSize()
-                                        .onFocusChanged { menuHasFocus = it.hasFocus }
+                                        .onFocusChanged { browseHasFocus = it.hasFocus }
+                                        .focusProperties {
+                                            // Default re-entry after a removed button belongs to
+                                            // content. Explicit drawer requests still target it.
+                                            enter = {
+                                                if (backdropTrailerActive || manualTrailerActive ||
+                                                    com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) FocusRequester.Default
+                                                else when (currentNav) {
+                                                    NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> homeEntryRequester
+                                                    NavDestination.Search -> searchEntryRequester
+                                                    NavDestination.Settings -> settingsEntryRequester
+                                                    NavDestination.Watchlist -> watchlistEntryRequester
+                                                    else -> FocusRequester.Default
+                                                }
+                                            }
+                                        }
                                         .focusGroup()
                                         .onPreviewKeyEvent { event ->
-                                            if (!menuHasFocus && !backdropTrailerActive &&
+                                            if (!browseHasFocus && !backdropTrailerActive &&
                                                 com.saab.tv.ui.trailer.InlineTrailerAnchor.session == null &&
                                                 !manualTrailerActive &&
                                                 event.type == KeyEventType.KeyDown &&
                                                 event.key in listOf(Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight)) {
                                                 AppDiagnostics.event(this@MainActivity, "Navigation", "Lost Focus Recovery", "section=$currentNav")
-                                                drawerRequesters[currentNav]?.requestFocusSafely() == true
+                                                // A completed action can remove its focused node. Repair
+                                                // focus inside the current section, not in the drawer:
+                                                // the user's next D-pad press is not a menu-open intent.
+                                                handleEnterContent()
+                                                true
                                             } else false
                                         }
                                 ) {

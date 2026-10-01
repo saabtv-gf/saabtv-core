@@ -101,7 +101,9 @@ object AppDiagnostics {
                 if (fields.size != 5) return@mapNotNull null
                 PlaybackDiagnosticEvent(time, fields[1], fields[2], fields[3], fields[4])
             } }.getOrDefault(emptyList())
-        } + PlaybackDiagnostics.latestReport(context)?.events.orEmpty() +
+        } + listOf(PlaybackDiagnosticEvent(System.currentTimeMillis(), "INFO", "Cloud Sync", "Transfer Summary",
+            com.saab.tv.data.account.AccountTransferMetrics.summary(context))) +
+            PlaybackDiagnostics.latestReport(context)?.events.orEmpty() +
             runCatching { AppHealthMonitor.latestSummary(context).mapNotNull { line ->
                 val time = line.substringBefore(' ').toLongOrNull() ?: return@mapNotNull null
                 PlaybackDiagnosticEvent(time, "INFO", "App Health", "Historical Event", DiagnosticPrivacy.redact(line.substringAfter(' ')))
@@ -118,6 +120,7 @@ object AppDiagnostics {
             out.appendLine("Local bounded history; basic=${isBasicEnabled(context)} detailed=${PlaybackDiagnostics.isEnabled(context)}")
             out.appendLine("SDK=${android.os.Build.VERSION.SDK_INT} ${PlaybackDiagnostics.memorySummary()}")
             out.appendLine("Application Health")
+            out.appendLine(com.saab.tv.data.account.AccountTransferMetrics.summary(context))
             AppHealthMonitor.latestSummary(context).forEach { out.appendLine(DiagnosticPrivacy.redact(it)) }
             out.appendLine("Application And Latest Playback Events")
             report(context, Int.MAX_VALUE).events.asReversed().forEach { item ->

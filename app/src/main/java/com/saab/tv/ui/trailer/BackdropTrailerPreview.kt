@@ -169,85 +169,89 @@ fun BackdropTrailerPreview(
         session.muted = muted; session.watchlisted = watchlisted; session.controlsVisible = inline || controlsVisible
         if (inline) InlineTrailerAnchor.session = session else InlineTrailerAnchor.clearSession(owner)
     }
-    if (inline) {
-        val density = LocalDensity.current
-        var rootOrigin by remember { mutableStateOf(Offset.Zero) }
-        val expansion = remember(key) { Animatable(0f) }
-        LaunchedEffect(key) { expansion.animateTo(1f, tween(240, easing = FastOutSlowInEasing)) }
-        BoxWithConstraints(Modifier.fillMaxSize().zIndex(20f)
-            .onGloballyPositioned { rootOrigin = it.boundsInRoot().topLeft }) {
-            val targetBounds = with(density) {
-                InlinePreviewLayout.bounds(anchor?.let { InlinePreviewLayout.Bounds(
-                    it.left - rootOrigin.x, it.top - rootOrigin.y, it.width, it.height) },
-                    maxWidth.toPx(), maxHeight.toPx(), density.density)
-            }
-            val startBounds = anchor?.let { InlinePreviewLayout.Bounds(
-                it.left - rootOrigin.x, it.top - rootOrigin.y, it.width, it.height) } ?: targetBounds
-            fun interpolate(start: Float, end: Float) = start + (end - start) * expansion.value
-            val stage = with(density) {
-                Modifier.offset(interpolate(startBounds.left, targetBounds.left).toDp(),
-                    interpolate(startBounds.top, targetBounds.top).toDp())
-                    .size(interpolate(startBounds.width, targetBounds.width).toDp(),
-                        interpolate(startBounds.height, targetBounds.height).toDp())
-            }
-            Box(stage.shadow(16.dp, RoundedCornerShape(12.dp))
-                .clip(RoundedCornerShape(12.dp))
-                .border(2.dp, Color.White, RoundedCornerShape(12.dp))) {
-                InlineTrailerCard(session)
-            }
+    // Keep one PlayerView at one composition location. Replacing an inline
+    // PlayerView with a fullscreen one lets the old onRelease detach the new
+    // surface from the same ExoPlayer, leaving audio but no fullscreen picture.
+    val density = LocalDensity.current
+    var rootOrigin by remember { mutableStateOf(Offset.Zero) }
+    val expansion = remember(key) { Animatable(0f) }
+    LaunchedEffect(key) { expansion.animateTo(1f, tween(240, easing = FastOutSlowInEasing)) }
+    BoxWithConstraints(Modifier.fillMaxSize().zIndex(20f)
+        .onGloballyPositioned { rootOrigin = it.boundsInRoot().topLeft }) {
+        val targetBounds = with(density) {
+            InlinePreviewLayout.bounds(anchor?.let { InlinePreviewLayout.Bounds(
+                it.left - rootOrigin.x, it.top - rootOrigin.y, it.width, it.height) },
+                maxWidth.toPx(), maxHeight.toPx(), density.density)
         }
-        return
-    }
-    val playRequester = remember { FocusRequester() }
-    val rootRequester = remember { FocusRequester() }
-    var revealingKey by remember(key) { mutableStateOf<Key?>(null) }
-    LaunchedEffect(controlsVisible) {
-        withFrameNanos { }
-        runCatching { if (controlsVisible) playRequester.requestFocus() else rootRequester.requestFocus() }
-    }
-    Box(Modifier.fillMaxSize().background(Color.Black).zIndex(20f)
-        .onPreviewKeyEvent { event ->
-            if (event.key == Key.Back || event.key == Key.Escape) {
-                if (event.type == KeyEventType.KeyUp) session.onDismiss()
-                return@onPreviewKeyEvent true
-            }
-            if (event.key == revealingKey) {
-                if (event.type == KeyEventType.KeyUp) revealingKey = null
-                return@onPreviewKeyEvent true
-            }
-            if (event.type == KeyEventType.KeyDown) {
-                interactionVersion++
-                if (!controlsVisible) {
-                    controlsVisible = true; revealingKey = event.key
-                    return@onPreviewKeyEvent true
+        val startBounds = anchor?.let { InlinePreviewLayout.Bounds(
+            it.left - rootOrigin.x, it.top - rootOrigin.y, it.width, it.height) } ?: targetBounds
+        fun interpolate(start: Float, end: Float) = start + (end - start) * expansion.value
+        val stage = if (!inline) Modifier.fillMaxSize() else with(density) {
+            Modifier.offset(interpolate(startBounds.left, targetBounds.left).toDp(),
+                interpolate(startBounds.top, targetBounds.top).toDp())
+                .size(interpolate(startBounds.width, targetBounds.width).toDp(),
+                    interpolate(startBounds.height, targetBounds.height).toDp())
+        }
+        val decoration = if (!inline) Modifier else Modifier.shadow(16.dp, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .border(2.dp, Color.White, RoundedCornerShape(12.dp))
+        Box(stage.then(decoration).background(Color.Black)) {
+            TrailerVideoSurface(player, Modifier.fillMaxSize().padding(bottom = if (inline) 72.dp else 0.dp))
+            if (inline) {
+                InlineTrailerCard(session, renderVideo = false)
+            } else {
+                val playRequester = remember { FocusRequester() }
+                val rootRequester = remember { FocusRequester() }
+                var revealingKey by remember(key) { mutableStateOf<Key?>(null) }
+                LaunchedEffect(controlsVisible) {
+                    withFrameNanos { }
+                    runCatching { if (controlsVisible) playRequester.requestFocus() else rootRequester.requestFocus() }
                 }
-            }
-            event.key == Key.DirectionUp || event.key == Key.DirectionDown
-        }.focusRequester(rootRequester).focusable()) {
-        TrailerVideoSurface(player)
-        androidx.compose.animation.AnimatedVisibility(
-            visible = controlsVisible, modifier = Modifier.align(Alignment.BottomCenter),
-            enter = androidx.compose.animation.fadeIn(),
-            exit = androidx.compose.animation.fadeOut()
-        ) {
-            Row(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).padding(24.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.Start),
-                verticalAlignment = Alignment.CenterVertically) {
-                com.saab.tv.ui.components.DetailActionButton("Start Watching",
-                    androidx.compose.material.icons.Icons.Default.PlayArrow, session.onWatch,
-                    Modifier.focusRequester(playRequester).focusProperties { left = FocusRequester.Cancel })
-                session.onEpisodes?.let { onEpisodes ->
-                    com.saab.tv.ui.components.DetailActionButton("Episodes",
-                        androidx.compose.material.icons.Icons.AutoMirrored.Filled.List, onEpisodes)
+                Box(Modifier.fillMaxSize().zIndex(20f)
+                    .onPreviewKeyEvent { event ->
+                        if (event.key == Key.Back || event.key == Key.Escape) {
+                            if (event.type == KeyEventType.KeyUp) session.onDismiss()
+                            return@onPreviewKeyEvent true
+                        }
+                        if (event.key == revealingKey) {
+                            if (event.type == KeyEventType.KeyUp) revealingKey = null
+                            return@onPreviewKeyEvent true
+                        }
+                        if (event.type == KeyEventType.KeyDown) {
+                            interactionVersion++
+                            if (!controlsVisible) {
+                                controlsVisible = true; revealingKey = event.key
+                                return@onPreviewKeyEvent true
+                            }
+                        }
+                        event.key == Key.DirectionUp || event.key == Key.DirectionDown
+                    }.focusRequester(rootRequester).focusable()) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = controlsVisible, modifier = Modifier.align(Alignment.BottomCenter),
+                        enter = androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.fadeOut()
+                    ) {
+                        Row(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).padding(24.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.Start),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            com.saab.tv.ui.components.DetailActionButton("Start Watching",
+                                androidx.compose.material.icons.Icons.Default.PlayArrow, session.onWatch,
+                                Modifier.focusRequester(playRequester).focusProperties { left = FocusRequester.Cancel })
+                            session.onEpisodes?.let { onEpisodes ->
+                                com.saab.tv.ui.components.DetailActionButton("Episodes",
+                                    androidx.compose.material.icons.Icons.AutoMirrored.Filled.List, onEpisodes)
+                            }
+                            com.saab.tv.ui.components.DetailActionButton(
+                                if (watchlisted) "Remove From Watchlist" else "Add To Watchlist",
+                                if (watchlisted) androidx.compose.material.icons.Icons.Default.Bookmark else androidx.compose.material.icons.Icons.Default.BookmarkBorder,
+                                session.onWatchlist, isActive = watchlisted)
+                            com.saab.tv.ui.components.DetailActionButton(
+                                if (muted) "Unmute" else "Mute",
+                                if (muted) androidx.compose.material.icons.Icons.Default.VolumeOff else androidx.compose.material.icons.Icons.Default.VolumeUp,
+                                session.onMute, Modifier.focusProperties { right = FocusRequester.Cancel })
+                        }
+                    }
                 }
-                com.saab.tv.ui.components.DetailActionButton(
-                    if (watchlisted) "Remove From Watchlist" else "Add To Watchlist",
-                    if (watchlisted) androidx.compose.material.icons.Icons.Default.Bookmark else androidx.compose.material.icons.Icons.Default.BookmarkBorder,
-                    session.onWatchlist, isActive = watchlisted)
-                com.saab.tv.ui.components.DetailActionButton(
-                    if (muted) "Unmute" else "Mute",
-                    if (muted) androidx.compose.material.icons.Icons.Default.VolumeOff else androidx.compose.material.icons.Icons.Default.VolumeUp,
-                    session.onMute, Modifier.focusProperties { right = FocusRequester.Cancel })
             }
         }
     }
@@ -339,13 +343,13 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-internal fun TrailerVideoSurface(player: ExoPlayer) {
+internal fun TrailerVideoSurface(player: ExoPlayer, modifier: Modifier = Modifier.fillMaxSize()) {
     AndroidView(
         factory = {
             (android.view.LayoutInflater.from(it).inflate(com.saab.tv.R.layout.trailer_preview_player, null) as PlayerView)
                 .apply { useController = false; isFocusable = false; this.player = player }
         },
-        update = { it.player = player }, modifier = Modifier.fillMaxSize(),
+        update = { it.player = player }, modifier = modifier,
         onRelease = { it.player = null }
     )
 }

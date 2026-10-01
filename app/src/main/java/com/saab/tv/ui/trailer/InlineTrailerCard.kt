@@ -35,7 +35,7 @@ internal class InlineTrailerSession(
 }
 
 @Composable
-internal fun InlineTrailerCard(session: InlineTrailerSession) {
+internal fun InlineTrailerCard(session: InlineTrailerSession, renderVideo: Boolean = true) {
     val rootRequester = remember(session) { FocusRequester() }
     val playRequester = remember(session) { FocusRequester() }
     var rootFocused by remember { mutableStateOf(false) }
@@ -49,7 +49,7 @@ internal fun InlineTrailerCard(session: InlineTrailerSession) {
             if (session.controlsVisible) playRequester.requestFocus() else rootRequester.requestFocus()
         }
     }
-    Column(Modifier.fillMaxSize().background(Color(0xFF151515))
+    Column(Modifier.fillMaxSize().background(if (renderVideo) Color(0xFF151515) else Color.Transparent)
         .onPreviewKeyEvent { event ->
             if (event.key == Key.Back || event.key == Key.Escape) {
                 if (event.type == KeyEventType.KeyUp) session.onDismiss()
@@ -78,8 +78,10 @@ internal fun InlineTrailerCard(session: InlineTrailerSession) {
             session.onInteraction()
             false // OK down/up belongs to the focused control, never the poster.
         }.focusRequester(rootRequester).onFocusChanged { rootFocused = it.isFocused }.focusable()) {
-        Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) { TrailerVideoSurface(session.player) }
-        Column(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 12.dp, vertical = 5.dp)) {
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            if (renderVideo) TrailerVideoSurface(session.player)
+        }
+        Column(Modifier.fillMaxWidth().height(72.dp).background(Color(0xFF151515)).padding(horizontal = 12.dp, vertical = 5.dp)) {
             Text(session.item.name, color = Color.White,
                 style = androidx.tv.material3.MaterialTheme.typography.titleSmall,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)

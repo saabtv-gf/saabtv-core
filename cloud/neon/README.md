@@ -18,7 +18,7 @@ The availability RPC returns only a boolean. Account snapshots are protected by 
 - Backups are AES-GCM encrypted on the TV. The encryption key is derived using PBKDF2-HMAC-SHA256 (210,000 iterations) from the password and stable account ID. Session credentials and the derived key are kept in Android Keystore-backed encrypted preferences.
 - Local PIN/runtime state remains subject to Android app sandbox protection. Cloud encryption does not replace a device lock or protect a rooted TV.
 - Existing local profiles can be explicitly imported once. Original data is retained. Sign-out keeps the isolated local account cache; it does not delete the account or cloud backup.
-- Routine changes are coalesced into automatic sync attempts no more than once per 60 seconds while the app runs; unchanged data is not uploaded. Opening keyboards, TV settings or the installer does not force a cloud write. Sync Now and sign-out can explicitly flush immediately. Offline playback continues with cached account data. A conflicting cloud copy requires choosing Restore Backup or Use This TV’s Data in Account settings; it is not merged automatically.
+- Sync is event-driven: progress is batched for up to 120 seconds, settings changes are debounced, and explicit playback/background boundaries can flush promptly. Unchanged data is not uploaded. Offline playback continues with cached account data. Revision-based compare-and-swap protects writes; newer local/cloud timestamps decide which whole-account copy wins. See incremental sync below for the new transfer protocol.
 - A cloud restore is journaled as ciphertext so an interrupted restore can safely replay at next launch. Account changes restart the app process to clear account-owned singleton state.
 
 ## Validation
@@ -37,3 +37,51 @@ account tables, identity helpers or existing account policies. The approved
 migration is applied to production. See `web/remote/README.md` for protocol,
 limits, expiry/cleanup semantics and relay-only QA instructions. The exact Pages
 origin `https://saabtv-gf.github.io` is configured in Neon Auth.
+
+## Incremental sync (migration applied)
+
+`004_incremental_account_sync.sql` was applied to the production `neondb` branch
+on 2026-10-02 with the owner's approval; the Data API schema cache was refreshed.
+It preserves existing encrypted backups
+until a successful version-2 save. No database credential goes into the app.
+Post-migration checks verified protocol version 2, forced row-level security,
+no anonymous object/read/save access, and unchanged existing snapshots (two,
+1,266,108 encrypted bytes). An authenticated role without a JWT identity saw no
+objects and could not save; the validation transaction was rolled back.
+
+- Foreground/startup/resume checks select only `revision,updated_at`. The encrypted
+  manifest is fetched only if that revision is not already cached on this TV.
+- Progress is partitioned by profile and title/episode. Preferences are partitioned
+  by key; other settings tables are separate components; custom images are separate
+  immutable components. Changed content receives a new random object ID. Unchanged
+  components retain their existing IDs and are not uploaded again.
+- A single revision-checked transaction commits the encrypted manifest and changed
+  objects together, verifies every retained object, and removes unreferenced objects
+  for that account only. Clears/deletions remove manifest references. No plaintext
+  titles, paths, preference names or content hashes are stored on the server.
+- Components and manifest are gzip-compressed before AES-GCM encryption when this
+  reduces size. Decompression is bounded. Object ciphertext is authenticated against
+  the account AND object ID. Cached files are ciphertext, never plaintext snapshots.
+- Resume refresh reads only the manifest and missing progress components, not custom
+  images or unrelated settings. Images still download once when restoring a new TV.
+- Pre-migration servers fall back to the original compatible snapshot save protocol;
+  revision-only read checks and the encrypted local cache still reduce downloads.
+  Full incremental/compressed writes require migration 004 and a process restart.
+- After an account adopts v2, older apps cannot restore that account's manifest.
+  The legacy save RPC refuses to overwrite its v2 state. Upgrade **all TVs** to the
+  new app before the first v2 write; do not roll back to an older APK afterward.
+- App Diagnostics and exported reports show seven UTC days of local Data API payload
+  counts/bytes, plus the latest snapshot size and changed-component count. These are
+  application-body measurements, NOT Neon's billed network measurement; auth, phone
+  pairing, headers, transport compression, failed-response bytes and other TVs are
+  not included. No credentials, paths, object IDs or payloads are logged.
+
+Before production rollout, validate two-device restore, concurrent CAS writes,
+cleared progress, source/subtitle choices, and RLS isolation against migration 004.
+Existing unit tests cover partition round-trip, component isolation, progress
+deletion, compression, account isolation and decompression limits. They are not a
+substitute for live Data API/database or physical-TV testing.
+
+Do not run `VACUUM FULL` or delete auth data to force the storage dashboard lower.
+Live-table/TOAST/index sizes and obsolete row versions need measurement first;
+removing unused objects does not promise an immediate drop in allocated storage.

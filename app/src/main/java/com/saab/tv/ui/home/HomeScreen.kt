@@ -140,6 +140,14 @@ fun HomeScreen(
     val isOttScreen = screenNameOverride == "ott"
     val ottContentEntryRequester = remember { FocusRequester() }
     val contentEntryRequester = if (isOttScreen) ottContentEntryRequester else entryRequester
+    val dismissQuickActions: () -> Unit = {
+        longPressedItem = null
+        actionScope.launch {
+            withFrameNanos { }
+            val restored = originalPosterFocus?.let { runCatching { it.requestFocus() }.getOrDefault(false) } == true
+            if (!restored) runCatching { contentEntryRequester.requestFocus() }
+        }
+    }
     val layoutMode = if (isOttScreen) "simple" else currentProfile?.layoutFor(tab) ?: "simple"
     val isTopNav = currentProfile?.navPosition == "top"
     val isLandscapeContinueWatching = currentProfile?.continueWatchingShape == "landscape"
@@ -390,7 +398,7 @@ fun HomeScreen(
             val popupY = (longPressedBounds.center.y.toInt() - popupHeightPx / 2)
                 .coerceIn(marginPx, (screenHeightPx - popupHeightPx - marginPx).coerceAtLeast(marginPx))
             Popup(alignment = Alignment.TopStart, offset = IntOffset(popupX, popupY),
-                onDismissRequest = { longPressedItem = null }, properties = PopupProperties(focusable = true)) {
+                onDismissRequest = dismissQuickActions, properties = PopupProperties(focusable = true)) {
               Column(
                   Modifier.width(popupWidth)
                       .onPreviewKeyEvent { event ->
@@ -411,7 +419,7 @@ fun HomeScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         CardActionIcon(Icons.Default.Delete, "Clear Progress", {
                             viewModel.clearContinueProgress(profileId, item)
-                            longPressedItem = null
+                            dismissQuickActions()
                         }, Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester, destructive = true)
                         CardActionIcon(Icons.Default.Close, "Cancel", { confirmClear = false },
                             Modifier.weight(1f), enabled = actionsArmed)
@@ -458,7 +466,7 @@ fun HomeScreen(
                         CardActionIcon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
                             viewModel.toggleWatchlist(profileId, item)
-                            longPressedItem = null
+                            dismissQuickActions()
                         }, modifier = Modifier.weight(1f), enabled = actionsArmed, destructive = saved)
                     }
                     }

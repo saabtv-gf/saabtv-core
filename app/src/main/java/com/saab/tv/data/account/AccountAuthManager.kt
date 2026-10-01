@@ -126,7 +126,15 @@ class AccountAuthManager @Inject constructor(@ApplicationContext private val con
 
     suspend fun dataRequest(path: String, body: JsonObject? = null, method: String = if (body == null) "GET" else "POST",
         extraHeaders: Map<String, String> = emptyMap()): String = withContext(Dispatchers.IO) {
-        request("$DATA_URL/$path", body, method = method, bearer = jwt(), extraHeaders = extraHeaders)
+        val sent = body?.toString()?.toByteArray(Charsets.UTF_8)?.size?.toLong() ?: 0L
+        try {
+            request("$DATA_URL/$path", body, method = method, bearer = jwt(), extraHeaders = extraHeaders).also {
+                AccountTransferMetrics.record(context, sent, it.toByteArray(Charsets.UTF_8).size.toLong(), true)
+            }
+        } catch (e: Exception) {
+            AccountTransferMetrics.record(context, sent, 0, false)
+            throw e
+        }
     }
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
