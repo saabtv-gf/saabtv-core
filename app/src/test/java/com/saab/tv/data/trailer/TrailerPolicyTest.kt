@@ -7,6 +7,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TrailerPolicyTest {
+    @Test fun rejectedSignedUrlsAdvanceWithoutRepeatedRetries() {
+        listOf(400, 401, 403, 404, 410, 416).forEach { assertTrue(TrailerPolicy.terminalHttpStatus(it)) }
+        listOf(200, 408, 429, 500, 502, 503).forEach { assertFalse(TrailerPolicy.terminalHttpStatus(it)) }
+    }
     private val id = "dQw4w9WgXcQ"
     @Test fun dashManifestDoesNotCapFourKAt1080() {
         assertEquals(2160, TrailerPolicy.manifestHeight("<MPD><Representation height='1080'/><Representation height=\"2160\"/></MPD>"))

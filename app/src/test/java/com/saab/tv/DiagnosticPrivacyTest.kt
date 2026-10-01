@@ -4,6 +4,11 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DiagnosticPrivacyTest {
+    @Test fun cancellationIsClassifiedWithoutLeakingMessage() {
+        assertTrue(DiagnosticPrivacy.stack(java.io.IOException("Canceled")).contains("category=cancelled"))
+        assertTrue(DiagnosticPrivacy.stack(java.net.SocketTimeoutException("secret")).contains("category=timeout"))
+        assertFalse(DiagnosticPrivacy.stack(java.net.SocketTimeoutException("secret")).contains("secret"))
+    }
     @Test fun credentialsAndUrlsAreRemoved() {
         val result = DiagnosticPrivacy.redact("password=secret token=abc Bearer xyz https://host/private?cap=123 email=user@example.com pin=1234")
         listOf("secret", "abc", "xyz", "host", "123", "user@example.com", "1234").forEach { assertFalse(result.contains(it)) }

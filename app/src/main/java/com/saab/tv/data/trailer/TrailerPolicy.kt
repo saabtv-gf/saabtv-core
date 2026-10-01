@@ -6,6 +6,8 @@ import com.saab.tv.data.model.stremio.MetaItem
 
 /** Cinemeta supplies YouTube IDs, not a 4K media URL. Never accept arbitrary hosts. */
 object TrailerPolicy {
+    /** Repeating a rejected/expired URL cannot fix permission or range errors. */
+    fun terminalHttpStatus(code: Int): Boolean = code in listOf(400, 401, 403, 404, 410, 416)
     fun manifestHeight(xml: String): Int = Regex("height=[\"'](\\d+)[\"']")
         .findAll(xml).mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull() ?: 0
     private val idPattern = Regex("^[A-Za-z0-9_-]{11}$")

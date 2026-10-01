@@ -183,12 +183,12 @@ fun NavDrawer(
                 .fillMaxHeight()
                 .zIndex(2f)
                 .onFocusChanged { drawerHasFocus = it.hasFocus }
+                .focusGroup()
                 .padding(top = 30.dp, bottom = 30.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .focusGroup(),
+                    .fillMaxSize(),
                 horizontalAlignment = Alignment.Start
             ) {
 
@@ -205,7 +205,11 @@ fun NavDrawer(
                         isDrawerActive = isMenuFocused,
                         onNavigate = onNavigate,
                         modifier = Modifier
-                            .focusProperties { canFocus = !navigationBlocked }
+                            .focusProperties {
+                                canFocus = !navigationBlocked
+                                up = drawerRequesters[DrawerFocusPolicy.adjacent(dest, false)]!!
+                                down = drawerRequesters[DrawerFocusPolicy.adjacent(dest, true)]!!
+                            }
                             .focusRequester(drawerRequesters[dest]!!)
                             .onPreviewKeyEvent {
                                 if (it.type == KeyEventType.KeyDown) {
@@ -233,7 +237,10 @@ fun NavDrawer(
                             isMenuExpanded = isMenuFocused,
                             onNavigate = { onNavigate(NavDestination.Profile) },
                             modifier = Modifier
-                                .focusProperties { canFocus = !navigationBlocked }
+                                .focusProperties {
+                                    canFocus = !navigationBlocked
+                                    down = drawerRequesters[NavDestination.Search]!!
+                                }
                                 .focusRequester(drawerRequesters[NavDestination.Profile]!!)
                                 .onPreviewKeyEvent {
                                     if (it.type == KeyEventType.KeyDown) {

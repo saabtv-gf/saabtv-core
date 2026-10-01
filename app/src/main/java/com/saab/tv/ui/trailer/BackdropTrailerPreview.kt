@@ -260,7 +260,9 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
     val context = LocalContext.current
     val latestEnded by rememberUpdatedState(onEnded)
     val latestStarted by rememberUpdatedState(onStarted)
-    val variants = remember(source, inline) {
+    // Choose the initial rendition once. Expanding must not restart a previously
+    // successful fallback (or replace its signed URL with an already failed one).
+    val variants = remember(source) {
         val primaryHeight = Regex("(\\d{3,4})p").find(source.qualityLabel)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val all = listOf(TrailerPlaybackVariant(source.videoUrl, source.audioUrl,
             source.qualityLabel, height = primaryHeight, requestHeaders = source.requestHeaders)) + source.fallbackVariants
@@ -281,17 +283,27 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
             }
     }
     DisposableEffect(player) { onDispose { player.release() } }
-    DisposableEffect(player, inline) {
-        val resumeMs = player.currentPosition.coerceAtLeast(0)
+    LaunchedEffect(player, inline) {
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints()
             .apply { if (inline) setMaxVideoSize(1280, 720) }
             .setForceHighestSupportedBitrate(!inline).build()
+    }
+    DisposableEffect(player) {
+        val resumeMs = player.currentPosition.coerceAtLeast(0)
         var index = 0
         fun play() {
             val variant = variants.getOrNull(index) ?: return latestEnded()
             val factory = DefaultMediaSourceFactory(context).setDataSourceFactory(
                 YoutubeChunkedDataSourceFactory(requestHeaders = variant.requestHeaders))
+                .setLoadErrorHandlingPolicy(object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+                    override fun getRetryDelayMsFor(info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                        val http = generateSequence<Throwable>(info.exception) { it.cause }
+                            .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>().firstOrNull()
+                        return if (http != null && com.saab.tv.data.trailer.TrailerPolicy.terminalHttpStatus(http.responseCode))
+                            androidx.media3.common.C.TIME_UNSET else super.getRetryDelayMsFor(info)
+                    }
+                })
             val item = MediaItem.Builder().setUri(variant.videoUrl).apply {
                 if (variant.videoUrl.contains("/manifest/hls/") || variant.videoUrl.contains(".m3u8")) setMimeType(MimeTypes.APPLICATION_M3U8)
                 if (variant.videoUrl.contains("/manifest/dash/") || variant.videoUrl.contains(".mpd")) setMimeType(MimeTypes.APPLICATION_MPD)
@@ -305,6 +317,8 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
             override fun onIsPlayingChanged(isPlaying: Boolean) { if (isPlaying) latestStarted() }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) latestEnded() }
             override fun onPlayerError(error: PlaybackException) {
+                com.saab.tv.AppDiagnostics.event("Trailer Preview", "Variant Failed",
+                    "variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel} positionMs=${player.currentPosition}")
                 com.saab.tv.AppDiagnostics.failure("Trailer Preview", "Playback Failed", error)
                 index++; play()
             }

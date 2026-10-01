@@ -54,8 +54,11 @@ object AppDiagnostics {
 
     /** A fatal event must reach disk before Android terminates the process. */
     fun failure(context: Context, component: String, event: String, failure: Throwable) {
-        append(context.applicationContext, PlaybackDiagnosticEvent(System.currentTimeMillis(), "ERROR", component, event,
-            DiagnosticPrivacy.stack(failure)))
+        val app = context.applicationContext
+        val item = PlaybackDiagnosticEvent(System.currentTimeMillis(), "ERROR", component, event,
+            DiagnosticPrivacy.stack(failure))
+        if (component == "Application" && event == "Uncaught Exception") append(app, item)
+        else writer.execute { append(app, item) }
     }
 
     fun install(application: Application) {

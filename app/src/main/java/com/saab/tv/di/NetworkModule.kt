@@ -53,7 +53,15 @@ object NetworkModule {
                         "method=${chain.request().method} code=${response.code} ms=${android.os.SystemClock.elapsedRealtime() - started}")
                     response
                 } catch (failure: java.io.IOException) {
-                    com.saab.tv.AppDiagnostics.failure(context, "Network", "Request Failed", failure)
+                    // Changing a focused title cancels obsolete metadata calls. This is
+                    // normal navigation, not a network failure (including socket resets).
+                    if (chain.call().isCanceled()) {
+                        com.saab.tv.AppDiagnostics.event(context, "Network", "Request Cancelled")
+                    } else {
+                        com.saab.tv.AppDiagnostics.event(context, "Network", "Failure Context",
+                            "method=${chain.request().method} host=${chain.request().url.host} ms=${android.os.SystemClock.elapsedRealtime() - started}", important = true)
+                        com.saab.tv.AppDiagnostics.failure(context, "Network", "Request Failed", failure)
+                    }
                     throw failure
                 }
             }

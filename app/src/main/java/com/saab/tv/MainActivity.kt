@@ -55,6 +55,8 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.input.key.type
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.saab.tv.data.player.PlaybackTrackSelectionStore
@@ -1048,8 +1050,22 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
 
+                                var menuHasFocus by remember { mutableStateOf(false) }
+                                val manualTrailerActive = com.saab.tv.ui.trailer.LocalManualTrailerActive.current
                                 Box(
                                     modifier = Modifier.fillMaxSize()
+                                        .onFocusChanged { menuHasFocus = it.hasFocus }
+                                        .focusGroup()
+                                        .onPreviewKeyEvent { event ->
+                                            if (!menuHasFocus && !backdropTrailerActive &&
+                                                com.saab.tv.ui.trailer.InlineTrailerAnchor.session == null &&
+                                                !manualTrailerActive &&
+                                                event.type == KeyEventType.KeyDown &&
+                                                event.key in listOf(Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight)) {
+                                                AppDiagnostics.event(this@MainActivity, "Navigation", "Lost Focus Recovery", "section=$currentNav")
+                                                drawerRequesters[currentNav]?.requestFocusSafely() == true
+                                            } else false
+                                        }
                                 ) {
                                 Crossfade(targetState = navPosition, animationSpec = tween(400), label = "NavSwitcher") { position ->
                                 if (position == "top") {

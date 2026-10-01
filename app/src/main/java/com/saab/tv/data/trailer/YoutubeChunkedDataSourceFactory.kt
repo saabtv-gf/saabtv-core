@@ -72,14 +72,11 @@ class YoutubeChunkedDataSourceFactory(
             }
             currentChunkEnd = end
 
-            val rangedUri = spec.uri.buildUpon()
-                .appendQueryParameter("range", "$currentChunkStart-$currentChunkEnd")
-                .build()
-
+            // Keep the signed URL untouched. A Range header is the normal CDN
+            // request and avoids duplicate/signed query parameters being rejected.
             val chunkedSpec = spec.buildUpon()
-                .setUri(rangedUri)
-                .setPosition(0)
-                .setLength(C.LENGTH_UNSET.toLong())
+                .setPosition(currentChunkStart)
+                .setLength(currentChunkEnd - currentChunkStart + 1)
                 .build()
 
             bytesReadInChunk = 0
@@ -88,16 +85,19 @@ class YoutubeChunkedDataSourceFactory(
             } catch (error: HttpDataSource.InvalidResponseCodeException) {
                 if (error.responseCode != 400 && error.responseCode != 403) throw error
 
-                // Some Googlevideo edges reject the query-style range used to avoid
-                // throttling. Retry the exact same signed URL using a standard HTTP
-                // Range request before moving to another extracted variant.
+                // Compatibility fallback for edges requiring query ranges. Replace,
+                // rather than append, any pre-existing range parameter.
                 runCatching { upstream.close() }
-                val headerRangeSpec = spec.buildUpon()
-                    .setUri(spec.uri)
-                    .setPosition(currentChunkStart)
-                    .setLength(currentChunkEnd - currentChunkStart + 1)
+                val uri = spec.uri.buildUpon().encodedQuery(spec.uri.encodedQuery.orEmpty()
+                    .split('&').filterNot { it.substringBefore('=') == "range" }.joinToString("&")).apply {
+                    appendQueryParameter("range", "$currentChunkStart-$currentChunkEnd")
+                }.build()
+                val queryRangeSpec = spec.buildUpon()
+                    .setUri(uri)
+                    .setPosition(0)
+                    .setLength(C.LENGTH_UNSET.toLong())
                     .build()
-                upstream.open(headerRangeSpec)
+                upstream.open(queryRangeSpec)
             }
             return if (totalContentLength != C.LENGTH_UNSET.toLong()) totalContentLength else C.LENGTH_UNSET.toLong()
         }
