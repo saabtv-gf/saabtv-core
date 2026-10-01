@@ -41,6 +41,7 @@ fun SearchScreen(
     searchSessionId: Long = 0L, viewModel: SearchViewModel = hiltViewModel(),
     currentProfile: ProfileEntity?, onMovieClick: (MetaItem) -> Unit,
     onTrailerClick: (String, String) -> Unit = { _, _ -> },
+    onPreviewActiveChanged: (Boolean) -> Unit = {},
     onViewMore: (String, List<MetaItem>) -> Unit = { _, _ -> },
     moviesViewMoreRequester: FocusRequester = remember { FocusRequester() },
     seriesViewMoreRequester: FocusRequester = remember { FocusRequester() },
@@ -56,6 +57,12 @@ fun SearchScreen(
         actionBounds = bounds
     }
     var remoteSearch by remember { mutableStateOf(false) }
+    var resultFocus by remember { mutableStateOf(false) }
+    var previewActive by remember { mutableStateOf(false) }
+    var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    var previewId by remember { mutableStateOf<String?>(null) }
+    val previewViewModel = androidx.hilt.navigation.compose.hiltViewModel<com.saab.tv.ui.home.HomeViewModel>()
+    val focusedResult: (String?) -> Unit = { id -> previewId = id; onFocusedIdChange(id) }
     var hasFocus by remember { mutableStateOf(false) }
     var focusEstablished by remember { mutableStateOf(false) }
     var restoreResultFocus by remember { mutableStateOf(lastFocusedId != null) }
@@ -88,7 +95,8 @@ fun SearchScreen(
 
     SaabTvBackground {
         // TV navigation needs compact visible keys, not phone-sized touch targets.
-        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp,
+            com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
         BoxWithConstraints(Modifier.fillMaxSize().onFocusChanged {
             hasFocus = it.hasFocus
             if (hasFocus) focusEstablished = true
@@ -113,14 +121,14 @@ fun SearchScreen(
                         }, color = Color.LightGray)
                     }
                 } else {
-                    Column(Modifier.weight(1f)) {
+                    Column(Modifier.weight(1f).onFocusChanged { resultFocus = it.hasFocus }) {
                         SearchResultRow("Movies", state.movies, posterHeight, targetKey, resultsRequester,
                             entryRequester, drawerRequester, moviesViewMoreRequester, lastFocusedId, watchedIds,
-                            onMovieClick, onLongClick, onViewMore, onFocusedIdChange, Modifier.weight(1f), moviesEntry,
+                            onMovieClick, onLongClick, onViewMore, focusedResult, Modifier.weight(1f), moviesEntry,
                             drawerRequester, if (state.series.isNotEmpty()) seriesEntry else entryRequester)
                         SearchResultRow("Series", state.series, posterHeight, targetKey, resultsRequester,
                             entryRequester, drawerRequester, seriesViewMoreRequester, lastFocusedId, watchedIds,
-                            onMovieClick, onLongClick, onViewMore, onFocusedIdChange, Modifier.weight(1f), seriesEntry,
+                            onMovieClick, onLongClick, onViewMore, focusedResult, Modifier.weight(1f), seriesEntry,
                             if (state.movies.isNotEmpty()) moviesEntry else drawerRequester, entryRequester)
                     }
                 }
@@ -145,6 +153,16 @@ fun SearchScreen(
         CatalogQuickActionsPopup(item, actionBounds, currentProfile?.id ?: 1,
             onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick)
     }
+    com.saab.tv.ui.trailer.BackdropTrailerPreview(
+        profileId = currentProfile?.id ?: 0,
+        focusedItem = state.results.firstOrNull { it.id == previewId }, catalog = state.results,
+        settings = com.saab.tv.data.profile.rememberTrailerPreviewSettings(currentProfile?.id ?: 0),
+        enabled = false, // Search results never autoplay trailers.
+        resolveTrailer = previewViewModel::trailerFor,
+        onActiveChanged = { previewActive = it },
+        onFullscreenChanged = onPreviewActiveChanged,
+        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: resultsRequester.requestFocusSafely() } }
+    )
 }
 
 @Composable
@@ -184,15 +202,17 @@ private fun SearchResultRow(
         else LazyRow(state = listState, horizontalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(6.dp)) {
             itemsIndexed(items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
-                SaabTvCard(title = item.name, posterUrl = item.poster, onClick = { onClick(item) },
+                SaabTvCard(previewItem = item, title = item.name, posterUrl = item.poster, onClick = { onClick(item) },
                     onLongClick = { bounds -> onLongClick(item, bounds) },
                     isWatched = item.id in watchedIds,
                     onFocused = { focusedTitle = item.name; rowFocusedId = item.id; onFocused(item.id) },
-                    modifier = Modifier.width(posterHeight * 2f / 3f).height(posterHeight)
+                    normalWidth = posterHeight * 2f / 3f, normalHeight = posterHeight,
+                    modifier = Modifier
                         .then(if ("${item.type}:${item.id}" == targetKey) Modifier.focusRequester(targetRequester) else Modifier)
                         .then(if (item.id == rowFocusedId) Modifier.focusRequester(rowRequester) else Modifier)
                         .focusProperties { down = downRequester; up = moreRequester }
                         .onPreviewKeyEvent {
+                            if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                             if (it.type == KeyEventType.KeyDown && index == 0 && it.key == Key.DirectionLeft) {
                                 drawerRequester.requestFocusSafely(); true
                             } else false

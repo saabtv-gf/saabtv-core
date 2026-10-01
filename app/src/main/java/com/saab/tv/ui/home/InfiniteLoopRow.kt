@@ -5,11 +5,14 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
@@ -140,21 +143,13 @@ fun InfiniteLoopRow(
         locallyFocusedItemId != null && externalListState != null
     }
     
-    // Skip scroll flag - true during restoration, resets after focus is established
-    var skipBringIntoViewScroll by remember { mutableStateOf(isRestoration) }
-    
-    // Reset skip flag after restoration is complete (focus is established)
-    LaunchedEffect(isRestoration) {
-        if (isRestoration) {
-            skipBringIntoViewScroll = false
-        }
-    }
-    
-    // Create pivot spec with skip provider and dynamic stiffness
+    // Restore without scrolling; subsequent focus changes use one explicit slide.
     val pivotSpec = remember(paddingPx) {
         FocusPivotSpec(
             customOffset = paddingPx,
-            skipScrollProvider = { skipBringIntoViewScroll },
+            // Shelf scrolling is owned by the cancellable slide below, not a
+            // second simultaneous focus-driven scroll animation.
+            skipScrollProvider = { true },
             stiffnessProvider = { Spring.StiffnessLow }
         ) 
     }
@@ -168,6 +163,27 @@ fun InfiniteLoopRow(
     // Use external state if provided, otherwise create local state
     val internalListState = rememberLazyListState()
     val listState = externalListState ?: internalListState
+    var slideTarget by remember { mutableStateOf<Int?>(null) }
+    var initialFocus by remember { mutableStateOf(true) }
+    LaunchedEffect(slideTarget) {
+        val index = slideTarget ?: return@LaunchedEffect
+        if (initialFocus && isRestoration) {
+            initialFocus = false
+            return@LaunchedEffect
+        }
+        initialFocus = false
+        val visibleItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+        if (visibleItem != null) {
+            val distance = visibleItem.offset - paddingPx
+            if (kotlin.math.abs(distance) > 1f) {
+                listState.animateScrollBy(distance,
+                    androidx.compose.animation.core.tween(280,
+                        easing = androidx.compose.animation.core.FastOutSlowInEasing))
+            }
+        } else {
+            listState.animateScrollToItem(index)
+        }
+    }
 
     // Calculate the max valid index based on current mode
     val maxValidIndex = when {
@@ -194,6 +210,7 @@ fun InfiniteLoopRow(
         // Stable reference to avoid recomposition from lambda re-allocation
         val context = LocalContext.current
         val wrappedOnFocused: (MetaItem?, String) -> Unit = { focused, key ->
+            slideTarget = key.substringAfterLast("_").toIntOrNull()
             val focusedIndex = items.indexOfFirst { it.id == focused?.id && it.type == focused?.type }
             if (focusedIndex >= 0) {
                 for (nearby in (focusedIndex - 1).coerceAtLeast(0)..(focusedIndex + 1).coerceAtMost(items.lastIndex)) {
@@ -376,6 +393,8 @@ private fun LinearContent(
                     .width(effectiveItemWidth)
                     .graphicsLayer { clip = false }
                     .onPreviewKeyEvent { keyEvent ->
+                        // Inline player handles its own action-row navigation.
+                        if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                         if (repeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
                         if (keyEvent.type == KeyEventType.KeyDown) {
                             when {
@@ -428,6 +447,7 @@ private fun LinearContent(
                 if (isLandscapeCards) {
                     val enriched = enrichedItems["${item.type}:${item.id}"]
                     SaabTvLandscapeCard(
+                        previewItem = item,
                         title = item.name,
                         backdropUrl = enriched?.background,
                         logoUrl = enriched?.logo,
@@ -449,6 +469,7 @@ private fun LinearContent(
                 } else {
                     val watchedIds = LocalWatchedIds.current
                     SaabTvCard(
+                        previewItem = item,
                         title = item.name,
                         posterUrl = item.poster,
                         onClick = { onMovieClick(item) },
@@ -614,6 +635,8 @@ private fun InfiniteGridContent(
                             .width(ITEM_WIDTH)
                             .graphicsLayer { clip = false }
                             .onPreviewKeyEvent { keyEvent ->
+                        // Inline player handles its own action-row navigation.
+                                if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                                 if (repeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
                                 if (keyEvent.type == KeyEventType.KeyDown) {
                                     when {
@@ -664,6 +687,7 @@ private fun InfiniteGridContent(
                         val uniqueKey = "${rowIndex}_${item.movie.id}_$scrollIndex"
                         val watchedIds = LocalWatchedIds.current
                         SaabTvCard(
+                            previewItem = item.movie,
                             title = item.movie.name,
                             posterUrl = item.movie.poster,
                             onClick = { onMovieClick(item.movie) },
@@ -821,6 +845,8 @@ private fun FiniteGridContent(
                             .width(ITEM_WIDTH)
                             .graphicsLayer { clip = false }
                             .onPreviewKeyEvent { keyEvent ->
+                        // Inline player handles its own action-row navigation.
+                                if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                                 if (repeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
                                 if (keyEvent.type == KeyEventType.KeyDown) {
                                     when {
@@ -864,6 +890,7 @@ private fun FiniteGridContent(
                     ) {
                         val watchedIds = LocalWatchedIds.current
                         SaabTvCard(
+                            previewItem = item.movie,
                             title = item.movie.name,
                             posterUrl = item.movie.poster,
                             onClick = { onMovieClick(item.movie) },
@@ -889,6 +916,8 @@ private fun FiniteGridContent(
                             .width(ITEM_WIDTH)
                             .graphicsLayer { clip = false }
                             .onPreviewKeyEvent { keyEvent ->
+                        // Inline player handles its own action-row navigation.
+                                if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                                 if (repeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
                                 if (keyEvent.type == KeyEventType.KeyDown) {
                                     when (keyEvent.key) {
@@ -975,6 +1004,8 @@ private fun InfiniteViewMoreCard(
                 alpha = animatedAlpha
             }
             .onPreviewKeyEvent { keyEvent ->
+                        // Inline player handles its own action-row navigation.
+                        if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                 if (repeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
                 if (keyEvent.type == KeyEventType.KeyDown) {
                     when (keyEvent.key) {

@@ -817,6 +817,7 @@ class MainActivity : ComponentActivity() {
             var sessionRestoreAttemptedProfileId by rememberSaveable { mutableStateOf<Int?>(null) }
             var activeView by rememberSaveable { mutableStateOf("menu") }
             var selectedMovieId by rememberSaveable { mutableStateOf("") }
+            var backdropTrailerActive by remember { mutableStateOf(false) }
             var selectedMovieType by rememberSaveable { mutableStateOf("movie") }
             var selectedVideoUrl by rememberSaveable { mutableStateOf("") }
             var selectedTrailerAudioUrl by rememberSaveable { mutableStateOf("") }
@@ -866,7 +867,7 @@ class MainActivity : ComponentActivity() {
             // Get round corners setting from profile (default true)
             val roundCorners = currentProfile?.roundCorners ?: true
             val hubRoundCorners = currentProfile?.hubRoundCorners ?: true
-            
+
             // Update theme when profile changes
             LaunchedEffect(currentProfile) {
                 currentProfile?.let { profile ->
@@ -916,7 +917,7 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(currentNav) {
                             AppDiagnostics.event(this@MainActivity, "Navigation", "Main Section", "section=$currentNav")
                         }
-                        
+
                         // Grid view state
                         var gridViewTitle by rememberSaveable { mutableStateOf("") }
                         var gridViewItems by remember { mutableStateOf<List<MetaItem>>(emptyList()) }
@@ -985,6 +986,25 @@ class MainActivity : ComponentActivity() {
                         }
 
 
+                        CompositionLocalProvider(com.saab.tv.ui.trailer.LocalTrailerStartWatching provides { movie ->
+                            selectedMovieId = movie.id
+                            selectedMovieType = movie.type
+                            selectedMovieTitle = movie.name
+                            selectedMoviePoster = movie.poster ?: ""
+                            selectedMovieBackground = movie.background ?: ""
+                            selectedMovieLogo = movie.logo ?: ""
+                            selectedAddonBaseUrl = movie.addonBaseUrl
+                            detailsResumePlaybackHint = null
+                            selectedPlaybackId = movie.id
+                            selectedPlaybackType = movie.type
+                            selectedPlaybackTitle = movie.name
+                            autoResumeFromContinue = true
+                            previousView = activeView
+                            selectedVideoUrl = ""
+                            torrentProgress = TorrentProgress("Finding your source...")
+                            activeView = "resume"
+                        }) {
+                            com.saab.tv.ui.trailer.ManualTrailerHost(profileId = currentProfile?.id ?: 0) {
                             // CONDITIONAL NAVIGATION RENDERING (no animation)
                             val view = activeView
                             if (view == "menu") {
@@ -1029,6 +1049,7 @@ class MainActivity : ComponentActivity() {
                                 Crossfade(targetState = navPosition, animationSpec = tween(400), label = "NavSwitcher") { position ->
                                 if (position == "top") {
                                     TopNavigationBar(
+                                        hideNavigation = backdropTrailerActive,
                                         currentDestination = currentNav,
                                         currentProfile = currentProfile,
                                         topNavRequesters = drawerRequesters,
@@ -1059,6 +1080,7 @@ class MainActivity : ComponentActivity() {
                                                     key(tab) {
                                                         LaunchedEffect(tab, currentProfile?.id) { vm.loadScreen(tab, currentProfile) }
                                                         HomeScreen(
+                                                            onPreviewActiveChanged = { backdropTrailerActive = it },
                                                             tab = dashboardTab,
                                                             screenNameOverride = tab.takeIf { it == "ott" },
                                                             viewModel = vm,
@@ -1125,6 +1147,7 @@ class MainActivity : ComponentActivity() {
                                                 NavDestination.Search -> {
                                                     val searchHomeVm = hiltViewModel<HomeViewModel>()
                                                     SearchScreen(
+                                                        onPreviewActiveChanged = { backdropTrailerActive = it },
                                                         searchSessionId = searchSessionId,
                                                         currentProfile = currentProfile,
                                                         onTrailerClick = { youtubeKey, trailerName ->
@@ -1174,6 +1197,7 @@ class MainActivity : ComponentActivity() {
                                                 NavDestination.Watchlist -> {
                                                     val watchlistHomeVm = hiltViewModel<HomeViewModel>()
                                                     WatchlistScreen(
+                                                        onPreviewActiveChanged = { backdropTrailerActive = it },
                                                         currentProfile = currentProfile,
                                                         entryRequester = watchlistEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Watchlist]!!,
@@ -1220,6 +1244,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 } else { // position == "left"
                                     NavDrawer(
+                                        hideNavigation = backdropTrailerActive,
                                         currentDestination = currentNav,
                                         currentProfile = currentProfile,
                                         drawerRequesters = drawerRequesters,
@@ -1241,6 +1266,7 @@ class MainActivity : ComponentActivity() {
                                                     key(tab) {
                                                         LaunchedEffect(tab, currentProfile?.id) { vm.loadScreen(tab, currentProfile) }
                                                         HomeScreen(
+                                                            onPreviewActiveChanged = { backdropTrailerActive = it },
                                                             tab = dashboardTab,
                                                             screenNameOverride = tab.takeIf { it == "ott" },
                                                             viewModel = vm,
@@ -1307,6 +1333,7 @@ class MainActivity : ComponentActivity() {
                                                 NavDestination.Search -> {
                                                     val searchHomeVm = hiltViewModel<HomeViewModel>()
                                                     SearchScreen(
+                                                        onPreviewActiveChanged = { backdropTrailerActive = it },
                                                         searchSessionId = searchSessionId,
                                                         currentProfile = currentProfile,
                                                         onTrailerClick = { youtubeKey, trailerName ->
@@ -1356,6 +1383,7 @@ class MainActivity : ComponentActivity() {
                                                 NavDestination.Watchlist -> {
                                                     val watchlistHomeVm = hiltViewModel<HomeViewModel>()
                                                     WatchlistScreen(
+                                                        onPreviewActiveChanged = { backdropTrailerActive = it },
                                                         currentProfile = currentProfile,
                                                         entryRequester = watchlistEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Watchlist]!!,
@@ -1403,6 +1431,7 @@ class MainActivity : ComponentActivity() {
                         } else if (view == "grid") {
                             val gridVm = hiltViewModel<HomeViewModel>()
                             GridViewScreen(
+                                allowTrailerAutoplay = currentNav != NavDestination.Search,
                                 title = gridViewTitle,
                                 items = gridViewItems,
                                 profileId = currentProfile?.id ?: 1,
@@ -1427,7 +1456,7 @@ class MainActivity : ComponentActivity() {
                                     previousView = "grid"
                                     activeView = "details"
                                 },
-                                onBack = { 
+                                onBack = {
                                     gridRestoreState.focusedIndex = null  // Reset for next time
                                     gridRestoreState.scrollIndex = 0  // Reset scroll position
                                     gridRestoreState.scrollOffset = 0
@@ -1506,7 +1535,7 @@ class MainActivity : ComponentActivity() {
                                 )
                                 if (url.startsWith("magnet:")) {
                                     uiScope.launch {
-                                        mainViewModel.persistActiveProfileState()
+                                        launch { mainViewModel.persistActiveProfileState() }
                                         selectedPlaybackId = playbackId
                                         selectedPlaybackType = playbackType
                                         selectedPlaybackTitle = resolvedPlaybackTitle
@@ -1556,7 +1585,7 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     stopService(Intent(this@MainActivity, TorrentService::class.java))
                                     uiScope.launch {
-                                        mainViewModel.persistActiveProfileState()
+                                        launch { mainViewModel.persistActiveProfileState() }
                                         selectedPlaybackId = playbackId
                                         selectedPlaybackType = playbackType
                                         selectedPlaybackTitle = resolvedPlaybackTitle
@@ -1855,8 +1884,9 @@ class MainActivity : ComponentActivity() {
                                     autoplayThresholdPercent = currentProfile?.autoplayThresholdPercent ?: 95,
                                     autoplayThresholdSeconds = currentProfile?.autoplayThresholdSeconds ?: 30,
                                     watchedThresholdPercent = currentProfile?.watchedThreshold ?: 95,
-                                    preferredAudioLanguage = currentProfile?.preferredAudioLanguage ?: "",
-                                    preferredAudioLanguageSecondary = currentProfile?.preferredAudioLanguageSecondary ?: "",
+                                    preferredAudioLanguage = currentProfile?.sourceLanguagePriority1 ?: "",
+                                    preferredAudioLanguageSecondary = currentProfile?.sourceLanguagePriority2 ?: "",
+                                    preferredAudioLanguageTertiary = currentProfile?.sourceLanguagePriority3 ?: "",
                                     preferredSubtitleLanguage = currentProfile?.preferredSubtitleLanguage ?: "",
                                     preferredSubtitleLanguageSecondary = currentProfile?.preferredSubtitleLanguageSecondary ?: "",
                                     subtitleSize = currentProfile?.subtitleSize ?: 100,
@@ -2512,6 +2542,9 @@ class MainActivity : ComponentActivity() {
                                     activeView = "details"
                                 }
                             )
+                            }
+                        }
+
                             }
                         }
                     // ViewSwitcher end

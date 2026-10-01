@@ -175,6 +175,7 @@ fun BasePlayerScaffold(
     playbackController: PlayerPlaybackController,
     renderSurface: PlayerRenderSurface,
     seekThumbnailProvider: (suspend (positionMs: Long) -> Bitmap?)? = null,
+    seekThumbnailCacheKey: String = "",
     seekTimeIntervalSeconds: Int = 30,
     seekThumbnailIntervalSeconds: Int = 30,
     seekThumbnailCachePercent: Int? = null,
@@ -283,7 +284,7 @@ fun BasePlayerScaffold(
         if (hasError) return@remember false
         val duration = uiState.durationMs
         val position = uiState.positionMs
-        AutoplayNextEpisodePolicy.shouldStartCountdown(
+        AutoplayNextEpisodePolicy.shouldOfferNextEpisode(
             positionMs = position,
             durationMs = duration,
             outroStartMs = skipSegmentInfo?.outroStartMs,
@@ -321,8 +322,11 @@ fun BasePlayerScaffold(
         }
     }
 
+    val canAutoAdvance = AutoplayNextEpisodePolicy.shouldStartCountdown(
+        uiState.positionMs, uiState.durationMs, skipSegmentInfo?.outroStartMs,
+        autoplayThresholdMode, autoplayThresholdPercent, autoplayThresholdSeconds, uiState.isEnded)
     val shouldShowNextEpisode = autoplayEnabled && outroSkipCountdownSeconds > 0 &&
-        (isNearCompletion || uiState.isEnded) &&
+        canAutoAdvance &&
         nextEpisodeInfo != null &&
         onAutoplayNextEpisode != null &&
         !autoplayCancelled &&
@@ -337,7 +341,7 @@ fun BasePlayerScaffold(
     }
 
     val overlayVisible = countdownActive && nextEpisodeInfo != null && !autoplayCancelled && !nextEpisodeTriggered
-    val showPlayNextButton = autoplayEnabled && (autoplayCancelled || outroSkipCountdownSeconds <= 0) && !nextEpisodeTriggered &&
+    val showPlayNextButton = autoplayEnabled && (autoplayCancelled || outroSkipCountdownSeconds <= 0 || !canAutoAdvance) && !nextEpisodeTriggered &&
         nextEpisodeInfo != null &&
         onAutoplayNextEpisode != null &&
         uiState.errorMessage.isNullOrBlank() &&
@@ -409,9 +413,10 @@ fun BasePlayerScaffold(
         !showSubtitleColorBar &&
         uiState.errorMessage.isNullOrBlank()
 
-    LaunchedEffect(pendingPreviewSeekPosition) {
+    LaunchedEffect(pendingPreviewSeekPosition, seekThumbnailCacheKey, seekThumbnailIntervalSeconds) {
         val targetPosition = pendingPreviewSeekPosition
         val provider = latestSeekThumbnailProvider
+        seekPreviewFrames = emptyList()
         if (targetPosition == null || provider == null) {
             seekPreviewFrames = emptyList()
             return@LaunchedEffect
@@ -545,9 +550,16 @@ fun BasePlayerScaffold(
             if (resumeAfterPreviewSeek) playbackController.pause()
         }
         val basePosition = pendingPreviewSeekPosition ?: uiState.positionMs.coerceAtLeast(0L)
-        val target = (basePosition + deltaMs)
+        val requestedTarget = (basePosition + deltaMs)
             .coerceAtLeast(0L)
             .coerceAtMost(maxDuration)
+        val target = if (latestSeekThumbnailProvider != null) {
+            com.saab.tv.data.cache.ThumbnailTimelinePolicy.gridPosition(requestedTarget, seekThumbnailIntervalSeconds)
+                .coerceAtMost(if (uiState.durationMs > 0) {
+                    val step = seekThumbnailIntervalSeconds.coerceAtLeast(1) * 1_000L
+                    (uiState.durationMs - 1).coerceAtLeast(0) / step * step
+                } else maxDuration)
+        } else requestedTarget
         pendingPreviewSeekPosition = target
         showSeekOverlayTemporarily()
     }
@@ -2140,12 +2152,6 @@ private fun LoadingOverlay(
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-            } else {
-                Text(
-                    text = "Loading…",
-                    color = Color.White.copy(alpha = 0.82f),
-                    style = MaterialTheme.typography.bodyMedium
-                )
             }
         }
     }

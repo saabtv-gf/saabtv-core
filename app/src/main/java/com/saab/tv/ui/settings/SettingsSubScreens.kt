@@ -245,6 +245,8 @@ fun PlaybackSettings(
 ) {
     if (currentProfile == null) return
 
+    val hideSpoilers = com.saab.tv.ui.details.rememberEpisodeSpoilers(currentProfile.id)
+    val trailerPreview = com.saab.tv.data.profile.rememberTrailerPreviewSettings(currentProfile.id)
     val spoilerContext = androidx.compose.ui.platform.LocalContext.current
     var activeLanguageField by remember { mutableStateOf<LanguageField?>(null) }
     val sidebarFocusRequester = remember { FocusRequester() }
@@ -299,20 +301,13 @@ fun PlaybackSettings(
 
             Spacer(Modifier.height(15.dp))
 
+            SettingsSection("Display & Player", onGoBack, initiallyExpanded = true) {
             // TUNNELED PLAYBACK
             SettingToggleRow(
                 label = "This Device Has A 4K Display",
                 subtitle = "Device-only. Changing this resets local display-quality defaults for your profiles, not your other TVs.",
                 isChecked = viewModel.deviceDisplay.is4k(),
-                onCheckedChange = { viewModel.deviceDisplay.configure(it) }, onBack = onGoBack, blockUp = true
-            )
-            val hideSpoilers = com.saab.tv.ui.details.rememberEpisodeSpoilers(currentProfile.id)
-            SettingToggleRow(
-                label = "Hide Unwatched Episode Spoilers",
-                subtitle = "Blur episode artwork and collapse descriptions until the episode is watched.",
-                isChecked = hideSpoilers,
-                onCheckedChange = { com.saab.tv.data.profile.EpisodeSpoilerPreferences.set(spoilerContext, currentProfile.id, it) },
-                onBack = onGoBack
+                onCheckedChange = { viewModel.deviceDisplay.configure(it) }, onBack = onGoBack
             )
             SettingToggleRow(
                 label = "Tunneled Playback",
@@ -358,6 +353,9 @@ fun PlaybackSettings(
                 onBack = onGoBack
             )
 
+
+            }
+            SettingsSection("Seeking & Source Selection", onGoBack, initiallyExpanded = false) {
             SettingOptionRow(
                 label = "Seek Interval",
                 options = listOf("10 Seconds" to 10, "20 Seconds" to 20, "30 Seconds" to 30),
@@ -396,6 +394,16 @@ fun PlaybackSettings(
                 onBack = onGoBack
             )
 
+
+            }
+            SettingsSection("Episodes & Auto-Skip", onGoBack, initiallyExpanded = false) {
+            SettingToggleRow(
+                label = "Hide Unwatched Episode Spoilers",
+                subtitle = "Blur episode artwork and collapse descriptions until the episode is watched.",
+                isChecked = hideSpoilers,
+                onCheckedChange = { com.saab.tv.data.profile.EpisodeSpoilerPreferences.set(spoilerContext, currentProfile.id, it) },
+                onBack = onGoBack
+            )
             // SKIP INTRO
             SettingToggleRow(
                 label = "Skip Intro",
@@ -429,8 +437,8 @@ fun PlaybackSettings(
                 Spacer(Modifier.height(4.dp))
 
                 SettingOptionRow(
-                    label = "Threshold",
-                    options = listOf("Only IntroDB" to "introdb", "Percentage" to "percentage", "Time" to "time"),
+                    label = "Manual Next-Episode Prompt Without IntroDB",
+                    options = listOf("Off" to "introdb", "Percentage" to "percentage", "Time" to "time"),
                     selectedOption = currentProfile.autoplayThresholdMode,
                     onOptionSelected = { viewModel.updateAutoplayThresholdMode(currentProfile.id, it) },
                     onBack = onGoBack
@@ -469,34 +477,80 @@ fun PlaybackSettings(
                 }
             }
 
+
+            }
+            SettingsSection("Trailer Previews", onGoBack, initiallyExpanded = false) {
+            SettingToggleRow(
+                label = "Autoplay Trailers",
+                subtitle = "Preview a focused title after a delay. Back restores the normal catalog.",
+                isChecked = trailerPreview.enabled,
+                onCheckedChange = { com.saab.tv.data.profile.TrailerPreviewPreferences.set(spoilerContext, currentProfile.id, trailerPreview.copy(enabled = it)) },
+                onBack = onGoBack
+            )
+            SettingOptionRow(
+                label = "Trailer Preview Style",
+                options = listOf("Inline Card" to "inline", "Fullscreen" to "fullscreen"),
+                selectedOption = trailerPreview.presentation,
+                onOptionSelected = { com.saab.tv.data.profile.TrailerPreviewPreferences.set(spoilerContext, currentProfile.id, trailerPreview.copy(presentation = it)) },
+                onBack = onGoBack
+            )
+            SettingOptionRow(
+                label = "Trailer Preview Delay",
+                options = listOf("3 Seconds" to 3, "5 Seconds" to 5, "10 Seconds" to 10, "15 Seconds" to 15),
+                selectedOption = trailerPreview.delaySeconds,
+                onOptionSelected = { com.saab.tv.data.profile.TrailerPreviewPreferences.set(spoilerContext, currentProfile.id, trailerPreview.copy(delaySeconds = it)) },
+                onBack = onGoBack
+            )
+            SettingToggleRow(
+                label = "Mute Trailer Previews",
+                subtitle = "Mute autoplay previews. Manual trailers start with sound.",
+                isChecked = trailerPreview.muted,
+                onCheckedChange = { com.saab.tv.data.profile.TrailerPreviewPreferences.set(spoilerContext, currentProfile.id, trailerPreview.copy(muted = it)) },
+                onBack = onGoBack
+            )
+
+            }
+            SettingsSection("Languages", onGoBack, initiallyExpanded = false) {
             // LANGUAGE PREFERENCES SECTION
             Spacer(Modifier.height(12.dp))
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(12.dp))
 
             Text(
-                "Language Preferences",
+                "Audio & Subtitle Languages",
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                 color = Color.White.copy(0.7f),
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            SettingLanguageRow(
-                label = "Audio Language",
-                currentDisplayName = languageDisplayName(currentProfile.preferredAudioLanguage),
-                isSet = currentProfile.preferredAudioLanguage.isNotEmpty(),
-                onClick = { activeLanguageField = LanguageField.AUDIO_PRIMARY },
-                onBack = onGoBack,
-                focusRequester = audioPrimaryFR
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Language Priority",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
+                color = Color.White
             )
-
-            SettingLanguageRow(
-                label = "Audio Language (Secondary)",
-                currentDisplayName = languageDisplayName(currentProfile.preferredAudioLanguageSecondary),
-                isSet = currentProfile.preferredAudioLanguageSecondary.isNotEmpty(),
-                onClick = { activeLanguageField = LanguageField.AUDIO_SECONDARY },
-                onBack = onGoBack,
-                focusRequester = audioSecondaryFR
+            Text(
+                "One language order for playback audio and stream ranking. Earlier choices take priority.",
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
+                color = Color.White.copy(0.6f),
+                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+            )
+            SettingLanguagePriorityRow(
+                label = "1st Priority",
+                value = currentProfile.sourceLanguagePriority1,
+                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 1, it) }
+            )
+            Spacer(Modifier.height(6.dp))
+            SettingLanguagePriorityRow(
+                label = "2nd Priority",
+                value = currentProfile.sourceLanguagePriority2,
+                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 2, it) }
+            )
+            Spacer(Modifier.height(6.dp))
+            SettingLanguagePriorityRow(
+                label = "3rd Priority",
+                value = currentProfile.sourceLanguagePriority3,
+                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 3, it) }
             )
 
             SettingLanguageRow(
@@ -517,6 +571,9 @@ fun PlaybackSettings(
                 focusRequester = subtitleSecondaryFR
             )
 
+
+            }
+            SettingsSection("Subtitle Appearance", onGoBack, initiallyExpanded = false) {
             // SUBTITLE STYLE SECTION
             Spacer(Modifier.height(12.dp))
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
@@ -552,6 +609,8 @@ fun PlaybackSettings(
                 onCheckedChange = { viewModel.updateAssRendererEnabled(currentProfile.id, it) },
                 onBack = onGoBack
             )
+            }
+
         }
 
         // Subtitle style sidebar
@@ -636,6 +695,33 @@ fun PlaybackSettings(
     }
 }
 
+
+@Composable
+private fun SettingsSection(
+    title: String,
+    onBack: () -> Unit,
+    initiallyExpanded: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    var expanded by androidx.compose.runtime.saveable.rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        com.saab.tv.ui.components.SetupButton(
+            text = title + if (expanded) "  −" else "  +",
+            onClick = { expanded = !expanded },
+            modifier = Modifier.fillMaxWidth().onPreviewKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
+                    onBack(); true
+                } else false
+            }
+        )
+        if (expanded) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp)) {
+                content()
+            }
+        }
+    }
+}
+
 // --- COMPACT VOID COMPONENTS ---
 
 @Composable
@@ -684,7 +770,7 @@ fun SettingToggleRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .heightIn(min = 48.dp)
             .then(backModifier)
             .then(upBlockModifier)
             .scale(scale)
@@ -698,7 +784,7 @@ fun SettingToggleRow(
             .clickable(interactionSource = interactionSource, indication = null) {
                 onCheckedChange(!isChecked)
             }
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -805,6 +891,7 @@ fun SettingToggleChip(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun <T> SettingOptionRow(
     label: String,
@@ -831,14 +918,14 @@ fun <T> SettingOptionRow(
         }
     } else Modifier
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(0.05f))
-            .padding(start = 16.dp, end = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
             text = label,
@@ -847,10 +934,10 @@ fun <T> SettingOptionRow(
                 fontWeight = FontWeight.Medium,
                 fontSize = 15.sp
             ),
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.fillMaxWidth()
         )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             options.forEachIndexed { index, (optionLabel, value) ->
                 val isSelected = selectedOption == value
                 val interactionSource = remember { MutableInteractionSource() }
@@ -1482,7 +1569,7 @@ private fun SettingLanguageRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .heightIn(min = 48.dp)
             .then(backModifier)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .scale(scale)
@@ -1495,7 +1582,7 @@ private fun SettingLanguageRow(
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .focusable(interactionSource = interactionSource)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -1639,10 +1726,10 @@ private fun SettingLanguagePriorityRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .heightIn(min = 52.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(0.05f))
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -1710,6 +1797,7 @@ fun SourcePreferencesSettings(
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(15.dp))
 
+            SettingsSection("Ranking", onGoBack, initiallyExpanded = true) {
             // SORT BY
             Text(
                 "Sort By",
@@ -1736,40 +1824,13 @@ fun SourcePreferencesSettings(
                 onBack = onGoBack
             )
 
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "Language Priority",
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
-                color = Color.White
-            )
-            Text(
-                "Choose up to three audio languages. Earlier choices score higher.",
-                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
-                color = Color.White.copy(0.6f),
-                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
-            )
-            SettingLanguagePriorityRow(
-                label = "1st Priority",
-                value = currentProfile.sourceLanguagePriority1,
-                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 1, it) }
-            )
-            Spacer(Modifier.height(6.dp))
-            SettingLanguagePriorityRow(
-                label = "2nd Priority",
-                value = currentProfile.sourceLanguagePriority2,
-                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 2, it) }
-            )
-            Spacer(Modifier.height(6.dp))
-            SettingLanguagePriorityRow(
-                label = "3rd Priority",
-                value = currentProfile.sourceLanguagePriority3,
-                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 3, it) }
-            )
-
             Spacer(Modifier.height(15.dp))
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(15.dp))
 
+
+            }
+            SettingsSection("Allowed Qualities", onGoBack, initiallyExpanded = false) {
             // QUALITY FILTER
             Text(
                 "Allowed Qualities",
@@ -1808,6 +1869,9 @@ fun SourcePreferencesSettings(
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(15.dp))
 
+
+            }
+            SettingsSection("Size, Seasons & Seeders", onGoBack, initiallyExpanded = false) {
             // MAX FILE SIZE
             val sizeOptions = listOf("No Limit") + (listOf(2, 5) + (10..100 step 5).toList()).map { "$it GB" }
             val currentSizeLabel = if (currentProfile.sourceMaxSizeGb == 0) "No Limit" else "${currentProfile.sourceMaxSizeGb} GB"
@@ -1861,6 +1925,9 @@ fun SourcePreferencesSettings(
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(15.dp))
 
+
+            }
+            SettingsSection("Excluded Formats", onGoBack, initiallyExpanded = false) {
             // EXCLUDE FORMATS
             Text(
                 "Exclude Formats",
@@ -1900,6 +1967,9 @@ fun SourcePreferencesSettings(
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(15.dp))
 
+
+            }
+            SettingsSection("Excluded Phrases", onGoBack, initiallyExpanded = false) {
             // EXCLUDE PHRASES
             var showExcludeDialog by remember { mutableStateOf(false) }
             val currentPhrases = currentProfile.sourceExcludePhrases
@@ -1912,7 +1982,7 @@ fun SourcePreferencesSettings(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .heightIn(min = 48.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color.White.copy(0.05f))
                     .border(
@@ -1922,7 +1992,7 @@ fun SourcePreferencesSettings(
                     )
                     .clickable(interactionSource = interactionSource, indication = null) { showExcludeDialog = true }
                     .focusable(interactionSource = interactionSource)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -1993,6 +2063,8 @@ fun SourcePreferencesSettings(
                     }
                 }
             }
+            }
+
         }
 
         Spacer(Modifier.height(30.dp))
@@ -2047,10 +2119,10 @@ fun AboutSettings(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp)
+                .heightIn(min = 48.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.White.copy(0.05f))
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {

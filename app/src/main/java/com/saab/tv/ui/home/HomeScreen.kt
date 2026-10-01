@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Bookmark
@@ -121,13 +122,16 @@ fun HomeScreen(
     onMovieClick: (MetaItem) -> Unit,
     onContinueClick: (MetaItem) -> Unit = onMovieClick,
     onTrailerClick: (String, String) -> Unit = { _, _ -> },
+    onPreviewActiveChanged: (Boolean) -> Unit = {},
     onViewMore: (String, List<MetaItem>, String) -> Unit = { _, _, _ -> }
 ) {
+    val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val state by viewModel.state.collectAsStateWithLifecycle()
     val actionScope = rememberCoroutineScope()
     val homeContext = LocalContext.current
     var longPressedItem by remember { mutableStateOf<Pair<MetaItem, Boolean>?>(null) }
     var longPressedBounds by remember { mutableStateOf(Rect.Zero) }
+    var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
     val onMovieLongClick: (MetaItem, Boolean, Rect) -> Unit = { item, isContinue, bounds ->
         longPressedBounds = bounds
         longPressedItem = item to isContinue
@@ -159,6 +163,7 @@ fun HomeScreen(
 
     // Track if content has focus to conditionally enable BackHandler
     var isContentFocused by remember { mutableStateOf(false) }
+    var previewActive by remember { mutableStateOf(false) }
     // Guards against double-back race: when returning from details, focus restoration
     // takes ~200ms. Until focus is established, keep BackHandler enabled so a quick
     // second back press doesn't exit the app. Resets on each fresh composition.
@@ -183,7 +188,8 @@ fun HomeScreen(
             }
     ) {
         SaabTvBackground {
-        CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides state.watchedIds) {
+        CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides state.watchedIds,
+            com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
         // LOGIC: If we are just starting OR the ViewModel is loading, show the Loading Box.
         // This box accepts focus immediately, which forces the NavDrawer to collapse.
         if (state.isLoading || state.loadedScreen != screenName || state.loadedProfileId != currentProfile?.id) {
@@ -430,8 +436,10 @@ fun HomeScreen(
                     }
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CardActionIcon(Icons.Default.Theaters, "Watch Trailer", onClick = {
-                        actionScope.launch {
+                    CardActionIcon(Icons.Default.Videocam, "Watch Trailer", onClick = {
+                        if (manualTrailerLauncher != null) {
+                            manualTrailerLauncher(item, null, null)
+                        } else actionScope.launch {
                             val trailer = try {
                                 viewModel.trailerFor(item)
                             } catch (cancelled: CancellationException) {
@@ -457,6 +465,31 @@ fun HomeScreen(
             }
         }
         } // CompositionLocalProvider
+        val previewSettings = com.saab.tv.data.profile.rememberTrailerPreviewSettings(currentProfile?.id ?: 0)
+        val previewHistory = remember(state.history, state.seriesNextUp) {
+            buildContinueWatchingItems(state.history, state.seriesNextUp)
+        }
+        val previewItem = remember(state.lastFocusedKey, state.mixedRows, previewHistory) {
+            resolveCinematicPreviewItem(state.lastFocusedKey, state.mixedRows, previewHistory)
+                ?: state.lastFocusedKey?.takeIf { it.startsWith("hero_") }?.removePrefix("hero_")
+                    ?.let { id -> state.heroRow?.items?.firstOrNull { it.id == id } }
+        }
+        val previewCatalog = remember(previewItem, state.rows, state.lastFocusedKey) {
+            if (state.lastFocusedKey?.startsWith("-1_") == true) previewHistory else
+                state.rows.firstOrNull { row -> row.items.any { it.id == previewItem?.id } }?.items
+                    ?: previewHistory
+        }
+        com.saab.tv.ui.trailer.BackdropTrailerPreview(
+            profileId = currentProfile?.id ?: 0,
+            focusedItem = previewItem, catalog = previewCatalog, settings = previewSettings,
+            enabled = !com.saab.tv.ui.trailer.LocalManualTrailerActive.current && com.saab.tv.ui.trailer.TrailerPreviewPolicy.allowsHover(false, state.lastFocusedKey?.startsWith("-1_") == true) && isCurrentTabLoaded && (isContentFocused || previewActive) && longPressedItem == null && currentProfile != null,
+            resolveTrailer = viewModel::trailerFor, onActiveChanged = { previewActive = it },
+            onFullscreenChanged = onPreviewActiveChanged,
+            onOpen = { item ->
+                if (state.lastFocusedKey?.startsWith("-1_") == true) onContinueClick(item) else onMovieClick(item)
+            },
+            onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: contentEntryRequester.requestFocus() } }
+        )
     }
 }
 }
@@ -471,31 +504,11 @@ internal fun CardActionIcon(
     focusRequester: FocusRequester? = null,
     destructive: Boolean = false
 ) {
-    var focused by remember { mutableStateOf(false) }
-    Button(
-        onClick = { if (enabled) onClick() },
-        enabled = true,
-        modifier = modifier
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .height(44.dp)
-            .onFocusChanged { focused = it.isFocused },
-        shape = RoundedCornerShape(10.dp),
-        border = androidx.compose.foundation.BorderStroke(
-            if (focused) 3.dp else 1.dp,
-            if (focused) Color.White else Color.White.copy(alpha = 0.3f)
-        ),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (focused) {
-                if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-            } else MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = if (focused) {
-                if (destructive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
-            } else Color.White
-        ),
-        contentPadding = PaddingValues(0.dp)
-    ) {
-        Icon(icon, contentDescription = description)
-    }
+    com.saab.tv.ui.components.DetailActionButton(
+        label = description, icon = icon, onClick = { if (enabled) onClick() },
+        modifier = modifier.then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
+        compact = true, destructive = destructive && description == "Clear Progress"
+    )
 }
 
 @Composable
@@ -1484,7 +1497,7 @@ fun SimpleLayout(
                         }
                         
                         // Custom row height: 193dp for last row in Top Nav, 210dp standard
-                        val rowHeight = if (isTopNav && rowIndex == state.mixedRows.lastIndex) 193.dp else 210.dp
+                        val rowHeight = 210.dp
 
                         // STABILIZE LAMBDAS:
                         // These specific lambda instances must remain referentially equal
@@ -1628,8 +1641,8 @@ fun CinematicBackground(item: MetaItem?) {
             AnimatedContent(
                 targetState = readyImage,
                 transitionSpec = {
-                    (fadeIn(tween(620)) + slideInHorizontally(tween(620), initialOffsetX = { it / 20 }))
-                        .togetherWith(fadeOut(tween(620)))
+                    (fadeIn(tween(420)) + slideInHorizontally(tween(420), initialOffsetX = { it / 12 }))
+                        .togetherWith(fadeOut(tween(420)) + androidx.compose.animation.slideOutHorizontally(tween(420), targetOffsetX = { -it / 12 }))
                 },
                 label = "HeroBg"
             ) { image ->
@@ -1637,7 +1650,7 @@ fun CinematicBackground(item: MetaItem?) {
                     val imageRequest = remember(image) {
                         ImageRequest.Builder(context)
                             .data(image)
-                            .crossfade(true)
+                            .crossfade(false)
                             .size(1280, 720)
                             .memoryCacheKey(image)
                             .build()

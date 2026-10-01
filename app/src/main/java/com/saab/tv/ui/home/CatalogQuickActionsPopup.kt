@@ -10,7 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.Theaters
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,6 +52,7 @@ fun CatalogQuickActionsPopup(
     onTrailerClick: (String, String) -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
+    val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
@@ -92,9 +93,11 @@ fun CatalogQuickActionsPopup(
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
             .border(1.dp, Color.White.copy(alpha = 0.42f), RoundedCornerShape(12.dp))
             .padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            CardActionIcon(Icons.Default.Theaters, "Watch Trailer", onClick = {
+            CardActionIcon(Icons.Default.Videocam, "Watch Trailer", onClick = {
                 onDismiss()
-                scope.launch {
+                if (manualTrailerLauncher != null) {
+                    manualTrailerLauncher(item, null, null)
+                } else scope.launch {
                     val trailer = try { viewModel.trailerFor(item) }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { null }

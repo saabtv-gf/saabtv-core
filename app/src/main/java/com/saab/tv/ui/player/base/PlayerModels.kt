@@ -89,6 +89,7 @@ data class PlayerLoadRequest(
     val preferredAudioTrackId: String? = null,
     val preferredSubtitleTrackId: String? = null,
     val separateAudioUrl: String? = null,
+    val trailerRequestHeaders: Map<String, String> = emptyMap(),
     val diagnosticsSessionId: String = ""
 )
 
@@ -113,6 +114,7 @@ data class PlaybackSettings(
     val watchedThresholdPercent: Int = 95,
     val preferredAudioLanguage: String = "en",
     val preferredAudioLanguageSecondary: String = "",
+    val preferredAudioLanguageTertiary: String = "",
     val preferredSubtitleLanguage: String = "en",
     val preferredSubtitleLanguageSecondary: String = "",
     val subtitleSize: Int = 100,

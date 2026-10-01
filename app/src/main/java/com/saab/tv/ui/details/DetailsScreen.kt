@@ -1,5 +1,7 @@
 package com.saab.tv.ui.details
 
+import com.saab.tv.ui.trailer.titleTrailerFocus
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -134,9 +136,15 @@ fun DetailsScreen(
     trailerReturnToken: Int = 0,
     viewModel: DetailsViewModel = hiltViewModel(key = "details_${type}_${id}")
 ) {
+    val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    com.saab.tv.ui.trailer.TitleTrailerHost(onOpen = { onNavigateToDetails(it.type, it.id) },
+        defaultItem = state.meta.takeIf { !state.isLoading && state.contentKey == "$type:$id" },
+        onEpisodes = { viewModel.openEpisodes() },
+        defaultEnabled = !state.isLoadingStreams && state.sidebarState is SidebarState.Closed && !autoStartPlayback) {
+
     LaunchedEffect(type, id) { viewModel.loadDetails(type, id, addonBaseUrl) }
 
-    val state by viewModel.state.collectAsStateWithLifecycle()
     val movie = state.meta
     val streamId = state.resolvedId ?: movie?.id ?: id // Resolved IMDb ID for stream/subtitle requests
     // Check contentKey to prevent stale content from the previous item flashing for one frame.
@@ -531,6 +539,7 @@ fun DetailsScreen(
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.onPreviewKeyEvent { event ->
+                            if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                             if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
                                 // Redirect focus to the Play button before the system
                                 // resolves the Down target, so the below-hero content
@@ -540,12 +549,12 @@ fun DetailsScreen(
                             false
                         }
                     ) {
-                        ExpandableIconButton(
+                        com.saab.tv.ui.components.DetailActionButton(
                             label = playLabel,
                             icon = Icons.Default.PlayArrow,
                             modifier = Modifier.focusRequester(firstButtonFocusRequester),
                             onClick = {
-                                val ep = resumeEpisode ?: firstEpisode ?: return@ExpandableIconButton
+                                val ep = resumeEpisode ?: firstEpisode ?: return@DetailActionButton
                                 val trackId = resumePlaybackId ?: episodePlaybackId(streamId, ep)
                                 val epStreamId = episodeStreamId(streamId, ep)
                                 val epTitle = when {
@@ -564,7 +573,7 @@ fun DetailsScreen(
                             }
                         )
 
-                        ExpandableIconButton(
+                        com.saab.tv.ui.components.DetailActionButton(
                             label = "Episodes",
                             icon = Icons.AutoMirrored.Filled.List,
                             modifier = Modifier.focusRequester(episodesButtonFocusRequester),
@@ -573,14 +582,15 @@ fun DetailsScreen(
 
                         val seriesTrailer = state.trailer
                         if (seriesTrailer != null) {
-                            ExpandableIconButton(
+                            com.saab.tv.ui.components.DetailActionButton(
                                 label = "Trailer",
                                 icon = Icons.Default.Videocam,
-                                onClick = { onTrailerClick(seriesTrailer.key, seriesTrailer.name) }
+                                onClick = { manualTrailerLauncher?.invoke(currentMovie, seriesTrailer.key to seriesTrailer.name, { viewModel.openEpisodes() })
+                                    ?: onTrailerClick(seriesTrailer.key, seriesTrailer.name) }
                             )
                         }
 
-                        ExpandableIconButton(
+                        com.saab.tv.ui.components.DetailActionButton(
                             label = if (isInWatchlist) "Watchlisted" else "Add to watchlist",
                             icon = if (isInWatchlist) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             isActive = isInWatchlist,
@@ -588,7 +598,7 @@ fun DetailsScreen(
                         )
 
                         if (resumePlaybackId != null) {
-                            ExpandableIconButton(
+                            com.saab.tv.ui.components.DetailActionButton(
                                 label = "Clear Progress",
                                 icon = Icons.Default.Close,
                                 onClick = { showClearProgressDialog = true }
@@ -599,13 +609,14 @@ fun DetailsScreen(
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.onPreviewKeyEvent { event ->
+                            if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                             if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
                                 firstButtonFocusRequester.requestFocus()
                             }
                             false
                         }
                     ) {
-                        ExpandableIconButton(
+                        com.saab.tv.ui.components.DetailActionButton(
                             label = if (resumePlaybackId != null) "Resume" else "Play Movie",
                             icon = Icons.Default.PlayArrow,
                             modifier = Modifier.focusRequester(firstButtonFocusRequester),
@@ -619,21 +630,22 @@ fun DetailsScreen(
 
                         val movieTrailer = state.trailer
                         if (movieTrailer != null) {
-                            ExpandableIconButton(
+                            com.saab.tv.ui.components.DetailActionButton(
                                 label = "Trailer",
                                 icon = Icons.Default.Videocam,
-                                onClick = { onTrailerClick(movieTrailer.key, movieTrailer.name) }
+                                onClick = { manualTrailerLauncher?.invoke(currentMovie, movieTrailer.key to movieTrailer.name, null)
+                                    ?: onTrailerClick(movieTrailer.key, movieTrailer.name) }
                             )
                         }
 
-                        ExpandableIconButton(
+                        com.saab.tv.ui.components.DetailActionButton(
                             label = if (state.isMovieWatched) "Watched" else "Mark as watched",
                             icon = if (state.isMovieWatched) Icons.Default.Check else Icons.Default.Add,
                             isActive = state.isMovieWatched,
                             onClick = { viewModel.toggleMovieWatched() }
                         )
 
-                        ExpandableIconButton(
+                        com.saab.tv.ui.components.DetailActionButton(
                             label = if (isInWatchlist) "Watchlisted" else "Add to watchlist",
                             icon = if (isInWatchlist) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             isActive = isInWatchlist,
@@ -641,7 +653,7 @@ fun DetailsScreen(
                         )
 
                         if (resumePlaybackId != null) {
-                            ExpandableIconButton(
+                            com.saab.tv.ui.components.DetailActionButton(
                                 label = "Clear Progress",
                                 icon = Icons.Default.Close,
                                 onClick = { showClearProgressDialog = true }
@@ -681,6 +693,7 @@ fun DetailsScreen(
                     if (firstSectionClaimed) return Modifier
                     firstSectionClaimed = true
                     return Modifier.onPreviewKeyEvent { event ->
+                    if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
                             firstButtonFocusRequester.requestFocus()
                             true
@@ -814,6 +827,7 @@ fun DetailsScreen(
                             .padding(top = 28.dp)
                             .then(
                                 if (!hasEnrichment) Modifier.onPreviewKeyEvent { event ->
+                    if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                                     if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
                                         firstButtonFocusRequester.requestFocus()
                                         true
@@ -958,126 +972,13 @@ fun DetailsScreen(
             }
         }
     }
+    }
 }
 
 /**
  * TV-style icon button that expands to reveal a text label on focus.
  * Mirrors the TopNavItem bubble-expand pattern.
  */
-@Composable
-private fun ExpandableIconButton(
-    label: String,
-    icon: ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    isActive: Boolean = false
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val accentColor = MaterialTheme.colorScheme.primary
-
-    val showText = isFocused
-
-    // Estimate expanded width: icon(18) + padding(12+12) + gap(8) + text
-    // ~8dp per character, minimum 110dp to fit short labels like Resume/Watched
-    val expandedWidth = (42 + 8 + (label.length * 8)).coerceIn(110, 220).dp
-
-    // Bubble width: icon-only → icon + label
-    val bubbleWidth by animateDpAsState(
-        targetValue = if (showText) expandedWidth else 42.dp,
-        animationSpec = spring(stiffness = Spring.StiffnessMedium),
-        label = "bubbleWidth"
-    )
-
-    // Text fade + slide
-    val textAlpha by animateFloatAsState(
-        targetValue = if (showText) 1f else 0f,
-        animationSpec = tween(200),
-        label = "textAlpha"
-    )
-    val textOffset by animateDpAsState(
-        targetValue = if (showText) 0.dp else (-8).dp,
-        animationSpec = spring(stiffness = Spring.StiffnessMedium),
-        label = "textOffset"
-    )
-
-    // Icon and border colors
-    val iconColor by animateColorAsState(
-        targetValue = when {
-            isFocused -> accentColor
-            isActive -> accentColor
-            else -> Color.White.copy(alpha = 0.7f)
-        },
-        animationSpec = tween(200),
-        label = "iconColor"
-    )
-    val borderColor by animateColorAsState(
-        targetValue = when {
-            isFocused -> accentColor
-            isActive -> accentColor.copy(alpha = 0.5f)
-            else -> Color.White.copy(alpha = 0.15f)
-        },
-        animationSpec = tween(200),
-        label = "borderColor"
-    )
-    val bgColor by animateColorAsState(
-        targetValue = when {
-            isFocused -> accentColor.copy(alpha = 0.15f)
-            isActive -> accentColor.copy(alpha = 0.08f)
-            else -> Color.White.copy(alpha = 0.07f)
-        },
-        animationSpec = tween(200),
-        label = "bgColor"
-    )
-
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.08f else 1f,
-        label = "btnScale"
-    )
-
-    Row(
-        modifier = modifier
-            .width(bubbleWidth)
-            .height(42.dp)
-            .scale(scale)
-            .clip(RoundedCornerShape(21.dp))
-            .background(bgColor)
-            .border(
-                width = if (isFocused) 2.dp else 1.dp,
-                color = borderColor,
-                shape = RoundedCornerShape(21.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusable(interactionSource = interactionSource)
-            .padding(start = 12.dp, end = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Start
-    ) {
-        Icon(
-            icon,
-            contentDescription = label,
-            tint = iconColor,
-            modifier = Modifier.size(18.dp)
-        )
-
-        if (showText) {
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = label,
-                color = accentColor,
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.graphicsLayer {
-                    alpha = textAlpha
-                    translationX = textOffset.toPx()
-                }
-            )
-        }
-    }
-}
-
 @Composable
 private fun DialogButton(
     text: String,
@@ -1418,9 +1319,14 @@ private fun RecommendationRow(
 private fun RecommendationCard(item: TmdbMetaPreview, accentColor: Color, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
     RecommendationPosterCard(
         name = item.name,
+        previewItem = com.saab.tv.data.model.stremio.MetaItem(
+            id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
+            name = item.name, poster = item.poster),
         poster = item.poster,
         accentColor = accentColor,
-        modifier = modifier,
+        modifier = modifier.titleTrailerFocus(com.saab.tv.data.model.stremio.MetaItem(
+            id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
+            name = item.name, poster = item.poster)),
         onClick = onClick
     )
 }
@@ -1454,16 +1360,18 @@ private fun CinemetaRecommendationRow(
         ) {
             itemsIndexed(items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
                 Box(modifier = Modifier.onPreviewKeyEvent { event ->
+                    if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                     if (repeatGate.shouldConsume(event)) return@onPreviewKeyEvent true
                     event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft && index == 0
                 }) {
                     RecommendationPosterCard(
                         name = item.name,
+                        previewItem = item,
                         poster = item.poster,
                         accentColor = accentColor,
-                        modifier = if (restoreFocusRequester != null && index == restoreIndex) {
+                        modifier = (if (restoreFocusRequester != null && index == restoreIndex) {
                             Modifier.focusRequester(restoreFocusRequester)
-                        } else Modifier,
+                        } else Modifier).titleTrailerFocus(item),
                         onClick = {
                             val navType = if (item.type.equals("tv", ignoreCase = true)) "series" else item.type
                             onItemClick(navType, item.id, rowKey, index)
@@ -1478,42 +1386,16 @@ private fun CinemetaRecommendationRow(
 @Composable
 private fun RecommendationPosterCard(
     name: String,
+    previewItem: com.saab.tv.data.model.stremio.MetaItem? = null,
     poster: String?,
     accentColor: Color,
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {}
 ) {
-    val roundCorners = LocalRoundCorners.current
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val cardShape = if (roundCorners) RoundedCornerShape(if (isFocused) 16.dp else 12.dp) else RectangleShape
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f, label = "recScale")
+    com.saab.tv.ui.components.SaabTvCard(title = name, posterUrl = poster,
+        previewItem = previewItem, normalWidth = 120.dp, normalHeight = 180.dp,
+        modifier = modifier, onClick = onClick)
 
-    Box(
-        modifier = modifier
-            .width(120.dp)
-            .height(180.dp)
-            .scale(scale)
-            .cardFocusSound()
-            .clip(cardShape)
-            .background(Color.White.copy(0.06f))
-            .border(
-                width = if (isFocused) 2.dp else 0.dp,
-                color = if (isFocused) accentColor else Color.Transparent,
-                shape = cardShape
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusable(interactionSource = interactionSource)
-    ) {
-        if (poster != null) {
-            AsyncImage(
-                model = poster,
-                contentDescription = name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().clip(cardShape)
-            )
-        }
-    }
 }
 
 private fun extractPrimaryYear(releaseInfo: String?): String {

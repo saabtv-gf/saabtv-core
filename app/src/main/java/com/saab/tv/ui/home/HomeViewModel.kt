@@ -55,6 +55,7 @@ class HomeViewModel @Inject constructor(
 ) : ViewModel() {
 
     suspend fun isWatchlisted(profileId: Int, id: String): Boolean = dao.isInWatchlist(profileId, id)
+    suspend fun activeProfileId(): Int? = dao.getActiveProfileId()
 
     fun toggleWatchlist(profileId: Int, item: MetaItem) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -97,6 +98,13 @@ class HomeViewModel @Inject constructor(
         seekThumbnailCache.loadNearest(profileId, contentId, positionMs, intervalSeconds)
 
     suspend fun trailerFor(item: MetaItem): Pair<String, String>? {
+        if (item.id.startsWith("tt")) {
+            val type = if (item.type == "series" || item.type == "tv") "series" else "movie"
+            val cinemeta = runCatching {
+                repository.getMetaDetails("https://v3-cinemeta.strem.io/meta/$type/${item.id}.json")
+            }.getOrNull()
+            cinemeta?.let(com.saab.tv.data.trailer.TrailerPolicy::metadataTrailer)?.let { return it }
+        }
         val details = repository.resolveMetaDetails(item.type, item.id, item.addonBaseUrl)
         val streamTrailer = details?.trailerStreams.orEmpty().firstOrNull {
             !it.ytId.isNullOrBlank() || !it.externalUrl.isNullOrBlank() || !it.url.isNullOrBlank()

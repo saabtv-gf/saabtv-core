@@ -8,7 +8,6 @@ import java.io.Closeable
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Locale
-import kotlin.math.abs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 
@@ -26,6 +25,10 @@ internal class LibMpvThumbnailEngine(
     @Volatile private var fileLoaded = false
     @Volatile private var fileEnded = false
     @Volatile private var closed = false
+    @Volatile private var playbackRestartGeneration = 0L
+    private var recentSeekLogs = ""
+    var lastCapturePositionMs: Long? = null
+        private set
     var lastError: String? = null
         private set
     var initializationTrace: String = ""
@@ -87,12 +90,14 @@ internal class LibMpvThumbnailEngine(
         val instance = mpv ?: return null
         if (closed || !fileLoaded || fileEnded) return null
         lastError = null
-
+        lastCapturePositionMs = null
         return try {
-            val previousPositionSeconds = instance.getPropertyDouble("time-pos")
+            instance.drainDiagnosticLogs()
+            recentSeekLogs = ""
+            val previousRestart = playbackRestartGeneration
             val seconds = String.format(Locale.US, "%.3f", positionMs.coerceAtLeast(0L) / 1_000.0)
             val seekResult = instance.commandDetailed(
-                arrayOf("seek", seconds, "absolute+keyframes")
+                arrayOf("seek", seconds, "absolute+exact")
             )
             if (seekResult < 0) {
                 lastError = commandFailure(instance, "seek", seekResult)
@@ -100,9 +105,13 @@ internal class LibMpvThumbnailEngine(
             }
             val seekSettled = waitForSeek(
                 instance = instance,
-                previousPositionSeconds = previousPositionSeconds,
+                previousRestart = previousRestart,
                 targetPositionSeconds = positionMs.coerceAtLeast(0L) / 1_000.0
             )
+            if (!seekSettled) {
+                lastError = "exact seek did not settle target=${positionMs}ms actual=${instance.getPropertyDouble("time-pos")} restart=${playbackRestartGeneration > previousRestart} logs=$recentSeekLogs"
+                return null
+            }
             var rawFrame = instance.screenshotRaw()
             if (rawFrame == null) {
                 val stepResult = instance.commandDetailed(arrayOf("frame-step"))
@@ -122,6 +131,11 @@ internal class LibMpvThumbnailEngine(
                 lastError += " seekSettled=$seekSettled " +
                     "timePos=${instance.getPropertyDouble("time-pos") ?: -1.0}"
                 if (nativeLogs.isNotBlank()) lastError += " logs=$nativeLogs"
+                return null
+            }
+            lastCapturePositionMs = instance.getPropertyDouble("time-pos")?.let { (it * 1_000).toLong() }
+            if (!ThumbnailTimelinePolicy.captureMatches(positionMs, lastCapturePositionMs)) {
+                lastError = "frame timestamp mismatch requested=${positionMs}ms actual=${lastCapturePositionMs}ms"
                 return null
             }
             decodeThumbnail(rawFrame).also { bitmap ->
@@ -152,7 +166,7 @@ internal class LibMpvThumbnailEngine(
             "pause" to "yes",
             "idle" to "yes",
             "keep-open" to "always",
-            "hr-seek" to "no",
+            "hr-seek" to "yes",
             // The isolated service runs at Android background priority. Two decode
             // threads keep 720p thumbnail generation fast while the scheduler still
             // gives the foreground player/UI precedence.
@@ -221,15 +235,17 @@ internal class LibMpvThumbnailEngine(
 
     private suspend fun waitForSeek(
         instance: MPVLib,
-        previousPositionSeconds: Double?,
+        previousRestart: Long,
         targetPositionSeconds: Double
     ): Boolean = waitUntil(SEEK_SETTLE_TIMEOUT_MS) {
+        // initDetailed has no event thread. Pump the bridge's queued lifecycle
+        // callbacks while waiting for a genuinely decoded post-seek frame.
+        val logs = sanitizeNativeLogs(instance.drainDiagnosticLogs())
+        if (logs.isNotBlank()) recentSeekLogs = logs
         val current = instance.getPropertyDouble("time-pos") ?: return@waitUntil false
         val seeking = instance.getPropertyBoolean("seeking") == true
-        val movedFromPrevious = previousPositionSeconds == null ||
-            abs(current - previousPositionSeconds) >= MINIMUM_SEEK_MOVEMENT_SECONDS
-        val nearTargetKeyframe = abs(current - targetPositionSeconds) <= MAX_KEYFRAME_DISTANCE_SECONDS
-        !seeking && movedFromPrevious && nearTargetKeyframe
+        ThumbnailTimelinePolicy.seekReady((targetPositionSeconds * 1_000).toLong(),
+            (current * 1_000).toLong(), seeking, playbackRestartGeneration > previousRestart)
     }
 
     private suspend fun waitUntil(timeoutMs: Long, condition: () -> Boolean): Boolean {
@@ -243,6 +259,7 @@ internal class LibMpvThumbnailEngine(
 
     override fun event(eventId: Int) {
         when (eventId) {
+            MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> playbackRestartGeneration++
             MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> fileLoaded = true
             MPVLib.MpvEvent.MPV_EVENT_END_FILE,
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> fileEnded = true
@@ -293,8 +310,6 @@ internal class LibMpvThumbnailEngine(
         const val LOAD_TIMEOUT_MS = 30_000L
         const val SEEK_SETTLE_TIMEOUT_MS = 8_000L
         const val RAW_FRAME_TIMEOUT_MS = 7_000L
-        const val MINIMUM_SEEK_MOVEMENT_SECONDS = 0.1
-        const val MAX_KEYFRAME_DISTANCE_SECONDS = 20.0
         const val POLL_INTERVAL_MS = 25L
         const val BROWSER_USER_AGENT =
             "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 " +

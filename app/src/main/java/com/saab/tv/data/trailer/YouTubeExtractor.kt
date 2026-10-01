@@ -4,6 +4,13 @@ import android.net.Uri
 import android.util.Log
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.Headers
@@ -20,12 +27,9 @@ private const val EXTRACTOR_TIMEOUT_MS = 30_000L
 private const val DEFAULT_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 12; Android TV) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-// The Android client currently exposes the full adaptive ladder without the
-// intermittent sign-in challenge seen on the VR client. Video and audio are
-// selected from the same response so the in-app player can merge them reliably.
-private val CLIENT_PREFERENCE = listOf("android", "ios", "android_vr")
+// Pair audio/video from the same client and rank across the full adaptive ladder.
+private val CLIENT_PREFERENCE = listOf("visionos", "android", "ios", "android_vr")
 
-private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
 private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
 private val VISITOR_DATA_REGEX = Regex("\"VISITOR_DATA\":\"([^\"]+)\"")
 private val QUALITY_LABEL_REGEX = Regex("(\\d{2,4})p")
@@ -45,7 +49,8 @@ private data class StreamCandidate(
     val client: String, val priority: Int, val url: String,
     val score: Double, val hasN: Boolean, val itag: String,
     val height: Int, val fps: Int, val ext: String,
-    val mimeType: String
+    val mimeType: String,
+    val isDefaultAudio: Boolean = true
 )
 
 private data class ManifestBestVariant(
@@ -63,6 +68,18 @@ private val DEFAULT_HEADERS = mapOf(
 )
 
 private val CLIENTS = listOf(
+    // Adapted from NuvioTV's InAppYouTubeExtractor (GPL-3.0), revision
+    // 7f32b3c548a5d7e7771f654ac963bc530497708f. No iframe or resolver backend.
+    YouTubeClient(
+        key = "visionos", id = "101", version = "1.02",
+        userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 " +
+            "(KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        context = mapOf(
+            "clientName" to "VISIONOS", "clientVersion" to "1.02",
+            "deviceMake" to "Apple", "deviceModel" to "RealityDevice17,1",
+            "osName" to "visionOS", "osVersion" to "26.5.23O471", "hl" to "en", "gl" to "US"
+        ), priority = -1
+    ),
     YouTubeClient(
         key = "android_vr", id = "28", version = "1.56.21",
         userAgent = "com.google.android.apps.youtube.vr.oculus/1.56.21 " +
@@ -108,6 +125,7 @@ class YouTubeExtractor @Inject constructor() {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(6, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
@@ -120,6 +138,10 @@ class YouTubeExtractor @Inject constructor() {
             withTimeout(EXTRACTOR_TIMEOUT_MS) {
                 extractInternal(youtubeKey)
             }
+        } catch (e: TimeoutCancellationException) {
+            null
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Extraction failed for $youtubeKey: ${e.message}")
             null
@@ -127,24 +149,49 @@ class YouTubeExtractor @Inject constructor() {
     }
 
     private suspend fun extractInternal(videoKey: String): TrailerPlaybackSource? {
-        val videoId = extractVideoId(videoKey) ?: return null
+        val videoId = TrailerPolicy.videoId(videoKey) ?: return null
 
         val watchUrl = "https://www.youtube.com/watch?v=$videoId&hl=en"
         val watchResponse = performRequest(watchUrl, "GET", DEFAULT_HEADERS)
-        if (!watchResponse.ok) throw IllegalStateException("Failed to fetch watch page (${watchResponse.status})")
-
         val watchConfig = getWatchConfig(watchResponse.body)
-        val apiKey = watchConfig.apiKey ?: throw IllegalStateException("Unable to extract INNERTUBE_API_KEY")
+        // Public web-client key from Nuvio, not an account credential. Consent pages
+        // can lack watch config even when the public player endpoint works.
+        val apiKey = watchConfig.apiKey ?: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 
         val progressive = mutableListOf<StreamCandidate>()
         val adaptiveVideo = mutableListOf<StreamCandidate>()
         val adaptiveAudio = mutableListOf<StreamCandidate>()
         val manifestUrls = mutableListOf<Triple<String, Int, String>>()
+        val dashUrls = mutableListOf<Pair<String, String>>()
 
-        for (client in CLIENTS) {
+        // Bound latency to one request round, not four serial client timeouts.
+        val responses = coroutineScope {
+            CLIENTS.map { client -> async(Dispatchers.IO) {
+                try {
+                    client to fetchPlayerResponse(apiKey, videoId, client, watchConfig.visitorData)
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    Log.w(TAG, "Client ${client.key} failed: ${e.javaClass.simpleName}")
+                    client to emptyMap<String, Any>()
+                }
+            } }.awaitAll()
+        }
+        for ((client, playerResponse) in responses) {
+            coroutineContext.ensureActive()
             try {
-                val playerResponse = fetchPlayerResponse(apiKey, videoId, client, watchConfig.visitorData)
+                val status = playerResponse.mapValue("playabilityStatus")?.stringValue("status")
+                if (status != null && status != "OK") continue
                 val streamingData = playerResponse.mapValue("streamingData") ?: continue
+                streamingData.stringValue("dashManifestUrl")?.takeIf { it.isNotBlank() }?.let {
+                    dashUrls += client.key to it
+                }
+                com.saab.tv.AppDiagnostics.event("Trailer", "Resolved Client",
+                    "videoId=$videoId client=${client.key} heights=" +
+                        streamingData.listMapValue("adaptiveFormats").mapNotNull { it.numberValue("height")?.toInt() }
+                            .distinct().sortedDescending().joinToString(",") +
+                        " cipherFormats=" + streamingData.listMapValue("adaptiveFormats")
+                            .count { it.stringValue("signatureCipher") != null } +
+                        " dash=${streamingData.stringValue("dashManifestUrl") != null}")
 
                 streamingData.stringValue("hlsManifestUrl")?.takeIf { it.isNotBlank() }?.let {
                     manifestUrls += Triple(client.key, client.priority, it)
@@ -192,10 +239,13 @@ class YouTubeExtractor @Inject constructor() {
                             client.key, client.priority, url, audioScore(bitrate, asr),
                             hasNParam(url), format.stringValue("itag").orEmpty(),
                             0, 0, if (mimeType.contains("webm")) "webm" else "m4a",
-                            mimeType
+                            mimeType,
+                            format.mapValue("audioTrack")?.get("audioIsDefault") as? Boolean ?: true
                         )
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Client ${client.key} failed: ${e.message}")
             }
@@ -203,54 +253,68 @@ class YouTubeExtractor @Inject constructor() {
 
         Log.d(TAG, "Streams found: progressive=${progressive.size} adaptiveVideo=${adaptiveVideo.size} adaptiveAudio=${adaptiveAudio.size} hls=${manifestUrls.size}")
 
-        if (manifestUrls.isEmpty() && progressive.isEmpty() && adaptiveVideo.isEmpty() && adaptiveAudio.isEmpty()) {
+        if (manifestUrls.isEmpty() && dashUrls.isEmpty() && progressive.isEmpty() && adaptiveVideo.isEmpty() && adaptiveAudio.isEmpty()) {
             Log.w(TAG, "No playable streams found for $videoId")
             return null
         }
 
-        var bestManifest: ManifestCandidate? = null
-        for ((clientKey, priority, manifestUrl) in manifestUrls) {
-            try {
-                val variant = parseHlsManifest(manifestUrl) ?: continue
-                val candidate = ManifestCandidate(clientKey, priority, manifestUrl, variant.url, variant.height, variant.bandwidth)
-                if (bestManifest == null || candidate.height > bestManifest.height ||
-                    (candidate.height == bestManifest.height && candidate.bandwidth > bestManifest.bandwidth)) {
-                    bestManifest = candidate
+        val manifests = coroutineScope {
+            manifestUrls.map { (clientKey, priority, manifestUrl) -> async(Dispatchers.IO) {
+                try {
+                    parseHlsManifest(manifestUrl, clientHeaders(clientKey))?.let { variant ->
+                        ManifestCandidate(clientKey, priority, manifestUrl, variant.url, variant.height, variant.bandwidth)
+                    }
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    Log.w(TAG, "Manifest parse failed: ${e.javaClass.simpleName}")
+                    null
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Manifest parse failed: ${e.message}")
-            }
+            } }.awaitAll().filterNotNull()
         }
+        val bestManifest = manifests.maxWithOrNull(compareBy<ManifestCandidate> { it.height }.thenBy { it.bandwidth })
 
         val variants = buildAdaptiveVariants(adaptiveVideo, adaptiveAudio).toMutableList()
+        // Some clients expose their highest rendition only through a signed DASH
+        // manifest, rather than a direct adaptiveFormats URL.
+        variants += coroutineScope {
+            dashUrls.map { (client, url) -> async(Dispatchers.IO) {
+                try {
+                    val headers = clientHeaders(client)
+                    val response = performRequest(url, "GET", headers)
+                    if (!response.ok) null else {
+                        val height = TrailerPolicy.manifestHeight(response.body)
+                        TrailerPlaybackVariant(url, qualityLabel = "${height}p", height = height,
+                            requestHeaders = headers)
+                    }
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null }
+            } }.awaitAll().filterNotNull()
+        }
 
         // A combined AVC/AAC progressive stream is the most broadly compatible
         // fallback when a CDN rejects one of the adaptive URLs.
         sortCandidates(progressive).firstOrNull()?.let { progressiveSource ->
             variants += TrailerPlaybackVariant(
                 videoUrl = progressiveSource.url,
-                qualityLabel = qualityLabel(progressiveSource)
+                qualityLabel = qualityLabel(progressiveSource),
+                height = progressiveSource.height,
+                requestHeaders = clientHeaders(progressiveSource.client)
             )
-        }
-        if (variants.isEmpty()) {
-            sortCandidates(adaptiveVideo).firstOrNull()?.let { video ->
-                variants += TrailerPlaybackVariant(
-                    videoUrl = video.url,
-                    qualityLabel = qualityLabel(video)
-                )
-            }
         }
         bestManifest?.let { manifest ->
             variants += TrailerPlaybackVariant(
                 videoUrl = manifest.manifestUrl,
-                qualityLabel = manifest.height.takeIf { it > 0 }?.let { "${it}p" }.orEmpty()
+                qualityLabel = manifest.height.takeIf { it > 0 }?.let { "${it}p" }.orEmpty(),
+                height = manifest.height,
+                requestHeaders = clientHeaders(manifest.client)
             )
         }
 
-        val distinctVariants = variants
-            .distinctBy { it.videoUrl to it.audioUrl }
-            .take(6)
+        val distinctVariants = TrailerPolicy.rank(variants).take(16)
         val primary = distinctVariants.firstOrNull() ?: return null
+        com.saab.tv.AppDiagnostics.event("Trailer", "Selected Quality",
+            "videoId=$videoId selected=${primary.qualityLabel} available=" +
+                distinctVariants.map { it.qualityLabel }.distinct().joinToString(","))
 
         Log.d(
             TAG,
@@ -261,31 +325,10 @@ class YouTubeExtractor @Inject constructor() {
         return TrailerPlaybackSource(
             videoUrl = primary.videoUrl,
             audioUrl = primary.audioUrl,
-            fallbackVariants = distinctVariants.drop(1)
+            fallbackVariants = distinctVariants.drop(1),
+            qualityLabel = primary.qualityLabel,
+            requestHeaders = primary.requestHeaders
         )
-    }
-
-    private fun extractVideoId(input: String): String? {
-        val trimmed = input.trim()
-        if (VIDEO_ID_REGEX.matches(trimmed)) return trimmed
-
-        val normalized = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed
-        else "https://$trimmed"
-
-        return runCatching {
-            val uri = Uri.parse(normalized)
-            val host = uri.host?.lowercase().orEmpty()
-            if (host.endsWith("youtu.be")) {
-                uri.pathSegments.firstOrNull()?.takeIf { VIDEO_ID_REGEX.matches(it) }?.let { return it }
-            }
-            uri.getQueryParameter("v")?.takeIf { VIDEO_ID_REGEX.matches(it) }?.let { return it }
-            val segments = uri.pathSegments
-            if (segments.size >= 2) {
-                val first = segments[0]; val second = segments[1]
-                if ((first == "embed" || first == "shorts" || first == "live") && VIDEO_ID_REGEX.matches(second)) return second
-            }
-            null
-        }.getOrNull()
     }
 
     private fun getWatchConfig(html: String): WatchConfig {
@@ -316,8 +359,8 @@ class YouTubeExtractor @Inject constructor() {
         return gson.fromJson(response.body, Map::class.java) ?: emptyMap<String, Any>()
     }
 
-    private fun parseHlsManifest(manifestUrl: String): ManifestBestVariant? {
-        val response = performRequest(manifestUrl, "GET", DEFAULT_HEADERS)
+    private fun parseHlsManifest(manifestUrl: String, headers: Map<String, String>): ManifestBestVariant? {
+        val response = performRequest(manifestUrl, "GET", headers)
         if (!response.ok) throw IllegalStateException("Failed to fetch HLS manifest (${response.status})")
 
         val lines = response.body.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
@@ -376,7 +419,8 @@ class YouTubeExtractor @Inject constructor() {
     private fun audioScore(bitrate: Double, asr: Double) = bitrate * 1_000_000.0 + asr
 
     private fun sortCandidates(items: List<StreamCandidate>) = items.sortedWith(
-        compareByDescending<StreamCandidate> { it.score }
+        compareBy<StreamCandidate> { !it.isDefaultAudio }
+            .thenByDescending { it.score }
             .thenBy { if (it.hasN) 1 else 0 }
             .thenBy { when (it.ext.lowercase()) { "mp4", "m4a" -> 0; "webm" -> 1; else -> 2 } }
             .thenBy { it.priority }
@@ -391,15 +435,18 @@ class YouTubeExtractor @Inject constructor() {
         for (client in CLIENT_PREFERENCE) {
             val videos = sortCandidates(videoCandidates.filter { it.client == client })
             val audios = sortCandidates(audioCandidates.filter { it.client == client })
-            val bestVideo = videos.firstOrNull() ?: continue
             val bestAudio = audios.firstOrNull() ?: continue
 
             // Highest quality offered by this client.
-            result += TrailerPlaybackVariant(
-                videoUrl = bestVideo.url,
+            for (video in videos.distinctBy { it.height }.take(5)) {
+                result += TrailerPlaybackVariant(
+                videoUrl = video.url,
                 audioUrl = bestAudio.url,
-                qualityLabel = qualityLabel(bestVideo)
-            )
+                qualityLabel = qualityLabel(video),
+                height = video.height,
+                requestHeaders = clientHeaders(client)
+                )
+            }
 
             // AVC + AAC is retained as a decoder-compatible fallback. It may point
             // at a different CDN URL even when its resolution matches the primary.
@@ -409,13 +456,20 @@ class YouTubeExtractor @Inject constructor() {
                 result += TrailerPlaybackVariant(
                     videoUrl = avcVideo.url,
                     audioUrl = aacAudio.url,
-                    qualityLabel = qualityLabel(avcVideo)
+                    qualityLabel = qualityLabel(avcVideo),
+                    height = avcVideo.height,
+                    requestHeaders = clientHeaders(client)
                 )
             }
         }
 
         return result
     }
+
+    private fun clientHeaders(client: String): Map<String, String> = mapOf(
+        "User-Agent" to (CLIENTS.firstOrNull { it.key == client }?.userAgent ?: DEFAULT_USER_AGENT),
+        "Accept-Language" to "en-US,en;q=0.9"
+    )
 
     private fun qualityLabel(candidate: StreamCandidate): String = buildString {
         if (candidate.height > 0) append("${candidate.height}p")

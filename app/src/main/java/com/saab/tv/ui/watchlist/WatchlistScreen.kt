@@ -1,6 +1,9 @@
 package com.saab.tv.ui.watchlist
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.Theaters
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,15 +64,21 @@ fun WatchlistScreen(
     drawerRequester: FocusRequester,
     onMovieClick: (MetaItem) -> Unit,
     onTrailerClick: (String, String) -> Unit = { _, _ -> },
+    onPreviewActiveChanged: (Boolean) -> Unit = {},
     watchedIds: Set<String> = emptySet(),
     viewModel: WatchlistViewModel = hiltViewModel(),
     actionsViewModel: HomeViewModel = hiltViewModel()
 ) {
+    val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val movies by viewModel.movieItems.collectAsStateWithLifecycle()
     val series by viewModel.seriesItems.collectAsStateWithLifecycle()
     val actionScope = rememberCoroutineScope()
     val context = LocalContext.current
     var actionItem by remember { mutableStateOf<MetaItem?>(null) }
+    var previewItem by remember { mutableStateOf<MetaItem?>(null) }
+    var hasContentFocus by remember { mutableStateOf(false) }
+    var previewActive by remember { mutableStateOf(false) }
+    var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
     var actionBounds by remember { mutableStateOf(Rect.Zero) }
     val onLongClick: (MetaItem, Boolean, Rect) -> Unit = { item, _, bounds ->
         actionBounds = bounds
@@ -144,8 +153,9 @@ fun WatchlistScreen(
     val startPadding = if (isTopNav) 50.dp else 120.dp
     val topPadding = if (isTopNav) 24.dp else 16.dp
 
-    androidx.compose.runtime.CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides watchedIds) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    androidx.compose.runtime.CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides watchedIds,
+        com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
+    Box(modifier = Modifier.fillMaxSize().onFocusChanged { hasContentFocus = it.hasFocus }) {
         if (movies.isEmpty() && series.isEmpty()) {
             Box(
                 Modifier
@@ -170,7 +180,8 @@ fun WatchlistScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = topPadding),
+                    .padding(top = topPadding)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 androidx.compose.foundation.layout.Spacer(modifier = Modifier.padding(top = 20.dp))
@@ -185,7 +196,8 @@ fun WatchlistScreen(
                         onMovieClick = onMovieClick,
                         onMovieLongClick = onLongClick,
                         onViewMore = {},
-                        onFocused = { _: MetaItem?, key: String ->
+                        onFocused = { item: MetaItem?, key: String ->
+                            previewItem = item
                             lastFocusedKey = key
                             viewModel.lastFocusedKey = key
                         },
@@ -211,7 +223,8 @@ fun WatchlistScreen(
                         onMovieClick = onMovieClick,
                         onMovieLongClick = onLongClick,
                         onViewMore = {},
-                        onFocused = { _: MetaItem?, key: String ->
+                        onFocused = { item: MetaItem?, key: String ->
+                            previewItem = item
                             lastFocusedKey = key
                             viewModel.lastFocusedKey = key
                         },
@@ -263,9 +276,11 @@ fun WatchlistScreen(
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
                     .border(1.dp, Color.White.copy(alpha = 0.42f), RoundedCornerShape(12.dp))
                     .padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CardActionIcon(Icons.Default.Theaters, "Watch Trailer", onClick = {
+                    CardActionIcon(Icons.Default.Videocam, "Watch Trailer", onClick = {
                         actionItem = null
-                        actionScope.launch {
+                        if (manualTrailerLauncher != null) {
+                            manualTrailerLauncher(item, null, null)
+                        } else actionScope.launch {
                             val trailer = try { actionsViewModel.trailerFor(item) }
                             catch (cancelled: CancellationException) { throw cancelled }
                             catch (_: Exception) { null }
@@ -282,4 +297,14 @@ fun WatchlistScreen(
         }
     }
     } // CompositionLocalProvider
+    com.saab.tv.ui.trailer.BackdropTrailerPreview(
+        profileId = currentProfile?.id ?: 0,
+        focusedItem = previewItem, catalog = if (previewItem?.type == "series") series else movies,
+        settings = com.saab.tv.data.profile.rememberTrailerPreviewSettings(currentProfile?.id ?: 0),
+        enabled = !com.saab.tv.ui.trailer.LocalManualTrailerActive.current && (hasContentFocus || previewActive) && actionItem == null && currentProfile != null,
+        resolveTrailer = actionsViewModel::trailerFor,
+        onActiveChanged = { previewActive = it },
+        onFullscreenChanged = onPreviewActiveChanged,
+        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: entryRequester.requestFocus() } }
+    )
 }

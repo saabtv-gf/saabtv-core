@@ -135,6 +135,7 @@ class DetailsViewModel @Inject constructor(
     private var prefetchedStreamKey: String? = null
     private var prefetchedStreams: List<Stream>? = null
     private var prefetchedSubtitles: List<AddonSubtitle>? = null
+    private var prefetchSubtitlesJob: Job? = null
 
 
     fun loadDetails(type: String, id: String, addonBaseUrl: String? = null) {
@@ -537,7 +538,7 @@ class DetailsViewModel @Inject constructor(
                     tmdbLoading = false,
                     tmdbEnrichment = enrichment,
                     tmdbRecommendations = recommendations,
-                    trailer = trailer ?: _state.value.trailer,
+                    trailer = _state.value.trailer ?: trailer,
                     tmdbCollection = collection,
                     tmdbCollectionName = enrichment?.collectionName,
                     episodeEnrichmentMap = episodeEnrichmentMap
@@ -552,7 +553,7 @@ class DetailsViewModel @Inject constructor(
     }
 
     private fun loadCinemetaTrailer(type: String, videoId: String, contentKey: String) {
-        if (_state.value.trailer != null || !videoId.startsWith("tt")) return
+        if (!videoId.startsWith("tt")) return
 
         viewModelScope.launch(Dispatchers.IO) {
             val canonicalType = if (type.equals("series", ignoreCase = true) ||
@@ -564,7 +565,7 @@ class DetailsViewModel @Inject constructor(
             }.getOrNull()
             val trailer = meta?.bestAvailableTrailer() ?: return@launch
 
-            if (_state.value.contentKey == contentKey && _state.value.trailer == null) {
+            if (_state.value.contentKey == contentKey) {
                 _state.value = _state.value.copy(trailer = trailer)
             }
         }
@@ -614,22 +615,8 @@ class DetailsViewModel @Inject constructor(
     }
 
     private fun MetaItem.bestAvailableTrailer(): TmdbVideoInfo? {
-        val stream = trailerStreams.orEmpty().firstOrNull { trailer ->
-            !trailer.ytId.isNullOrBlank() ||
-                !trailer.externalUrl.isNullOrBlank() ||
-                !trailer.url.isNullOrBlank()
-        }
-        val streamSource = stream?.ytId
-            ?: stream?.externalUrl
-            ?: stream?.url
-        val legacy = trailers.orEmpty().firstOrNull { trailer ->
-            trailer.type.equals("Trailer", ignoreCase = true) && !trailer.source.isNullOrBlank()
-        } ?: trailers.orEmpty().firstOrNull { !it.source.isNullOrBlank() }
-        val key = streamSource?.trim()?.takeIf { it.isNotEmpty() }
-            ?: legacy?.source?.trim()?.takeIf { it.isNotEmpty() }
+        val (key, trailerName) = com.saab.tv.data.trailer.TrailerPolicy.metadataTrailer(this)
             ?: return null
-        val trailerName = stream?.title?.trim()?.takeIf { it.isNotEmpty() }
-            ?: "$name Trailer"
 
         return TmdbVideoInfo(
             name = trailerName,
@@ -749,12 +736,17 @@ class DetailsViewModel @Inject constructor(
         prefetchedStreamKey = key
         prefetchedStreams = null
         prefetchedSubtitles = null
+        prefetchSubtitlesJob?.cancel()
+        prefetchSubtitlesJob = viewModelScope.launch {
+            try {
+                val subtitles = subtitleRepository.getSubtitles(type, id)
+                if (prefetchedStreamKey == key) prefetchedSubtitles = subtitles
+            } catch (cancelled: CancellationException) { throw cancelled }
+              catch (_: Exception) { }
+        }
         prefetchStreamsJob = viewModelScope.launch {
             try {
-                val streamsDeferred = async { repository.getStreams(type, id) }
-                val subtitlesDeferred = async { subtitleRepository.getSubtitles(type, id) }
-                prefetchedStreams = streamsDeferred.await()
-                prefetchedSubtitles = subtitlesDeferred.await()
+                prefetchedStreams = repository.getStreams(type, id)
             } catch (_: Exception) {
                 // Prefetch failed silently — loadStreams will fetch fresh
             }
@@ -798,7 +790,7 @@ class DetailsViewModel @Inject constructor(
                 var streamOrigin = "fresh"
 
                 if (prefetchedStreamKey == prefetchKey) {
-                    prefetchStreamsJob?.join()
+                    if (prefetchedStreams == null) prefetchStreamsJob?.join()
                     val completedPrefetch = prefetchedStreams
                     if (completedPrefetch != null) {
                         streamOrigin = "prefetch"
@@ -806,15 +798,23 @@ class DetailsViewModel @Inject constructor(
                         addonSubtitles = prefetchedSubtitles ?: emptyList()
                     } else {
                         val streamsDeferred = async { repository.getStreams(type, id) }
-                        val subtitlesDeferred = async { subtitleRepository.getSubtitles(type, id) }
+                        val subtitlesDeferred = async {
+                            try { subtitleRepository.getSubtitles(type, id) }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { emptyList() }
+                        }
                         rawStreams = streamsDeferred.await()
-                        addonSubtitles = subtitlesDeferred.await()
+                        addonSubtitles = kotlinx.coroutines.withTimeoutOrNull(150L) { subtitlesDeferred.await() } ?: emptyList()
                     }
                 } else {
                     val streamsDeferred = async { repository.getStreams(type, id) }
-                    val subtitlesDeferred = async { subtitleRepository.getSubtitles(type, id) }
+                    val subtitlesDeferred = async {
+                            try { subtitleRepository.getSubtitles(type, id) }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { emptyList() }
+                        }
                     rawStreams = streamsDeferred.await()
-                    addonSubtitles = subtitlesDeferred.await()
+                    addonSubtitles = kotlinx.coroutines.withTimeoutOrNull(150L) { subtitlesDeferred.await() } ?: emptyList()
                 }
 
                 val episodeStreams = if (rawStreams.isEmpty() && !fallbackStreamId.isNullOrBlank() && fallbackStreamId != id) {

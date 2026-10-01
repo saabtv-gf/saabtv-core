@@ -173,7 +173,14 @@ fun PlayerScreen(
     // Seeking and preview generation share one cadence by design.
     val seekThumbnailIntervalSeconds = playbackSettings.seekTimeIntervalSeconds
         .takeIf { it == 10 || it == 20 || it == 30 } ?: 10
-    var seekThumbnailCacheProgress by remember(movieId, seekThumbnailIntervalSeconds) {
+    val thumbnailSourceSelection = remember(isTrailer, effectiveVideoUrl, sources) {
+        if (isTrailer) null else ThumbnailSourceSelector.select(effectiveVideoUrl, sources)
+    }
+    val thumbnailMediaUrl = thumbnailSourceSelection?.source?.url ?: effectiveVideoUrl
+    val thumbnailCacheContentId = remember(movieId, thumbnailMediaUrl, thumbnailSourceSelection?.source) {
+        com.saab.tv.data.cache.ThumbnailTimelinePolicy.cacheId(movieId, thumbnailMediaUrl, thumbnailSourceSelection?.source)
+    }
+    var seekThumbnailCacheProgress by remember(thumbnailCacheContentId, seekThumbnailIntervalSeconds) {
         mutableStateOf(SeekThumbnailProgress(0, 0, 0))
     }
     val seekThumbnailProvider: (suspend (Long) -> android.graphics.Bitmap?)? =
@@ -181,7 +188,7 @@ fun PlayerScreen(
             { positionMs: Long ->
                 viewModel.loadSeekThumbnail(
                     profileId = playbackSettings.profileId,
-                    contentId = movieId,
+                    contentId = thumbnailCacheContentId,
                     positionMs = positionMs,
                     intervalSeconds = seekThumbnailIntervalSeconds
                 )
@@ -202,7 +209,7 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(
-        movieId,
+        thumbnailCacheContentId,
         seekThumbnailsEnabled,
         seekThumbnailIntervalSeconds,
         uiState.durationMs
@@ -216,7 +223,7 @@ fun PlayerScreen(
             seekThumbnailCacheProgress = try {
                 viewModel.seekThumbnailCacheProgress(
                     profileId = playbackSettings.profileId,
-                    contentId = movieId,
+                    contentId = thumbnailCacheContentId,
                     durationMs = uiState.durationMs,
                     intervalSeconds = seekThumbnailIntervalSeconds
                 )
@@ -241,10 +248,6 @@ fun PlayerScreen(
         }
     }
 
-    val thumbnailSourceSelection = remember(isTrailer, effectiveVideoUrl, sources) {
-        if (isTrailer) null else ThumbnailSourceSelector.select(effectiveVideoUrl, sources)
-    }
-    val thumbnailMediaUrl = thumbnailSourceSelection?.source?.url ?: effectiveVideoUrl
     LaunchedEffect(thumbnailSourceSelection, diagnosticsSessionId, diagnosticsEnabled) {
         if (diagnosticsEnabled && thumbnailSourceSelection != null) {
             PlaybackDiagnostics.event(
@@ -257,7 +260,7 @@ fun PlayerScreen(
         }
     }
     val thumbnailWorkerRequest = remember(
-        movieId,
+        thumbnailCacheContentId,
         thumbnailMediaUrl,
         uiState.durationMs,
         seekThumbnailIntervalSeconds,
@@ -269,7 +272,7 @@ fun PlayerScreen(
         ) {
             SeekThumbnailWorkerRequest(
                 profileId = playbackSettings.profileId,
-                contentId = movieId,
+                contentId = thumbnailCacheContentId,
                 mediaUrl = thumbnailMediaUrl,
                 durationMs = uiState.durationMs,
                 intervalSeconds = seekThumbnailIntervalSeconds,
@@ -500,6 +503,7 @@ fun PlayerScreen(
                 preferredAudioTrackId = preferredAudioTrackId,
                 preferredSubtitleTrackId = preferredSubtitleTrackId,
                 separateAudioUrl = effectiveTrailerAudioUrl,
+                trailerRequestHeaders = activeTrailerVariant?.requestHeaders.orEmpty(),
                 diagnosticsSessionId = diagnosticsSessionId
             )
         )
@@ -614,6 +618,7 @@ fun PlayerScreen(
             renderSurface = renderSurface,
             seekTimeIntervalSeconds = playbackSettings.seekTimeIntervalSeconds,
             seekThumbnailProvider = seekThumbnailProvider,
+            seekThumbnailCacheKey = thumbnailCacheContentId,
             seekThumbnailIntervalSeconds = seekThumbnailIntervalSeconds,
             seekThumbnailCachePercent = seekThumbnailCacheProgress.percent.takeIf { seekThumbnailsEnabled },
             seekThumbnailCachedFrames = seekThumbnailCacheProgress.cachedFrames.takeIf { seekThumbnailsEnabled },

@@ -285,6 +285,7 @@ class SeekThumbnailWorkerService : Service() {
                                 request,
                                 "Frame Cached",
                                 "position=${positionMs / 1_000}s engine=$usedEngine " +
+                                    "actualMs=${if (usedEngine == "libmpv") engine.lastCapturePositionMs else "platform-closest-frame"} " +
                                     "batch=$storedFrames/$MAX_FRAMES_PER_SESSION"
                             )
                         }

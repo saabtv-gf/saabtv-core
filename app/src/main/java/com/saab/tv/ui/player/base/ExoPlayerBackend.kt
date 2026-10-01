@@ -76,6 +76,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -138,6 +139,7 @@ class ExoPlayerBackend(
     private var audioSwitchRecoveryJob: Job? = null
     private var seekFeedbackJob: Job? = null
     private var subtitleAutoSyncJob: Job? = null
+    private var subtitleLookupJob: Job? = null
     private var autoSyncSubtitleId: String? = null
     private var autoSyncMediaUrl: String? = null
     private var subtitleDelayChangedManually = false
@@ -343,6 +345,12 @@ class ExoPlayerBackend(
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            if (loadRequest?.trailerRequestHeaders?.isNotEmpty() == true) {
+                val selected = tracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_VIDEO }
+                    .flatMap { group -> (0 until group.length).filter { group.isTrackSelected(it) }.map { group.getTrackFormat(it) } }
+                com.saab.tv.AppDiagnostics.event("Trailer", "Decoded Quality",
+                    selected.joinToString { "height=${it.height} codec=${it.codecs}" })
+            }
             refreshTrackOptions(tracks)
             applyPendingTrackSelections()
             if (playbackSettings.assRendererEnabled) syncAssTrackWithExoPlayer(tracks)
@@ -666,7 +674,7 @@ class ExoPlayerBackend(
         if (released) return
         pendingStartPositionMs = 0L
         val player = exoPlayer ?: return
-        player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+        player.setSeekParameters(SeekParameters.EXACT)
         beginSeekFeedback()
         player.seekTo(positionMs.coerceAtLeast(0L))
         diagnostic("Seek", "target=${positionMs.coerceAtLeast(0L)}ms")
@@ -1057,6 +1065,7 @@ class ExoPlayerBackend(
     }
 
     override fun release() {
+        subtitleLookupJob?.cancel()
         diagnostic("Player Released", PlaybackDiagnostics.memorySummary())
         released = true
         frameRateManager?.restoreOriginalMode()
@@ -1128,6 +1137,7 @@ class ExoPlayerBackend(
         resetSourceRetryBudget: Boolean = true
     ) {
         val request = loadRequest ?: return
+        subtitleLookupJob?.cancel()
 
         subtitleAutoSyncJob?.cancel()
         val lightweightReference = ThumbnailSourceSelector.select(source.url, request.sources)?.source
@@ -1183,18 +1193,10 @@ class ExoPlayerBackend(
             // Initialize OkHttpClient off the main thread to avoid blocking UI
             withContext(Dispatchers.IO) { getOrCreateOkHttpClient() }
 
-            // Re-query using this release's filename and size. Bound the wait so
-            // an unavailable subtitle add-on cannot indefinitely block playback.
-            val matchedSubtitles = try {
-                kotlinx.coroutines.withTimeoutOrNull(2_500L) {
-                    resolveStreamSubtitles?.invoke(source)
-                }
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (_: Exception) { null }
             if (loadToken != token || released) return@launch
             val fallbackSubtitles = request.subtitles.filter { it.sourcePriority == SubtitleSourcePriority.ADDON }
-            val activeSubtitles = (source.subtitles + matchedSubtitles.orEmpty().ifEmpty { fallbackSubtitles })
+            // Prepare video immediately using subtitles already available.
+            val activeSubtitles = (source.subtitles + fallbackSubtitles)
                 .distinctBy { it.url }
             externalSubtitleSources = activeSubtitles.associateBy { externalSubtitleTrackId(it.id) }
 
@@ -1246,13 +1248,25 @@ class ExoPlayerBackend(
             // merge video + audio sources for high-quality playback.
             // For YouTube adaptive streams, use chunked data source for both
             // video and audio to prevent YouTube's download throttling.
-            val finalMediaSource = if (!request.separateAudioUrl.isNullOrBlank()) {
+            val finalMediaSource = if (!request.separateAudioUrl.isNullOrBlank() || request.trailerRequestHeaders.isNotEmpty()) {
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .clearVideoSizeConstraints()
+                    .setViewportSize(Int.MAX_VALUE, Int.MAX_VALUE, true)
+                    .setForceHighestSupportedBitrate(true).build()
+                com.saab.tv.AppDiagnostics.event("Trailer", "Player Quality Policy", "highestSupported=true viewportCap=false")
                 val ytSourceFactory = DefaultMediaSourceFactory(
-                    com.saab.tv.data.trailer.YoutubeChunkedDataSourceFactory()
+                    com.saab.tv.data.trailer.YoutubeChunkedDataSourceFactory(requestHeaders = request.trailerRequestHeaders)
                 )
-                val videoSource = ytSourceFactory.createMediaSource(MediaItem.fromUri(source.url))
-                val audioSource = ytSourceFactory.createMediaSource(MediaItem.fromUri(request.separateAudioUrl))
-                MergingMediaSource(videoSource, audioSource)
+                val videoItem = MediaItem.Builder().setUri(source.url).apply {
+                    if (source.url.contains("/manifest/hls/") || source.url.contains(".m3u8"))
+                        setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+                    if (source.url.contains("/manifest/dash/") || source.url.contains(".mpd"))
+                        setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
+                }.build()
+                val videoSource = ytSourceFactory.createMediaSource(videoItem)
+                request.separateAudioUrl?.takeIf { it.isNotBlank() }?.let {
+                    MergingMediaSource(videoSource, ytSourceFactory.createMediaSource(MediaItem.fromUri(it)))
+                } ?: videoSource
             } else {
                 mediaSource
             }
@@ -1272,6 +1286,37 @@ class ExoPlayerBackend(
 
             player.playWhenReady = autoPlay
             player.prepare()
+            // Optional filename/size subtitle lookup must not delay the first frame.
+            // Only reload once if no embedded/preloaded subtitle can satisfy the
+            // preference; off and manual selections are never overridden.
+            if (source.subtitles.isEmpty() && request.trailerRequestHeaders.isEmpty()) {
+                subtitleLookupJob = scope.launch {
+                    val rendered = kotlinx.coroutines.withTimeoutOrNull(30_000L) {
+                        _uiState.first { it.hasRenderedFirstFrame }
+                    } ?: return@launch
+                    fun embeddedOrOffPreferred(): Boolean {
+                        val preferredId = resolvePreferredSubtitleTrack()
+                        return preferredId == SUBTITLE_OFF_ID || _subtitleTracks.value.any {
+                            it.id == preferredId && it.subtitleSourcePriority == SubtitleSourcePriority.EMBEDDED
+                        }
+                    }
+                    if (released || token != loadToken || manualSubtitleSelection ||
+                        rendered.selectedSubtitleTrackId == SUBTITLE_OFF_ID && request.preferredSubtitleTrackId == SUBTITLE_OFF_ID ||
+                        embeddedOrOffPreferred()) return@launch
+                    val matched = try {
+                        kotlinx.coroutines.withTimeoutOrNull(2_500L) { resolveStreamSubtitles?.invoke(source) }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                      catch (_: Exception) { null }
+                    if (matched.isNullOrEmpty() || released || token != loadToken ||
+                        manualSubtitleSelection || embeddedOrOffPreferred()) return@launch
+                    // A matching preloaded catalog needs no timeline reset.
+                    if (matched.map { it.url } == activeSubtitles.map { it.url }) return@launch
+                    diagnostic("Deferred Subtitles Ready", "count=${matched.size}")
+                    hasAppliedSubtitleLanguagePref = false
+                    prepareSource(source.copy(subtitles = matched), player.currentPosition, player.playWhenReady,
+                        resetSourceRetryBudget = false)
+                }
+            }
             updateProgressLoopState()
         }
     }
@@ -2013,20 +2058,14 @@ class ExoPlayerBackend(
     }
 
     private fun resolvePreferredAudioTrack(): String? {
-        val primary = playbackSettings.preferredAudioLanguage.trim()
-        val secondary = playbackSettings.preferredAudioLanguageSecondary.trim()
-        if (primary.isEmpty() && secondary.isEmpty()) return null
-
+        val priorities = listOf(
+            playbackSettings.preferredAudioLanguage,
+            playbackSettings.preferredAudioLanguageSecondary,
+            playbackSettings.preferredAudioLanguageTertiary
+        ).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         val options = _audioTracks.value
-        if (options.isEmpty()) return null
-
-        if (primary.isNotEmpty()) {
-            val match = findTrackByLanguage(options, primary)
-            if (match != null) return match.id
-        }
-        if (secondary.isNotEmpty()) {
-            val match = findTrackByLanguage(options, secondary)
-            if (match != null) return match.id
+        for (language in priorities) {
+            findTrackByLanguage(options, language)?.let { return it.id }
         }
         return null
     }

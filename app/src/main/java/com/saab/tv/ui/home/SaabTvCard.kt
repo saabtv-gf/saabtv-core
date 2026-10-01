@@ -1,8 +1,12 @@
 package com.saab.tv.ui.components
+import com.saab.tv.ui.trailer.trailerAnchor
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -25,6 +29,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -73,6 +80,9 @@ fun SaabTvCard(
     posterUrl: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    normalWidth: androidx.compose.ui.unit.Dp = 140.dp,
+    normalHeight: androidx.compose.ui.unit.Dp = 210.dp,
+    previewItem: com.saab.tv.data.model.stremio.MetaItem? = null,
     progress: Float = 0f,
     isWatched: Boolean = false,
     hasNewEpisode: Boolean = false,
@@ -80,18 +90,21 @@ fun SaabTvCard(
     onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val ownRequester = remember { FocusRequester() }
+    val rememberReturnFocus = LocalPosterFocusReturn.current
     var longPressHandled by remember { mutableStateOf(false) }
     val cardCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     val roundCorners = LocalRoundCorners.current
     
     // Shape based on user preference
     val cardShape = if (roundCorners) RoundedCornerShape(12.dp) else RectangleShape
-    val focusedCardShape = if (roundCorners) RoundedCornerShape(16.dp) else RectangleShape
+    val focusedCardShape = cardShape
+    // Stable geometry on focus; the border is the selection indicator.
 
     Box(
-        modifier = modifier
-            .width(140.dp)
-            .aspectRatio(2f / 3f)
+        modifier = modifier.trailerAnchor(previewItem)
+            .width(normalWidth)
+            .aspectRatio(normalWidth.value / normalHeight.value)
             .onGloballyPositioned { cardCoordinates[0] = it }
             .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
@@ -100,6 +113,7 @@ fun SaabTvCard(
             onClick = onClick,
             modifier = Modifier
                 .fillMaxSize()
+                .focusRequester(ownRequester)
                 .onPreviewKeyEvent { event ->
                     if (onLongClick == null || (event.key != Key.Enter && event.key != Key.DirectionCenter)) false
                     else if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
@@ -114,6 +128,7 @@ fun SaabTvCard(
                 .cardFocusSound()
                 .onFocusChanged {
                     isFocused = it.isFocused
+                    if (it.isFocused) rememberReturnFocus(ownRequester)
                     if (!it.isFocused) longPressHandled = false
                     if (it.isFocused) onFocused?.invoke()
                 },
@@ -121,7 +136,7 @@ fun SaabTvCard(
                 shape = cardShape,
                 focusedShape = focusedCardShape
             ),
-            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = MaterialTheme.colorScheme.surface,
                 focusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -129,7 +144,7 @@ fun SaabTvCard(
             ),
             border = ClickableSurfaceDefaults.border(
                 focusedBorder = Border(
-                    border = BorderStroke(4.dp, Color.White),
+                    border = BorderStroke(2.dp, Color.White),
                     shape = focusedCardShape
                 )
             )

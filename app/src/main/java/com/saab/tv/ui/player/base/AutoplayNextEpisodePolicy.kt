@@ -12,9 +12,27 @@ internal object AutoplayNextEpisodePolicy {
         thresholdSeconds: Int,
         playbackEnded: Boolean
     ): Boolean {
+        // Never advance automatically from heuristic percentage/time thresholds,
+        // including natural end when IntroDB has no valid outro marker.
+        return outroStartMs != null && outroStartMs > 0 && outroStartMs < durationMs &&
+            (playbackEnded || positionMs >= outroStartMs)
+    }
+
+    fun shouldOfferNextEpisode(
+        positionMs: Long,
+        durationMs: Long,
+        outroStartMs: Long?,
+        thresholdMode: String,
+        thresholdPercent: Int,
+        thresholdSeconds: Int,
+        playbackEnded: Boolean
+    ): Boolean {
         if (playbackEnded) return true
         if (durationMs <= 0L) return false
-        if (outroStartMs != null && outroStartMs > 0L && positionMs >= outroStartMs) return true
+        // Percentage/time are fallbacks, never override an actual outro marker.
+        if (outroStartMs != null && outroStartMs > 0L && outroStartMs < durationMs) {
+            return positionMs >= outroStartMs
+        }
 
         return when (thresholdMode) {
             "introdb" -> false

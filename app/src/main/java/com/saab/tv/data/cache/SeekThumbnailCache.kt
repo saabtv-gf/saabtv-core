@@ -14,7 +14,6 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.abs
 
 data class SeekThumbnailProgress(
     val cachedFrames: Int,
@@ -92,6 +91,7 @@ class SeekThumbnailCache @Inject constructor(
             }
             destination.setLastModified(System.currentTimeMillis())
             thumbnailIndexByDirectory[directory.absolutePath]?.set(timestampSeconds, destination)
+            directory.setLastModified(System.currentTimeMillis())
             writesSinceTrim++
             if (writesSinceTrim >= TRIM_EVERY_WRITES) {
                 trimToSize()
@@ -110,15 +110,12 @@ class SeekThumbnailCache @Inject constructor(
         intervalSeconds: Int
     ): Bitmap? = withContext(ioDispatcher) {
         if (profileId <= 0 || contentId.isBlank()) return@withContext null
-        val targetSeconds = (positionMs.coerceAtLeast(0L) / 1_000L)
-        val maxDistance = normalizeInterval(intervalSeconds).toLong()
-        val directory = contentDirectory(profileId, contentId)
-        val nearest = thumbnailIndex(directory)
-            .asSequence()
-            .map { (seconds, file) -> seconds to file }
-            .minByOrNull { (seconds, _) -> abs(seconds - targetSeconds) }
-            ?.takeIf { (seconds, _) -> abs(seconds - targetSeconds) <= maxDistance }
-            ?.second
+        val targetSeconds = ThumbnailTimelinePolicy.gridPosition(positionMs, normalizeInterval(intervalSeconds)) / 1_000L
+        val directory = if (ThumbnailTimelinePolicy.isSourceScoped(contentId)) contentDirectory(profileId, contentId)
+            else profileDirectory(profileId).listFiles().orEmpty()
+                .filter { decodeContentId(it.name)?.let { id -> ThumbnailTimelinePolicy.belongsTo(id, contentId) } == true }
+                .maxByOrNull { it.lastModified() } ?: contentDirectory(profileId, contentId)
+        val nearest = thumbnailIndex(directory)[targetSeconds]?.takeIf { it.exists() }
             ?: return@withContext null
         nearest.setLastModified(System.currentTimeMillis())
         BitmapFactory.decodeFile(nearest.absolutePath)
@@ -168,10 +165,13 @@ class SeekThumbnailCache @Inject constructor(
 
     suspend fun clearContent(profileId: Int, contentId: String) = withContext(ioDispatcher) {
         if (profileId > 0 && contentId.isNotBlank()) {
-            val directory = contentDirectory(profileId, contentId)
-            thumbnailIndexByDirectory.remove(directory.absolutePath)
-            lastDirectoryScanElapsedMs.remove(directory.absolutePath)
-            directory.deleteRecursively()
+            profileDirectory(profileId).listFiles().orEmpty().filter {
+                decodeContentId(it.name)?.let { id -> ThumbnailTimelinePolicy.belongsTo(id, contentId) } == true
+            }.forEach { directory ->
+                thumbnailIndexByDirectory.remove(directory.absolutePath)
+                lastDirectoryScanElapsedMs.remove(directory.absolutePath)
+                directory.deleteRecursively()
+            }
         }
     }
 
@@ -262,8 +262,8 @@ class SeekThumbnailCache @Inject constructor(
     }.getOrNull()
 
     companion object {
-        private const val CACHE_DIRECTORY = "seek_thumbnails_v3"
-        private val OBSOLETE_CACHE_DIRECTORIES = listOf("seek_thumbnails", "seek_thumbnails_v2")
+        private const val CACHE_DIRECTORY = "seek_thumbnails_v4"
+        private val OBSOLETE_CACHE_DIRECTORIES = listOf("seek_thumbnails", "seek_thumbnails_v2", "seek_thumbnails_v3")
         private const val MAX_CACHE_BYTES = 500L * 1_024L * 1_024L
         private const val WEBP_QUALITY = 60
         private const val TRIM_EVERY_WRITES = 50

@@ -37,14 +37,14 @@ internal class PlatformThumbnailEngine : Closeable {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                 instance.getScaledFrameAtTime(
                     positionUs,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    MediaMetadataRetriever.OPTION_CLOSEST,
                     THUMBNAIL_WIDTH,
                     THUMBNAIL_HEIGHT
                 ).also { if (it == null) lastError = "decoder returned no frame" }
             } else {
                 val original = instance.getFrameAtTime(
                     positionUs,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                    MediaMetadataRetriever.OPTION_CLOSEST
                 ) ?: return null
                 Bitmap.createScaledBitmap(
                     original,

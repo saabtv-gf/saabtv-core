@@ -40,6 +40,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -105,9 +106,15 @@ fun GridViewScreen(
     initialScrollIndex: Int = 0,
     initialScrollOffset: Int = 0,
     onScrollPositionChange: (Int, Int) -> Unit = { _, _ -> },
-    watchedIds: Set<String> = emptySet()
+    watchedIds: Set<String> = emptySet(),
+    allowTrailerAutoplay: Boolean = true
 ) {
     var actionItem by remember { mutableStateOf<MetaItem?>(null) }
+    var previewItem by remember { mutableStateOf<MetaItem?>(null) }
+    var previewActive by remember { mutableStateOf(false) }
+    var gridHasFocus by remember { mutableStateOf(false) }
+    var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    val previewViewModel = androidx.hilt.navigation.compose.hiltViewModel<HomeViewModel>()
     var actionBounds by remember { mutableStateOf(Rect.Zero) }
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -235,7 +242,8 @@ fun GridViewScreen(
         // ══════════════════════════════════════════════════════════════
         // SCROLLABLE GRID - Positioned first so header overlays it
         // ══════════════════════════════════════════════════════════════
-        CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
+        CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec,
+            com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(COLUMNS),
                 state = gridState,
@@ -247,7 +255,9 @@ fun GridViewScreen(
                 ),
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp),
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().zIndex(
+                    if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)
+                    .onFocusChanged { gridHasFocus = it.hasFocus }
             ) {
                 itemsIndexed(
                     items = items,
@@ -271,6 +281,7 @@ fun GridViewScreen(
                     }
                     
                     SaabTvCard(
+                        previewItem = item,
                         title = item.name,
                         posterUrl = item.poster,
                         onClick = { onMovieClick(item) },
@@ -279,6 +290,7 @@ fun GridViewScreen(
                         modifier = Modifier
                             .aspectRatio(2f / 3f)
                             .onPreviewKeyEvent { keyEvent ->
+                                if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                                 if (dpadRepeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
                                 if (keyEvent.type == KeyEventType.KeyDown) {
                                     when (keyEvent.key) {
@@ -334,6 +346,7 @@ fun GridViewScreen(
                             }
                             .onFocusChanged {
                                 if (it.isFocused) {
+                                    previewItem = item
                                     ImagePrefetcher.prefetchAround(context, imageUrls, index, count = 12)
                                     onFocusChange(index)
                                     lastFocusedPosterIndex = index
@@ -459,4 +472,12 @@ fun GridViewScreen(
         CatalogQuickActionsPopup(item, actionBounds, profileId,
             onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick)
     }
+    com.saab.tv.ui.trailer.BackdropTrailerPreview(
+        profileId = profileId,
+        focusedItem = previewItem, catalog = items,
+        settings = com.saab.tv.data.profile.rememberTrailerPreviewSettings(profileId),
+        enabled = allowTrailerAutoplay && !com.saab.tv.ui.trailer.LocalManualTrailerActive.current && (gridHasFocus || previewActive) && !isBackIconFocused && actionItem == null,
+        resolveTrailer = previewViewModel::trailerFor, onActiveChanged = { previewActive = it },
+        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: entryRequester.requestFocus() } }
+    )
 }

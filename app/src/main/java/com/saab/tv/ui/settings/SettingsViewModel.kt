@@ -175,7 +175,9 @@ class SettingsViewModel @Inject constructor(
             dao.insertProfile(profile.copy(
                 sourceLanguagePriority1 = existing[0],
                 sourceLanguagePriority2 = existing[1],
-                sourceLanguagePriority3 = existing[2]
+                sourceLanguagePriority3 = existing[2],
+                preferredAudioLanguage = existing[0],
+                preferredAudioLanguageSecondary = existing[1]
             ))
         }
     }
@@ -202,17 +204,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updatePreferredAudioLanguage(profileId: Int, language: String) {
-        viewModelScope.launch(mutationDispatcher + NonCancellable) {
-            val profile = dao.getProfileById(profileId)
-            if (profile != null) dao.insertProfile(profile.copy(preferredAudioLanguage = language))
-        }
+        updateSourceLanguagePriority(profileId, 1, language)
     }
 
     fun updatePreferredAudioLanguageSecondary(profileId: Int, language: String) {
-        viewModelScope.launch(mutationDispatcher + NonCancellable) {
-            val profile = dao.getProfileById(profileId)
-            if (profile != null) dao.insertProfile(profile.copy(preferredAudioLanguageSecondary = language))
-        }
+        updateSourceLanguagePriority(profileId, 2, language)
     }
 
     fun updatePreferredSubtitleLanguage(profileId: Int, language: String) {

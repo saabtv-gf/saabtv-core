@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -61,6 +62,7 @@ fun TopNavigationBar(
     onEnterContent: () -> Unit,
     onLogout: () -> Unit = {},
     onExit: () -> Unit = {},
+    hideNavigation: Boolean = false,
     content: @Composable () -> Unit
 ) {
     // 1. Define groups
@@ -108,12 +110,13 @@ fun TopNavigationBar(
     Box(modifier = Modifier.fillMaxSize()) {
 
         // LAYER 1: Content (Full Screen)
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().zIndex(
+            if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
             content()
         }
 
         // LAYER 2: Static Top Gradient (Hero Mask)
-        if (showStaticMask) {
+        if (showStaticMask && !hideNavigation) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -171,13 +174,15 @@ fun TopNavigationBar(
         }
 
         // Noise overlay to reduce gradient banding on budget panels
-        com.saab.tv.ui.components.NoiseOverlay(modifier = Modifier.zIndex(1.6f))
+        if (!hideNavigation) com.saab.tv.ui.components.NoiseOverlay(modifier = Modifier.zIndex(1.6f))
 
         // LAYER 4: Main Navigation Bar (Settings + Center Items)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(70.dp)
+                .graphicsLayer { alpha = if (hideNavigation) 0f else 1f }
+                .then(Modifier.focusProperties { canFocus = !hideNavigation })
                 .zIndex(2f)
                 .onFocusChanged { 
                     isSettingsAreaFocused = it.hasFocus
@@ -277,7 +282,7 @@ fun TopNavigationBar(
                 .align(Alignment.TopStart)
                 .padding(start = 24.dp, top = 70.dp)
                 .zIndex(if (showSettingsMenu) 5f else -1f) // Behind everything when hidden
-                .graphicsLayer { alpha = dropdownAlpha }
+                .graphicsLayer { alpha = if (hideNavigation) 0f else dropdownAlpha }
                 .onFocusChanged { isSettingsAreaFocused = it.hasFocus }
         ) {
             Column(

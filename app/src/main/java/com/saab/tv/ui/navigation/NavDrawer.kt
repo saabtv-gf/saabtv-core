@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -69,6 +70,7 @@ fun NavDrawer(
     drawerRequesters: Map<NavDestination, FocusRequester>,
     onNavigate: (NavDestination) -> Unit,
     onClose: () -> Unit,
+    hideNavigation: Boolean = false,
     content: @Composable () -> Unit
 ) {
     var isMenuFocused by remember { mutableStateOf(false) }
@@ -103,13 +105,14 @@ fun NavDrawer(
     Box(modifier = Modifier.fillMaxSize()) {
 
         // LAYER 1: Content
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().zIndex(
+            if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
             content()
         }
 
         // LAYER 2: Static Hero Mask
         val backgroundColor = MaterialTheme.colorScheme.background
-        if (showStaticMask) {
+        if (showStaticMask && !hideNavigation) {
             Box(
                 modifier = Modifier
                     .width(400.dp)
@@ -166,12 +169,14 @@ fun NavDrawer(
         }
 
         // Noise overlay to reduce gradient banding on budget panels
-        com.saab.tv.ui.components.NoiseOverlay(modifier = Modifier.zIndex(1.6f))
+        if (!hideNavigation) com.saab.tv.ui.components.NoiseOverlay(modifier = Modifier.zIndex(1.6f))
 
         // LAYER 4: Interactive Drawer
         Box(
             modifier = Modifier
                 .width(width)
+                .graphicsLayer { alpha = if (hideNavigation) 0f else 1f }
+                .then(Modifier.focusProperties { canFocus = !hideNavigation })
                 .fillMaxHeight()
                 .zIndex(2f)
                 .onFocusChanged { isMenuFocused = it.hasFocus }

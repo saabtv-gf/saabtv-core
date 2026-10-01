@@ -1,7 +1,6 @@
 package com.saab.tv.data.trailer
 
 import android.net.Uri
-import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
@@ -12,11 +11,11 @@ import androidx.media3.datasource.TransferListener
 
 @UnstableApi
 class YoutubeChunkedDataSourceFactory(
-    private val chunkSizeBytes: Long = CHUNK_SIZE
+    private val chunkSizeBytes: Long = CHUNK_SIZE,
+    private val requestHeaders: Map<String, String> = emptyMap()
 ) : DataSource.Factory {
 
     companion object {
-        private const val TAG = "YTChunkedDS"
         private const val CHUNK_SIZE = 10L * 1024 * 1024
     }
 
@@ -25,9 +24,10 @@ class YoutubeChunkedDataSourceFactory(
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
             .setAllowCrossProtocolRedirects(true)
+            .setDefaultRequestProperties(requestHeaders)
             .setUserAgent(
-                "com.google.android.youtube/20.10.35 " +
-                    "(Linux; U; Android 14; en_US) gzip"
+                requestHeaders["User-Agent"] ?: ("com.google.android.youtube/20.10.35 " +
+                    "(Linux; U; Android 14; en_US) gzip")
             )
             .createDataSource()
         return YoutubeChunkedDataSource(upstream, chunkSizeBytes)
@@ -51,7 +51,9 @@ class YoutubeChunkedDataSourceFactory(
 
         override fun open(dataSpec: DataSpec): Long {
             val host = dataSpec.uri.host.orEmpty()
-            isYouTubeStream = host.contains("googlevideo.com")
+            isYouTubeStream = (host == "googlevideo.com" || host.endsWith(".googlevideo.com")) &&
+                dataSpec.uri.path == "/videoplayback" &&
+                dataSpec.uri.getQueryParameter("sq") == null
 
             if (!isYouTubeStream) return upstream.open(dataSpec)
 
@@ -118,13 +120,9 @@ class YoutubeChunkedDataSourceFactory(
                     if (totalContentLength <= 0) return C.RESULT_END_OF_INPUT
                 }
 
-                return try {
-                    openNextChunk()
-                    upstream.read(buffer, offset, length)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to open next chunk at $currentChunkStart: ${e.message}")
-                    C.RESULT_END_OF_INPUT
-                }
+                // Count each chunk's first read; never hide network failures as EOF.
+                openNextChunk()
+                return read(buffer, offset, length)
             }
 
             bytesReadInChunk += bytesRead

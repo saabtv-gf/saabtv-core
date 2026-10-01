@@ -1,8 +1,10 @@
 package com.saab.tv.ui.components
+import com.saab.tv.ui.trailer.trailerAnchor
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
@@ -24,6 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
@@ -78,21 +83,24 @@ fun SaabTvLandscapeCard(
     posterUrl: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    previewItem: com.saab.tv.data.model.stremio.MetaItem? = null,
     progress: Float = 0f,
     hasNewEpisode: Boolean = false,
     onFocused: (() -> Unit)? = null,
     onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val ownRequester = remember { FocusRequester() }
+    val rememberReturnFocus = LocalPosterFocusReturn.current
     var longPressHandled by remember { mutableStateOf(false) }
     val cardCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     val roundCorners = LocalRoundCorners.current
 
     val cardShape = if (roundCorners) RoundedCornerShape(12.dp) else RectangleShape
-    val focusedCardShape = if (roundCorners) RoundedCornerShape(16.dp) else RectangleShape
+    val focusedCardShape = cardShape
 
     Box(
-        modifier = modifier
+        modifier = modifier.trailerAnchor(previewItem)
             .width(190.dp)
             .aspectRatio(16f / 9f)
             .onGloballyPositioned { cardCoordinates[0] = it }
@@ -103,6 +111,7 @@ fun SaabTvLandscapeCard(
             onClick = onClick,
             modifier = Modifier
                 .fillMaxSize()
+                .focusRequester(ownRequester)
                 .onPreviewKeyEvent { event ->
                     if (onLongClick == null || (event.key != Key.Enter && event.key != Key.DirectionCenter)) false
                     else if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
@@ -117,6 +126,7 @@ fun SaabTvLandscapeCard(
                 .cardFocusSound()
                 .onFocusChanged {
                     isFocused = it.isFocused
+                    if (it.isFocused) rememberReturnFocus(ownRequester)
                     if (!it.isFocused) longPressHandled = false
                     if (it.isFocused) onFocused?.invoke()
                 },
@@ -124,7 +134,7 @@ fun SaabTvLandscapeCard(
                 shape = cardShape,
                 focusedShape = focusedCardShape
             ),
-            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = MaterialTheme.colorScheme.surface,
                 focusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -132,7 +142,7 @@ fun SaabTvLandscapeCard(
             ),
             border = ClickableSurfaceDefaults.border(
                 focusedBorder = Border(
-                    border = BorderStroke(4.dp, Color.White),
+                    border = BorderStroke(2.dp, Color.White),
                     shape = focusedCardShape
                 )
             )

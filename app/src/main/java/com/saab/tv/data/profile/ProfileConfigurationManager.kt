@@ -150,6 +150,7 @@ class ProfileConfigurationManager @Inject constructor(
                 copyProfileDisplayAndDashboardConfig(targetProfileId, sourceProfileId)
                 deviceDisplay.copyProfile(sourceProfileId, targetProfileId)
                 EpisodeSpoilerPreferences.copy(context, sourceProfileId, targetProfileId)
+                TrailerPreviewPreferences.copy(context, sourceProfileId, targetProfileId)
                 clearPendingSetup(targetProfileId)
             }
         }

@@ -87,7 +87,7 @@ static void append_text(char *output, size_t capacity, const char *text) {
     strncat(output, text, capacity - used - 1);
 }
 
-static void drain_logs(mpv_handle *mpv, char *output, size_t capacity) {
+static void drain_logs(mpv_handle *mpv, char *output, size_t capacity, JNIEnv *env, jobject thiz) {
     output[0] = '\0';
     if (!mpv) return;
 
@@ -95,10 +95,17 @@ static void drain_logs(mpv_handle *mpv, char *output, size_t capacity) {
     int recorded = 0;
     char recent[24][256];
     memset(recent, 0, sizeof(recent));
+    jclass wrapper_class = (*env)->GetObjectClass(env, thiz);
+    jmethodID event_callback = (*env)->GetMethodID(env, wrapper_class, "event", "(I)V");
     while (examined++ < 512) {
         mpv_event *event = mpv_wait_event(mpv, 0.0);
         if (!event || event->event_id == MPV_EVENT_NONE) break;
-        if (event->event_id != MPV_EVENT_LOG_MESSAGE || !event->data) continue;
+        if (event->event_id != MPV_EVENT_LOG_MESSAGE) {
+            if (event_callback) (*env)->CallVoidMethod(env, thiz, event_callback, event->event_id);
+            if ((*env)->ExceptionCheck(env)) break;
+            continue;
+        }
+        if (!event->data) continue;
 
         mpv_event_log_message *message = (mpv_event_log_message *)event->data;
         char *line = recent[recorded % 24];
@@ -115,6 +122,7 @@ static void drain_logs(mpv_handle *mpv, char *output, size_t capacity) {
         }
         recorded++;
     }
+    (*env)->DeleteLocalRef(env, wrapper_class);
 
     /* Errors are normally at the end of mpv's log. Emit newest first so the
      * important lines survive the application report's per-event size limit. */
@@ -148,7 +156,7 @@ Java_dev_jdtech_mpv_MPVLib_nativeInitDetailed(
     }
 
     char logs[6144];
-    drain_logs(wrapper->mpv, logs, sizeof(logs));
+    drain_logs(wrapper->mpv, logs, sizeof(logs), env, thiz);
     char result_text[7168];
     snprintf(
         result_text,
@@ -171,7 +179,7 @@ Java_dev_jdtech_mpv_MPVLib_nativeDrainDiagnosticLogs(
     (void)thiz;
     mpv_instance_prefix *wrapper = (mpv_instance_prefix *)(intptr_t)instance;
     char logs[6144];
-    drain_logs(wrapper ? wrapper->mpv : NULL, logs, sizeof(logs));
+    drain_logs(wrapper ? wrapper->mpv : NULL, logs, sizeof(logs), env, thiz);
     return (*env)->NewStringUTF(env, logs);
 }
 
