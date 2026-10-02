@@ -24,6 +24,10 @@ object AppDiagnostics {
         appContext?.let { event(it, component, event, details) }
     }
 
+    fun detailed(component: String, event: String, details: String = "") {
+        appContext?.let { event(it, component, event, details, detailedOnly = true) }
+    }
+
     fun failure(component: String, event: String, failure: Throwable) {
         appContext?.let { failure(it, component, event, failure) }
     }
@@ -34,30 +38,32 @@ object AppDiagnostics {
     }
     fun recordsEvents(context: Context): Boolean = isBasicEnabled(context) || PlaybackDiagnostics.isEnabled(context)
 
-    fun event(context: Context, component: String, event: String, details: String = "", important: Boolean = false) {
-        if (!((isBasicEnabled(context) && (important || component != "Network")) || PlaybackDiagnostics.isEnabled(context))) return
+    fun event(context: Context, component: String, event: String, details: String = "", important: Boolean = false,
+        detailedOnly: Boolean = false) {
+        if (!DiagnosticRecordingPolicy.records(isBasicEnabled(context), PlaybackDiagnostics.isEnabled(context), component, detailedOnly)) return
         val app = context.applicationContext
         val item = PlaybackDiagnosticEvent(System.currentTimeMillis(), "INFO", component, event, DiagnosticPrivacy.redact(details).take(8000))
         writer.execute { append(app, item) }
     }
 
-    /** Always-on, bounded TorBox state trail. Callers supply counts and booleans only—never keys, hashes or URLs. */
+    /** Basic opt-in TorBox state trail; never keys, hashes or URLs. */
     fun torBoxEvent(event: String, details: String) {
         appContext?.let { torBoxEvent(it, event, details) }
     }
 
     fun torBoxEvent(context: Context, event: String, details: String) {
-        val item = PlaybackDiagnosticEvent(System.currentTimeMillis(), "INFO", "TorBox", event,
-            DiagnosticPrivacy.redact(details).take(800))
-        writer.execute { append(context.applicationContext, item) }
+        event(context, "TorBox", event, details.take(800))
     }
 
     /** A fatal event must reach disk before Android terminates the process. */
     fun failure(context: Context, component: String, event: String, failure: Throwable) {
+        val fatal = DiagnosticRecordingPolicy.fatal(component, event)
+        if (!fatal && (DiagnosticRecordingPolicy.cancellation(failure) ||
+                !DiagnosticRecordingPolicy.records(isBasicEnabled(context), PlaybackDiagnostics.isEnabled(context), component))) return
         val app = context.applicationContext
-        val item = PlaybackDiagnosticEvent(System.currentTimeMillis(), "ERROR", component, event,
+        val item = PlaybackDiagnosticEvent(System.currentTimeMillis(), if (fatal) "FATAL" else "WARN", component, event,
             DiagnosticPrivacy.stack(failure))
-        if (component == "Application" && event == "Uncaught Exception") append(app, item)
+        if (fatal) append(app, item)
         else writer.execute { append(app, item) }
     }
 

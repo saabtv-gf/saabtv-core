@@ -55,7 +55,9 @@ class YouTubeTrailerActivity : ComponentActivity() {
                     PlayerScreen(
                         videoUrl = resolved.videoUrl, trailerAudioUrl = resolved.audioUrl,
                         trailerVariants = listOf(TrailerPlaybackVariant(resolved.videoUrl, resolved.audioUrl,
-                            resolved.qualityLabel, requestHeaders = resolved.requestHeaders)) + resolved.fallbackVariants,
+                            resolved.qualityLabel, requestHeaders = resolved.requestHeaders,
+                            formatId = resolved.formatId, codec = resolved.codec, bitrate = resolved.bitrate,
+                            fps = resolved.fps, width = resolved.width, hardwareDecoder = resolved.hardwareDecoder)) + resolved.fallbackVariants,
                         title = intent.getStringExtra(TITLE).orEmpty().ifBlank { "Trailer" },
                         poster = "", movieId = "trailer_$videoId", mediaType = "movie",
                         playbackSettings = PlaybackSettings(seekThumbnailsEnabled = false),

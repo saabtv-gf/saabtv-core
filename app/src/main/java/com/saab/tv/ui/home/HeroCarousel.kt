@@ -65,6 +65,7 @@ fun HeroCarousel(
     tmdbEnabled: Boolean = false,
     tmdbEnrichedIds: Set<String> = emptySet()
 ) {
+    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     if (items.isEmpty()) return
 
     var currentIndex by remember(items) { 
@@ -136,10 +137,10 @@ fun HeroCarousel(
                         val timeSinceLastUp = now - upKeyDebouncer.lastTime
                         upKeyDebouncer.lastTime = now
                         if (timeSinceLastUp > 300L) {
-                            drawerRequester.requestFocus()
+                            requestMenuFocus()
                         }
                     } else {
-                        drawerRequester.requestFocus()
+                        requestMenuFocus()
                     }
                 }
                 true
@@ -172,7 +173,7 @@ fun HeroCarousel(
                             } else {
                                 // Loop significantly improves UX
                                 if (!isTopNav && drawerRequester != null && timeSinceLastLeft > 300L) {
-                                    drawerRequester.requestFocus()
+                                    requestMenuFocus()
                                     true
                                 } else {
                                     // Infinite scroll: loop to last item

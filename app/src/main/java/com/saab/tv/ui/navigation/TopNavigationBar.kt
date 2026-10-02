@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
  * Icon-only by default, text reveals on focus with bubble background
  */
 @Composable
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 fun TopNavigationBar(
     currentDestination: NavDestination,
     currentProfile: ProfileEntity?,
@@ -89,6 +90,7 @@ fun TopNavigationBar(
     val navigationBlocked = hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
         com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
     val isTopNavActive = (isSettingsAreaFocused || isCenterAreaFocused) && !navigationBlocked
+    val focusGuard = rememberNavigationFocusGuard(navigationBlocked, Key.DirectionUp, onEnterContent)
     
     // Back from the navigation surface is an app-exit request and must confirm.
     androidx.activity.compose.BackHandler(enabled = isTopNavActive) {
@@ -100,7 +102,7 @@ fun TopNavigationBar(
     var isProfileFocused by remember { mutableStateOf(false) }
     var isExitFocused by remember { mutableStateOf(false) }
     // Menu is open if Settings or any menu item is focused
-    val showSettingsMenu = isSettingsFocused || isProfileFocused || isExitFocused
+    val showSettingsMenu = isTopNavActive && (isSettingsFocused || isProfileFocused || isExitFocused)
 
     val backgroundColor = MaterialTheme.colorScheme.background
     val showStaticMask = currentDestination in listOf(
@@ -110,12 +112,17 @@ fun TopNavigationBar(
         NavDestination.Ott
     )
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().onPreviewKeyEvent(focusGuard::key)) {
 
         // LAYER 1: Content (Full Screen)
         Box(modifier = Modifier.fillMaxSize().zIndex(
-            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
-            content()
+            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)
+            .focusProperties { exit = { direction -> focusGuard.contentExit(direction, topNavRequesters[currentDestination]) } }
+            .onFocusChanged { focusGuard.contentFocused(it.hasFocus) }
+            .focusGroup()) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalNavigationMenuRequest provides {
+                    focusGuard.requestNavigation { topNavRequesters[currentDestination] }
+            }) { content() }
         }
 
         // LAYER 2: Static Top Gradient (Hero Mask)
@@ -188,7 +195,7 @@ fun TopNavigationBar(
                 .then(Modifier.focusProperties { canFocus = !hidden })
                 .zIndex(2f)
                 .onFocusChanged { 
-                    isCenterAreaFocused = it.hasFocus
+                    isCenterAreaFocused = focusGuard.focus("top", it.hasFocus)
                 }.focusGroup()
         ) {
             // Profile Button (Left aligned) - fades with navbar
@@ -287,7 +294,7 @@ fun TopNavigationBar(
                 .padding(start = 24.dp, top = 70.dp)
                 .zIndex(if (showSettingsMenu) 5f else -1f) // Behind everything when hidden
                 .graphicsLayer { alpha = if (hidden) 0f else dropdownAlpha }
-                .onFocusChanged { isSettingsAreaFocused = it.hasFocus }.focusGroup()
+                .onFocusChanged { isSettingsAreaFocused = focusGuard.focus("dropdown", it.hasFocus) }.focusGroup()
         ) {
             Column(
                 horizontalAlignment = Alignment.Start,

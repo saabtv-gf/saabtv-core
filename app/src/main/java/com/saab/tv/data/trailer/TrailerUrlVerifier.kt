@@ -28,7 +28,11 @@ internal object TrailerUrlVerifier {
         for ((index, variant) in ranked.withIndex()) {
             val video = readable(variant.videoUrl, variant.requestHeaders)
             val audio = variant.audioUrl?.let { readable(it, variant.requestHeaders) }
-            if (video.await() && (audio == null || audio.await())) {
+            val videoOk = video.await()
+            val audioOk = audio?.await() ?: true
+            com.saab.tv.AppDiagnostics.detailed("Trailer", "Rendition Probe",
+                "rank=${index + 1} ${variant.diagnosticSummary()} videoReadable=$videoOk audioReadable=$audioOk")
+            if (videoOk && audioOk) {
                 return@coroutineScope listOf(variant) + ranked.drop(index + 1)
             }
         }
@@ -54,13 +58,13 @@ internal object TrailerUrlVerifier {
             val builder = Request.Builder().url(url).get().header("Range", "bytes=0-1023")
             headers.forEach { (name, value) -> builder.header(name, value) }
             client.newCall(builder.build()).execute().use { response ->
-                com.saab.tv.AppDiagnostics.event("Trailer", "CDN Probe", "httpStatus=${response.code} host=${response.request.url.host}")
+                com.saab.tv.AppDiagnostics.detailed("Trailer", "CDN Probe", "httpStatus=${response.code} host=${response.request.url.host}")
                 response.isSuccessful && response.body?.source()?.exhausted() == false
             }
         } catch (cancelled: CancellationException) { throw cancelled }
           catch (failure: java.io.IOException) {
             coroutineContext.ensureActive()
-            com.saab.tv.AppDiagnostics.event("Trailer", "CDN Probe Failed", "type=${failure.javaClass.simpleName}")
+            com.saab.tv.AppDiagnostics.detailed("Trailer", "CDN Probe Failed", "type=${failure.javaClass.simpleName}")
             false
         }
     }

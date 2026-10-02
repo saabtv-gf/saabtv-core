@@ -64,6 +64,7 @@ enum class NavDestination(
 }
 
 @Composable
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 fun NavDrawer(
     currentDestination: NavDestination,
     currentProfile: ProfileEntity?,
@@ -78,6 +79,7 @@ fun NavDrawer(
     val navigationBlocked = hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
         com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
     val isMenuFocused = drawerHasFocus && !navigationBlocked
+    val focusGuard = rememberNavigationFocusGuard(navigationBlocked, Key.DirectionLeft, onClose)
 
     val width by animateDpAsState(
         targetValue = if (isMenuFocused) 200.dp else 80.dp,
@@ -106,12 +108,17 @@ fun NavDrawer(
         NavDestination.Watchlist
     )
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().onPreviewKeyEvent(focusGuard::key)) {
 
         // LAYER 1: Content
         Box(modifier = Modifier.fillMaxSize().zIndex(
-            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
-            content()
+            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)
+            .focusProperties { exit = { direction -> focusGuard.contentExit(direction, drawerRequesters[currentDestination]) } }
+            .onFocusChanged { focusGuard.contentFocused(it.hasFocus) }
+            .focusGroup()) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalNavigationMenuRequest provides {
+                    focusGuard.requestNavigation { drawerRequesters[currentDestination] }
+            }) { content() }
         }
 
         // LAYER 2: Static Hero Mask
@@ -183,7 +190,7 @@ fun NavDrawer(
                 .then(Modifier.focusProperties { canFocus = !hidden })
                 .fillMaxHeight()
                 .zIndex(2f)
-                .onFocusChanged { drawerHasFocus = it.hasFocus }
+                .onFocusChanged { drawerHasFocus = focusGuard.focus("drawer", it.hasFocus) }
                 .focusGroup()
                 .padding(top = 30.dp, bottom = 30.dp)
         ) {

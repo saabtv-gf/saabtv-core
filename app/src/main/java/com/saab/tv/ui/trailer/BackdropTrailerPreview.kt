@@ -85,41 +85,54 @@ fun BackdropTrailerPreview(
     var dismissedKey by remember { mutableStateOf<String?>(null) }
     var activeItem by remember { mutableStateOf<MetaItem?>(null) }
     var source by remember { mutableStateOf<TrailerPlaybackSource?>(null) }
-    val key = focusedItem?.let { "${it.type}:${it.id}" }
-    var expanded by remember(key, settings.presentation) { mutableStateOf(false) }
+    var expanded by remember(profileId, settings.presentation) { mutableStateOf(false) }
+    // A disappearing inline control can briefly restore focus to a background
+    // poster. Once expanded, keep the playing title until an explicit dismissal.
+    val previewItem = if (expanded) activeItem ?: focusedItem else focusedItem
+    val key = previewItem?.let { "${it.type}:${it.id}" }
+    val previewEnabled = enabled || expanded
     val anchor = InlineTrailerAnchor.bounds.takeIf { InlineTrailerAnchor.key == key }
     val inline = InlinePreviewLayout.isInline(settings.presentation, expanded)
-    val visible = activeItem != null && source != null && foreground && settings.enabled && enabled
+    val visible = activeItem != null && source != null && foreground && settings.enabled && previewEnabled
     val activeCallback by rememberUpdatedState(onActiveChanged)
     val fullscreenCallback by rememberUpdatedState(onFullscreenChanged)
     val dismissCallback by rememberUpdatedState(onDismiss)
     val unavailableCallback by rememberUpdatedState(onUnavailable)
+    val latestItem by rememberUpdatedState(activeItem)
+    val latestSource by rememberUpdatedState(source)
+    val latestExpanded by rememberUpdatedState(expanded)
+    LaunchedEffect(visible, key, previewEnabled, foreground) {
+        com.saab.tv.AppDiagnostics.detailed("Trailer Preview", "Visibility",
+            "titleId=${previewItem?.id} videoId=${source?.videoId} visible=$visible enabled=$enabled previewEnabled=$previewEnabled foreground=$foreground expanded=$expanded")
+    }
     val episodeAction by rememberUpdatedState(onEpisodes ?: LocalTrailerEpisodesAction.current)
     val startWatching by rememberUpdatedState(LocalTrailerStartWatching.current ?: onOpen)
     LaunchedEffect(visible) { activeCallback(visible) }
     LaunchedEffect(visible, inline) { fullscreenCallback(visible && !inline) }
     DisposableEffect(owner) { onDispose {
+        com.saab.tv.AppDiagnostics.event("Trailer Preview", "Owner Disposed",
+            "titleId=${latestItem?.id} videoId=${latestSource?.videoId} expanded=$latestExpanded")
         InlineTrailerAnchor.clearSession(owner)
         activeCallback(false); fullscreenCallback(false)
     } }
-    LaunchedEffect(key, enabled, settings.enabled, settings.delaySeconds, foreground, activityVersion) {
+    LaunchedEffect(key, previewEnabled, settings.enabled, settings.delaySeconds, foreground, activityVersion) {
         source = null; activeItem = null
-        if (!TrailerPreviewPolicy.canStart(settings.enabled && enabled, foreground, key, key,
-                dismissedKey, dismissedKey) || focusedItem == null) return@LaunchedEffect
+        if (!TrailerPreviewPolicy.canStart(settings.enabled && previewEnabled, foreground, key, key,
+                dismissedKey, dismissedKey) || previewItem == null) return@LaunchedEffect
         val delayMs = settings.delaySeconds * 1_000L
         // Debounce rapid card navigation, then resolve during the configured
         // hover delay rather than adding extraction latency after that delay.
         val debounceMs = minOf(delayMs, 250L)
         delay(debounceMs)
         val pendingSource = async {
-            val trailer = try { resolveTrailer(focusedItem) }
+            val trailer = try { resolveTrailer(previewItem) }
                 catch (e: CancellationException) { throw e } catch (_: Exception) { null }
             trailer?.let { extractor.extractPlaybackSource(it.first) }
         }
         delay(delayMs - debounceMs)
-        homeModel.startTrailerSourcePrefetch(focusedItem)
+        homeModel.startTrailerSourcePrefetch(previewItem)
         val resolved = pendingSource.await()
-        if (resolved != null) { source = resolved; activeItem = focusedItem }
+        if (resolved != null) { source = resolved; activeItem = previewItem }
         else unavailableCallback()
     }
     if (!visible) {
@@ -133,9 +146,12 @@ fun BackdropTrailerPreview(
     val fullscreenRootRequester = remember(key) { FocusRequester() }
     var interactionVersion by remember(key) { mutableIntStateOf(0) }
     var watchlisted by remember(key, profileId) { mutableStateOf(false) }
+    val previewPlayer = remember(key) { arrayOfNulls<ExoPlayer>(1) }
     LaunchedEffect(key, profileId) { watchlisted = homeModel.isWatchlisted(profileId, item.id) }
-    fun dismiss(restoreFocus: Boolean = true) {
-        dismissedKey = key; activeItem = null; source = null
+    fun dismiss(restoreFocus: Boolean = true, reason: String = "back") {
+        com.saab.tv.AppDiagnostics.event("Trailer Preview", "Dismissed",
+            "titleId=${item.id} videoId=${source?.videoId} reason=$reason expanded=$expanded positionMs=${previewPlayer[0]?.currentPosition}")
+        dismissedKey = key; expanded = false; activeItem = null; source = null
         InlineTrailerAnchor.clearSession(owner)
         if (restoreFocus) navigationScope.launch {
             withFrameNanos { }
@@ -155,24 +171,25 @@ fun BackdropTrailerPreview(
         }
     }
     val player = rememberNativeTrailerPlayer(source!!, muted, inline,
-        onStarted = { started = true }, onEnded = { dismiss() })
+        onStarted = { started = true }, onEnded = { dismiss(reason = "ended-or-variants-exhausted") })
+    SideEffect { previewPlayer[0] = player }
     val session = remember(player, item) {
         InlineTrailerSession(owner, item, player,
             onInteraction = { controlsVisible = true; interactionVersion++ },
             onMute = { muted = !muted; controlsVisible = true; interactionVersion++ },
-            onWatch = { dismiss(false); startWatching(item) },
-            onEpisodes = episodeAction?.let { action -> { dismiss(false); action() } },
+            onWatch = { dismiss(false, "start-watching"); startWatching(item) },
+            onEpisodes = episodeAction?.let { action -> { dismiss(false, "episodes"); action() } },
             onWatchlist = {
                 homeModel.toggleWatchlist(profileId, item)
                 watchlisted = !watchlisted; controlsVisible = true; interactionVersion++
             },
             onFullscreen = {
-                com.saab.tv.AppDiagnostics.event("Trailer Preview", "Expand Requested", "positionMs=${player.currentPosition}")
+                com.saab.tv.AppDiagnostics.event("Trailer Preview", "Expand Requested", "titleId=${item.id} videoId=${source?.videoId} positionMs=${player.currentPosition} playing=${player.isPlaying}")
                 expanded = true; controlsVisible = true; interactionVersion++
             },
             onDismiss = { dismiss() },
             onNavigate = { direction ->
-                dismiss(false)
+                dismiss(false, "card-navigation")
                 // Restore the poster before moving focus from the overlay.
                 navigationScope.launch {
                     withFrameNanos { }; dismissCallback()
@@ -290,11 +307,14 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
     val variants = remember(source) {
         val primaryHeight = Regex("(\\d{3,4})p").find(source.qualityLabel)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val all = listOf(TrailerPlaybackVariant(source.videoUrl, source.audioUrl,
-            source.qualityLabel, height = primaryHeight, requestHeaders = source.requestHeaders)) + source.fallbackVariants
+            source.qualityLabel, height = primaryHeight, requestHeaders = source.requestHeaders,
+            formatId = source.formatId, codec = source.codec, bitrate = source.bitrate, fps = source.fps,
+            width = source.width, hardwareDecoder = source.hardwareDecoder)) + source.fallbackVariants
         all
     }
     val player = remember(source) {
-        ExoPlayer.Builder(context, DefaultRenderersFactory(context).setEnableDecoderFallback(true))
+        ExoPlayer.Builder(context, DefaultRenderersFactory(context).setEnableDecoderFallback(true)
+            .setMediaCodecSelector(TrailerHardwareCodecSupport.selector))
             .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 15_000, 250, 1_500)
                 .setTargetBufferBytes(24 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build())
             .build().apply {
@@ -307,17 +327,21 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
     DisposableEffect(player) { onDispose { player.release() } }
     LaunchedEffect(player, inline) {
         com.saab.tv.AppDiagnostics.event("Trailer Preview", "Presentation Changed",
-            "mode=${if (inline) "inline" else "fullscreen"} positionMs=${player.currentPosition} playing=${player.isPlaying}")
+            "videoId=${source.videoId} mode=${if (inline) "inline" else "fullscreen"} positionMs=${player.currentPosition} playing=${player.isPlaying}")
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints()
             .setForceHighestSupportedBitrate(true).build()
     }
     DisposableEffect(player) {
         val preparedAtMs = android.os.SystemClock.elapsedRealtime()
-        val resumeMs = player.currentPosition.coerceAtLeast(0)
+        var variantPreparedAtMs = preparedAtMs
+        var resumeMs = player.currentPosition.coerceAtLeast(0)
         var index = 0
         fun play() {
             val variant = variants.getOrNull(index) ?: return latestEnded()
+            variantPreparedAtMs = android.os.SystemClock.elapsedRealtime()
+            com.saab.tv.AppDiagnostics.event("Trailer Preview", "Rendition Preparing",
+                "videoId=${source.videoId} variant=${index + 1}/${variants.size} ${variant.diagnosticSummary()} resumeMs=$resumeMs")
             val factory = DefaultMediaSourceFactory(context).setDataSourceFactory(
                 YoutubeChunkedDataSourceFactory(requestHeaders = variant.requestHeaders))
                 .setLoadErrorHandlingPolicy(object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
@@ -341,24 +365,66 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
             override fun onVideoSizeChanged(size: androidx.media3.common.VideoSize) {
                 val format = player.videoFormat
                 com.saab.tv.AppDiagnostics.event("Trailer Preview", "Decoded Resolution",
-                    "width=${size.width} height=${size.height} mime=${format?.sampleMimeType} codecs=${format?.codecs} requested=${variants.getOrNull(index)?.qualityLabel}")
+                    "videoId=${source.videoId} variant=${index + 1}/${variants.size} width=${size.width} height=${size.height} mime=${format?.sampleMimeType} codecs=${format?.codecs} averageBitrateBps=${format?.averageBitrate} peakBitrateBps=${format?.peakBitrate} fps=${format?.frameRate} requested=${variants.getOrNull(index)?.qualityLabel}")
             }
             override fun onRenderedFirstFrame() {
                 com.saab.tv.AppDiagnostics.event("Trailer Preview", "First Frame",
-                    "variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel} prepareToFrameMs=${android.os.SystemClock.elapsedRealtime() - preparedAtMs}")
+                    "videoId=${source.videoId} variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel} prepareToFrameMs=${android.os.SystemClock.elapsedRealtime() - preparedAtMs} variantToFrameMs=${android.os.SystemClock.elapsedRealtime() - variantPreparedAtMs}")
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { if (isPlaying) latestStarted() }
-            override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) latestEnded() }
+            override fun onPlaybackStateChanged(state: Int) {
+                com.saab.tv.AppDiagnostics.detailed("Trailer Preview", "Playback State",
+                    "videoId=${source.videoId} state=$state positionMs=${player.currentPosition} bufferedMs=${player.bufferedPosition} playWhenReady=${player.playWhenReady}")
+                if (state == Player.STATE_ENDED) latestEnded()
+            }
             override fun onPlayerError(error: PlaybackException) {
                 com.saab.tv.AppDiagnostics.event("Trailer Preview", "Variant Failed",
-                    "variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel} positionMs=${player.currentPosition}")
+                    "videoId=${source.videoId} variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel} playbackCode=${error.errorCode} positionMs=${player.currentPosition} remaining=${variants.size - index - 1}")
                 com.saab.tv.AppDiagnostics.failure("Trailer Preview", "Playback Failed", error)
-                index++; play()
+                resumeMs = player.currentPosition.coerceAtLeast(resumeMs)
+                val failedVp9 = TrailerPolicy.isVp9(variants.getOrNull(index)?.codec.orEmpty())
+                val decoderFailure = error.errorCode in setOf(
+                    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+                    PlaybackException.ERROR_CODE_DECODING_FAILED,
+                    PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+                    PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES)
+                index++
+                if (failedVp9 && decoderFailure) {
+                    while (TrailerPolicy.isVp9(variants.getOrNull(index)?.codec.orEmpty())) index++
+                }
+                play()
             }
         }
+        val analytics = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onVideoDecoderInitialized(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+                com.saab.tv.AppDiagnostics.detailed("Trailer Preview", "Decoder Initialized",
+                    "videoId=${source.videoId} decoder=$decoderName initializationMs=$initializationDurationMs")
+            }
+            override fun onVideoInputFormatChanged(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                format: androidx.media3.common.Format, decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?) {
+                com.saab.tv.AppDiagnostics.detailed("Trailer Preview", "Decoder Input Format",
+                    "videoId=${source.videoId} width=${format.width} height=${format.height} codecs=${format.codecs} mime=${format.sampleMimeType} averageBitrateBps=${format.averageBitrate} peakBitrateBps=${format.peakBitrate} fps=${format.frameRate}")
+            }
+            override fun onDroppedVideoFrames(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                droppedFrames: Int, elapsedMs: Long) {
+                com.saab.tv.AppDiagnostics.detailed("Trailer Preview", "Dropped Frames",
+                    "videoId=${source.videoId} count=$droppedFrames elapsedMs=$elapsedMs positionMs=${player.currentPosition}")
+            }
+            override fun onVideoCodecError(eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                videoCodecError: Exception) {
+                com.saab.tv.AppDiagnostics.failure("Trailer Preview", "Decoder Failure", videoCodecError)
+            }
+        }
+        player.addAnalyticsListener(analytics)
         player.addListener(listener)
         play()
-        onDispose { player.removeListener(listener) }
+        onDispose {
+            com.saab.tv.AppDiagnostics.event("Trailer Preview", "Player Detached",
+                "videoId=${source.videoId} positionMs=${player.currentPosition} state=${player.playbackState}")
+            player.removeListener(listener)
+            player.removeAnalyticsListener(analytics)
+        }
     }
     LaunchedEffect(player, muted) { player.volume = if (muted) 0f else 1f }
     return player
@@ -367,12 +433,19 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun TrailerVideoSurface(player: ExoPlayer, modifier: Modifier = Modifier.fillMaxSize()) {
+    var lastSize by remember(player) { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     AndroidView(
         factory = {
             (android.view.LayoutInflater.from(it).inflate(com.saab.tv.R.layout.trailer_preview_player, null) as PlayerView)
                 .apply { useController = false; isFocusable = false; this.player = player }
         },
-        update = { it.player = player }, modifier = modifier,
+        update = { it.player = player }, modifier = modifier.onGloballyPositioned { coordinates ->
+            if (coordinates.size != lastSize) {
+                lastSize = coordinates.size
+                com.saab.tv.AppDiagnostics.detailed("Trailer Preview", "Surface Layout",
+                    "widthPx=${lastSize.width} heightPx=${lastSize.height} decodedWidth=${player.videoSize.width} decodedHeight=${player.videoSize.height} surface=texture resize=fit")
+            }
+        },
         onRelease = { it.player = null }
     )
 }

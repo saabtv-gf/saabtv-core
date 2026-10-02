@@ -70,6 +70,7 @@ fun SettingsScreen(
     onContentFocusChanged: (Boolean) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
+    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val context = androidx.compose.ui.platform.LocalContext.current
     var selectedSection by remember { mutableStateOf(SettingsSection.Personalization) }
     var displayedSection by remember { mutableStateOf(SettingsSection.Personalization) }
@@ -104,7 +105,7 @@ fun SettingsScreen(
         if (isContentFocused) {
             itemRequesters[selectedSection]?.requestFocus()
         } else {
-            drawerRequester.requestFocus()
+            requestMenuFocus()
         }
     }
     
@@ -201,20 +202,20 @@ fun SettingsScreen(
                                     when (it.key) {
                                         Key.DirectionLeft -> {
                                             if (!isTransitioning) {
-                                                drawerRequester.requestFocus()
+                                                requestMenuFocus()
                                             }
                                             true
                                         }
                                         Key.Back -> {
                                             if (!isTransitioning) {
-                                                drawerRequester.requestFocus()
+                                                requestMenuFocus()
                                                 true
                                             } else false
                                         }
                                         Key.DirectionUp -> {
                                             // Up on first section -> go to drawer/topnav (ONLY in top nav mode)
                                             if (isFirstSection && !isTransitioning && isTopNav) {
-                                                drawerRequester.requestFocus()
+                                                requestMenuFocus()
                                                 true
                                             } else false
                                         }

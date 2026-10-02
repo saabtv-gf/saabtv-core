@@ -126,6 +126,7 @@ fun HomeScreen(
     onPreviewActiveChanged: (Boolean) -> Unit = {},
     onViewMore: (String, List<MetaItem>, String) -> Unit = { _, _, _ -> }
 ) {
+    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val state by viewModel.state.collectAsStateWithLifecycle()
     val actionScope = rememberCoroutineScope()
@@ -185,7 +186,7 @@ fun HomeScreen(
     // If Top-Nav mode AND content is NOT focused AND focus was already set, disable this
     // handler so TopNavigationBar's handler can "Close Nav" (return to content).
     BackHandler(enabled = isContentFocused) {
-        drawerRequester.requestFocus()
+        requestMenuFocus()
     }
 
     Box(

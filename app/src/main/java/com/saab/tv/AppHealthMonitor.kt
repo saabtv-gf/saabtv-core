@@ -36,7 +36,7 @@ object AppHealthMonitor {
     fun recordUpdateStage(context: Context, stage: String, failure: Throwable? = null) {
         AppDiagnostics.event(context, "Updater", stage, "${memorySummary()}", true)
         if (failure != null) AppDiagnostics.failure(context, "Updater", stage, failure)
-        if (failure == null && !AppDiagnostics.recordsEvents(context)) return
+        if (!AppDiagnostics.recordsEvents(context)) return
         val type = failure?.javaClass?.simpleName.orEmpty()
         append(context, "update-stage=$stage exception=$type ${memorySummary()}")
     }

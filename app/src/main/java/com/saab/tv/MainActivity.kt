@@ -1255,7 +1255,7 @@ class MainActivity : ComponentActivity() {
                                                         currentProfile = currentProfile,
                                                         onBack = {
                                                             currentNav = NavDestination.Home
-                                                            drawerRequesters[NavDestination.Home]?.requestFocusSafely()
+                                                            handleEnterContent()
                                                         },
                                                         entryRequester = settingsEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Settings]!!,
@@ -1438,7 +1438,7 @@ class MainActivity : ComponentActivity() {
                                                         currentProfile = currentProfile,
                                                         onBack = {
                                                             currentNav = NavDestination.Home
-                                                            drawerRequesters[NavDestination.Home]?.requestFocusSafely()
+                                                            handleEnterContent()
                                                         },
                                                         entryRequester = settingsEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Settings]!!,

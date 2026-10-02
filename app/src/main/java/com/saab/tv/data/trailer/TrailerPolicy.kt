@@ -34,8 +34,24 @@ object TrailerPolicy {
         }.getOrNull()
     }
 
+    fun isVp9(codec: String): Boolean = codec.lowercase().let { "vp9" in it || "vp09" in it }
+
+    /** Resolution first; hardware VP9 wins only against the same resolution. */
     fun rank(variants: List<TrailerPlaybackVariant>): List<TrailerPlaybackVariant> =
-        variants.distinctBy { it.videoUrl to it.audioUrl }.sortedByDescending { it.height }
+        variants.distinctBy { it.videoUrl to it.audioUrl }.sortedWith(
+            compareByDescending<TrailerPlaybackVariant> { it.height }.thenBy {
+                when {
+                    isVp9(it.codec) && it.hardwareDecoder.isNotBlank() -> 0
+                    it.codec.contains("avc", true) || it.codec.contains("h264", true) -> 1
+                    else -> 2
+                }
+            })
+
+    internal fun hardwareVp9Candidates(variants: List<TrailerPlaybackVariant>,
+        hardwareDecoder: (TrailerPlaybackVariant) -> String?): List<TrailerPlaybackVariant> = variants.mapNotNull {
+        if (!isVp9(it.codec)) it
+        else hardwareDecoder(it)?.takeIf(String::isNotBlank)?.let { decoder -> it.copy(hardwareDecoder = decoder) }
+    }
 
     fun metadataTrailer(meta: MetaItem): Pair<String, String>? {
         for (stream in meta.trailerStreams.orEmpty()) {

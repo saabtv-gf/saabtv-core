@@ -26,6 +26,7 @@ internal object MaintainedYoutubeResolver {
     private var deadlineNanos = 0L
 
     suspend fun resolve(videoId: String): List<TrailerPlaybackVariant> = withContext(Dispatchers.IO) {
+        val startedNanos = System.nanoTime()
         mutex.withLock {
             coroutineContext.ensureActive()
             extractionJob = coroutineContext[Job]
@@ -67,17 +68,24 @@ internal object MaintainedYoutubeResolver {
                 extractor.videoOnlyStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }.forEach { video ->
                     if (audio != null) {
                         val height = Regex("(\\d{2,4})p").find(video.resolution)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                        variants += TrailerPlaybackVariant(video.content, audio.content, video.resolution, height, headers)
+                        variants += TrailerPlaybackVariant(video.content, audio.content, video.resolution, height, headers,
+                            video.itag, video.codec.orEmpty(), video.bitrate, video.fps, video.width)
                     }
                 }
                 extractor.videoStreams.filter { it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }.forEach { video ->
                     val height = Regex("(\\d{2,4})p").find(video.resolution)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                    variants += TrailerPlaybackVariant(video.content, qualityLabel = video.resolution, height = height, requestHeaders = headers)
+                    variants += TrailerPlaybackVariant(video.content, qualityLabel = video.resolution, height = height, requestHeaders = headers,
+                        formatId = video.itag, codec = video.codec.orEmpty(), bitrate = video.bitrate, fps = video.fps, width = video.width)
                 }
                 extractor.hlsUrl?.takeIf { it.isNotBlank() }?.let { url ->
                     variants += TrailerPlaybackVariant(url, qualityLabel = "Adaptive", requestHeaders = headers)
                 }
-                com.saab.tv.AppDiagnostics.event("Trailer", "Maintained Extraction", "variants=${variants.size}")
+                com.saab.tv.AppDiagnostics.event("Trailer", "Maintained Extraction",
+                    "videoId=$videoId variants=${variants.size} maxHeight=${variants.maxOfOrNull { it.height } ?: 0} elapsedMs=${(System.nanoTime() - startedNanos) / 1_000_000}")
+                TrailerPolicy.rank(variants).take(16).forEachIndexed { index, variant ->
+                    com.saab.tv.AppDiagnostics.detailed("Trailer", "Available Rendition",
+                        "videoId=$videoId rank=${index + 1} ${variant.diagnosticSummary()}")
+                }
                 variants
             } catch (cancelled: CancellationException) { throw cancelled }
               catch (failure: Exception) {

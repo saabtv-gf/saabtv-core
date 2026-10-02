@@ -134,7 +134,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
 
         SettingToggleRow(
             label = "Basic Logging",
-            subtitle = "Off by default. Records navigation, lifecycle, sync and update stages when enabled.",
+            subtitle = "Off by default. Records app activity, trailer quality summaries and handled failures when enabled.",
             isChecked = basicEnabled,
             onCheckedChange = { basicEnabled = it; com.saab.tv.AppDiagnostics.setBasicEnabled(context, it) },
             onBack = onGoBack, blockUp = true,
@@ -146,7 +146,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             subtitle = if (diagnosticsEnabled) {
                 "Recording is enabled. Disable it after troubleshooting for maximum performance."
             } else {
-                "Off by default. Crashes and exceptions are captured independently of both toggles."
+                "Off by default. Adds network, rendition, decoder and playback-state details. Actual crashes, ANRs and abnormal process exits are always captured; handled failures are opt-in."
             },
             isChecked = diagnosticsEnabled,
             onCheckedChange = { enabled ->

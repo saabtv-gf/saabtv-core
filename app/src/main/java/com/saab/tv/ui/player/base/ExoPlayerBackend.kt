@@ -1393,6 +1393,9 @@ class ExoPlayerBackend(
             DefaultMediaSourceFactory(appContext, sharedExtractorsFactory)
         }
 
+        if (loadRequest?.trailerRequestHeaders?.isNotEmpty() == true) {
+            renderersFactory.setMediaCodecSelector(com.saab.tv.data.trailer.TrailerHardwareCodecSupport.selector)
+        }
         val player = ExoPlayer.Builder(appContext, renderersFactory)
             .setTrackSelector(trackSelector)
             .setMediaSourceFactory(mediaSourceFactory)

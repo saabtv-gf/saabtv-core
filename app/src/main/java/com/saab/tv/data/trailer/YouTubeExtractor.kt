@@ -51,7 +51,9 @@ private data class StreamCandidate(
     val score: Double, val hasN: Boolean, val itag: String,
     val height: Int, val fps: Int, val ext: String,
     val mimeType: String,
-    val isDefaultAudio: Boolean = true
+    val isDefaultAudio: Boolean = true,
+    val bitrate: Int = -1,
+    val width: Int = 0
 )
 
 private data class ManifestBestVariant(
@@ -158,16 +160,13 @@ class YouTubeExtractor @Inject constructor() {
 
     private suspend fun extractInternal(videoKey: String): TrailerPlaybackSource? {
         val videoId = TrailerPolicy.videoId(videoKey) ?: return null
+        val startedNanos = System.nanoTime()
+        com.saab.tv.AppDiagnostics.event("Trailer", "Resolution Started", "videoId=$videoId")
 
-        val maintained = TrailerPolicy.rank(MaintainedYoutubeResolver.resolve(videoId)).take(16)
+        val maintained = TrailerPolicy.rank(TrailerHardwareCodecSupport.prepare(MaintainedYoutubeResolver.resolve(videoId))).take(16)
         val maintainedPlayable = TrailerUrlVerifier.bestWithFallbacks(maintained)
-        // Do not accept a 720p/1080p ceiling from one client as proof that the
-        // upload has no 4K rendition. Probe only higher alternate candidates.
-        val primaryHeight = maintainedPlayable.firstOrNull()?.height ?: 0
-        val alternate = if (primaryHeight < 2160) YtDlpTrailerResolver.resolve(videoId)
-            .filter { maintainedPlayable.isEmpty() || it.height > primaryHeight } else emptyList()
-        val higherPlayable = TrailerUrlVerifier.bestWithFallbacks(alternate)
-        val verified = TrailerPolicy.rank(higherPlayable + maintainedPlayable)
+        // Start the best verified native rendition without a second quality probe.
+        val verified = maintainedPlayable
         val legacy = if (verified.isEmpty()) {
             try { withTimeoutOrNull(12_000) { extractLegacy(videoId) } }
             catch (cancelled: CancellationException) { throw cancelled }
@@ -176,14 +175,19 @@ class YouTubeExtractor @Inject constructor() {
         val candidates = verified + legacy?.let { source ->
             listOf(TrailerPlaybackVariant(source.videoUrl, source.audioUrl, source.qualityLabel,
                 Regex("(\\d{2,4})p").find(source.qualityLabel)?.groupValues?.get(1)?.toIntOrNull() ?: 0,
-                source.requestHeaders)) + source.fallbackVariants
+                source.requestHeaders, source.formatId, source.codec, source.bitrate, source.fps, source.width, source.hardwareDecoder)) + source.fallbackVariants
         }.orEmpty()
         val ranked = TrailerPolicy.rank(candidates)
-        val primary = ranked.firstOrNull() ?: return null
+        val primary = ranked.firstOrNull() ?: run {
+            com.saab.tv.AppDiagnostics.event("Trailer", "No Playable Rendition", "videoId=$videoId maintainedCandidates=${maintained.size}")
+            return null
+        }
+        val resolver = if (maintainedPlayable.isNotEmpty()) "maintained" else "legacy"
         com.saab.tv.AppDiagnostics.event("Trailer", "Verified Source Selected",
-            "quality=${primary.qualityLabel} fallbacks=${ranked.size - 1} resolver=${if (higherPlayable.isNotEmpty()) "yt-dlp" else if (maintainedPlayable.isNotEmpty()) "maintained" else "legacy"}")
+            "videoId=$videoId ${primary.diagnosticSummary()} fallbacks=${ranked.size - 1} resolver=$resolver elapsedMs=${(System.nanoTime() - startedNanos) / 1_000_000}")
         return TrailerPlaybackSource(primary.videoUrl, primary.audioUrl, ranked.drop(1),
-            primary.qualityLabel, primary.requestHeaders)
+            primary.qualityLabel, primary.requestHeaders, videoId, primary.formatId, primary.codec,
+            primary.bitrate, primary.fps, resolver, primary.width, primary.hardwareDecoder)
     }
 
     private suspend fun extractLegacy(videoId: String): TrailerPlaybackSource? {
@@ -248,7 +252,7 @@ class YouTubeExtractor @Inject constructor() {
                         client.key, client.priority, url, videoScore(height, fps, bitrate),
                         hasNParam(url), format.stringValue("itag").orEmpty(),
                         height, fps, if (mimeType.contains("webm")) "webm" else "mp4",
-                        mimeType
+                        mimeType, bitrate = bitrate.toInt(), width = format.numberValue("width")?.toInt() ?: 0
                     )
                 }
 
@@ -266,7 +270,7 @@ class YouTubeExtractor @Inject constructor() {
                             client.key, client.priority, url, videoScore(height, fps, bitrate),
                             hasNParam(url), format.stringValue("itag").orEmpty(),
                             height, fps, if (mimeType.contains("webm")) "webm" else "mp4",
-                            mimeType
+                            mimeType, bitrate = bitrate.toInt(), width = format.numberValue("width")?.toInt() ?: 0
                         )
                     } else if (mimeType.contains("audio/")) {
                         val bitrate = format.numberValue("bitrate") ?: format.numberValue("averageBitrate") ?: 0.0
@@ -335,7 +339,9 @@ class YouTubeExtractor @Inject constructor() {
                 videoUrl = progressiveSource.url,
                 qualityLabel = qualityLabel(progressiveSource),
                 height = progressiveSource.height,
-                requestHeaders = clientHeaders(progressiveSource.client)
+                requestHeaders = clientHeaders(progressiveSource.client),
+                formatId = progressiveSource.itag.toIntOrNull() ?: -1,
+                codec = progressiveSource.mimeType, bitrate = progressiveSource.bitrate, fps = progressiveSource.fps, width = progressiveSource.width
             )
         }
         bestManifest?.let { manifest ->
@@ -347,7 +353,7 @@ class YouTubeExtractor @Inject constructor() {
             )
         }
 
-        val distinctVariants = TrailerUrlVerifier.bestWithFallbacks(TrailerPolicy.rank(variants).take(16))
+        val distinctVariants = TrailerUrlVerifier.bestWithFallbacks(TrailerPolicy.rank(TrailerHardwareCodecSupport.prepare(variants)).take(16))
         val primary = distinctVariants.firstOrNull() ?: return null
         com.saab.tv.AppDiagnostics.event("Trailer", "Selected Quality",
             "videoId=$videoId selected=${primary.qualityLabel} available=" +
@@ -364,7 +370,10 @@ class YouTubeExtractor @Inject constructor() {
             audioUrl = primary.audioUrl,
             fallbackVariants = distinctVariants.drop(1),
             qualityLabel = primary.qualityLabel,
-            requestHeaders = primary.requestHeaders
+            requestHeaders = primary.requestHeaders,
+            videoId = videoId, formatId = primary.formatId, codec = primary.codec,
+            bitrate = primary.bitrate, fps = primary.fps, resolver = "legacy",
+            width = primary.width, hardwareDecoder = primary.hardwareDecoder
         )
     }
 
@@ -481,7 +490,9 @@ class YouTubeExtractor @Inject constructor() {
                 audioUrl = bestAudio.url,
                 qualityLabel = qualityLabel(video),
                 height = video.height,
-                requestHeaders = clientHeaders(client)
+                requestHeaders = clientHeaders(client),
+                formatId = video.itag.toIntOrNull() ?: -1, codec = video.mimeType,
+                bitrate = video.bitrate, fps = video.fps, width = video.width
                 )
             }
 
@@ -495,7 +506,9 @@ class YouTubeExtractor @Inject constructor() {
                     audioUrl = aacAudio.url,
                     qualityLabel = qualityLabel(avcVideo),
                     height = avcVideo.height,
-                    requestHeaders = clientHeaders(client)
+                    requestHeaders = clientHeaders(client),
+                    formatId = avcVideo.itag.toIntOrNull() ?: -1, codec = avcVideo.mimeType,
+                    bitrate = avcVideo.bitrate, fps = avcVideo.fps, width = avcVideo.width
                 )
             }
         }
