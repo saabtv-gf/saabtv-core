@@ -82,7 +82,6 @@ fun HubRow(
     pivotFocusRequester: FocusRequester? = null,
     isGlobalFocusPresent: Boolean = false
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val density = LocalDensity.current
     val paddingPx = remember(density, startPadding) { with(density) { startPadding.toPx() } }
 
@@ -208,7 +207,7 @@ fun HubRow(
                                             if (isFirstItem) {
                                                 // Only escape to navbar if this is a deliberate press
                                                 if (!isTopNav && timeSinceLastLeft > navbarEscapeDebounceMs) {
-                                                    requestMenuFocus()
+                                                    drawerRequester.requestFocus()
                                                 }
                                                 true // Consume at first item to prevent focus escaping
                                             } else {
@@ -223,7 +222,7 @@ fun HubRow(
 
                                                 if (isFirstRow) { // Strict check: isFirstRow
                                                     if (timeSinceLastUp > 300L) {
-                                                        requestMenuFocus()
+                                                        drawerRequester.requestFocus()
                                                     }
                                                     true
                                                 } else {

@@ -55,7 +55,6 @@ fun SearchScreen(
     lastFocusedId: String? = null, onFocusedIdChange: (String?) -> Unit = {},
     watchedIds: Set<String> = emptySet()
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val state by viewModel.state.collectAsStateWithLifecycle()
     var actionItem by remember { mutableStateOf<MetaItem?>(null) }
     var actionBounds by remember { mutableStateOf(Rect.Zero) }
@@ -79,7 +78,7 @@ fun SearchScreen(
     val focusTarget = state.results.firstOrNull { it.id == lastFocusedId } ?: firstResult
     val targetKey = focusTarget?.let { "${it.type}:${it.id}" }
 
-    BackHandler(enabled = hasFocus) { requestMenuFocus() }
+    BackHandler(enabled = hasFocus) { drawerRequester.requestFocusSafely() }
     LaunchedEffect(searchSessionId) {
         if (viewModel.beginSearchSession(searchSessionId)) {
             restoreResultFocus = false
@@ -180,7 +179,6 @@ private fun SearchResultRow(
     onFocused: (String?) -> Unit, modifier: Modifier,
     rowRequester: FocusRequester, upRequester: FocusRequester, downRequester: FocusRequester
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val listState = rememberLazyListState()
     var focusedTitle by remember { mutableStateOf("") }
     var rowFocusedId by remember(items) { mutableStateOf(items.firstOrNull()?.id) }
@@ -220,7 +218,7 @@ private fun SearchResultRow(
                         .onPreviewKeyEvent {
                             if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                             if (it.type == KeyEventType.KeyDown && index == 0 && it.key == Key.DirectionLeft) {
-                                requestMenuFocus(); true
+                                drawerRequester.requestFocusSafely(); true
                             } else false
                         })
             }
@@ -235,7 +233,6 @@ fun TvKeyboard(
     entryRequester: FocusRequester, drawerRequester: FocusRequester, isTopNav: Boolean,
     hasResults: Boolean, contentEntryRequester: FocusRequester? = null, modifier: Modifier = Modifier
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val rows = remember { listOf("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm.'-") }
     var lastKey by remember { mutableStateOf("q") }
     val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 80L, verticalRepeatIntervalMs = 120L) }
@@ -248,11 +245,11 @@ fun TvKeyboard(
             else when {
                 row == 0 && it.key == Key.DirectionUp -> {
                     if (hasResults) contentEntryRequester?.requestFocusSafely()
-                    else requestMenuFocus()
+                    else drawerRequester.requestFocusSafely()
                     true
                 }
                 column == 0 && it.key == Key.DirectionLeft -> {
-                    if (!isTopNav) requestMenuFocus()
+                    if (!isTopNav) drawerRequester.requestFocusSafely()
                     true
                 }
                 column == lastColumn && it.key == Key.DirectionRight -> true

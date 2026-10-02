@@ -7,6 +7,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,6 +26,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import com.saab.tv.ui.player.base.BasePlayerScaffold
 import com.saab.tv.ui.player.base.NextEpisodeInfo
@@ -98,6 +100,7 @@ fun PlayerScreen(
     viewModel: PlayerViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val hostView = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val runtime = remember(movieId, backendType, playbackSettings) {
@@ -373,9 +376,14 @@ fun PlayerScreen(
     }
 
     // Trakt scrobble: start when playing, pause when paused
-    LaunchedEffect(movieId, uiState.isPlaying) {
+    LaunchedEffect(playbackController, movieId, uiState.isPlaying, uiState.isReady, uiState.isEnded, uiState.durationMs) {
         if (uiState.durationMs <= 0L) return@LaunchedEffect
-        if (uiState.isPlaying) {
+        if (uiState.isEnded) {
+            val finalPosition = ProgressSnapshotPolicy.terminalPosition(uiState.positionMs, uiState.durationMs)
+            viewModel.markCompleted(movieId, mediaType, title, poster, finalPosition, uiState.durationMs,
+                profileId = playbackSettings.profileId).join()
+            viewModel.scrobbleStop(movieId, mediaType, finalPosition, uiState.durationMs)
+        } else if (uiState.isPlaying) {
             viewModel.scrobbleStart(movieId, mediaType, uiState.positionMs, uiState.durationMs)
         } else if (uiState.isReady) {
             viewModel.saveProgress(movieId, mediaType, title, poster, uiState.positionMs, uiState.durationMs, syncBoundary = true, profileId = playbackSettings.profileId)
@@ -397,13 +405,13 @@ fun PlayerScreen(
                 "position=${state.positionMs}ms duration=${state.durationMs}ms " +
                     PlaybackDiagnostics.memorySummary()
             )
-            if (state.positionMs >= 5_000L) {
+            if (state.isReady || state.hasRenderedFirstFrame || state.isEnded) {
                 viewModel.saveProgress(profileId = playbackSettings.profileId,
                     id = movieId,
                     type = mediaType,
                     title = latestPlaybackTitle,
                     poster = latestPlaybackPoster,
-                    position = state.positionMs,
+                    position = if (state.isEnded) ProgressSnapshotPolicy.terminalPosition(state.positionMs, state.durationMs) else state.positionMs,
                     duration = state.durationMs.takeIf { it > 0L },
                     syncBoundary = true
                 )
@@ -417,7 +425,8 @@ fun PlayerScreen(
             if (event == Lifecycle.Event.ON_STOP) {
                 playbackController.pause()
                 val state = playbackController.uiState.value
-                val pos = state.positionMs.coerceAtLeast(0L)
+                val pos = if (state.isEnded) ProgressSnapshotPolicy.terminalPosition(state.positionMs, state.durationMs)
+                    else state.positionMs.coerceAtLeast(0L)
                 val dur = state.durationMs.takeIf { it > 0L }
                 viewModel.saveProgress(profileId = playbackSettings.profileId,
                     id = movieId,
@@ -426,7 +435,8 @@ fun PlayerScreen(
                     poster = poster,
                     position = pos,
                     duration = dur,
-                    syncBoundary = true
+                    syncBoundary = true,
+                    playbackEstablished = state.isReady || state.hasRenderedFirstFrame || state.isEnded
                 )
             }
         }
@@ -541,7 +551,8 @@ fun PlayerScreen(
     }
 
     val persistAndBack = {
-        val position = uiState.positionMs.coerceAtLeast(0L)
+        val position = if (uiState.isEnded) ProgressSnapshotPolicy.terminalPosition(uiState.positionMs, uiState.durationMs)
+            else uiState.positionMs.coerceAtLeast(0L)
         val duration = uiState.durationMs.takeIf { it > 0L }
         val watchedThreshold = playbackSettings.watchedThresholdPercent.coerceIn(50, 99) / 100.0
         val isCompleted = WatchProgressPolicy.evaluate(
@@ -561,7 +572,7 @@ fun PlayerScreen(
             }
         }
 
-        if (isCompleted) {
+        val historySave = if (isCompleted) {
             viewModel.markCompleted(movieId, mediaType, title, poster, position, duration, profileId = playbackSettings.profileId)
         } else {
             viewModel.saveProgress(profileId = playbackSettings.profileId,
@@ -570,27 +581,36 @@ fun PlayerScreen(
                 title = title,
                 poster = poster,
                 position = position,
-                duration = duration
+                duration = duration,
+                syncBoundary = true,
+                playbackEstablished = uiState.isReady || uiState.hasRenderedFirstFrame || uiState.isEnded
             )
         }
         val selectedSourceUrl = sources.firstOrNull { it.id == uiState.currentSourceId }?.url
             ?: videoUrl
-        onBack(
-            PlayerSessionResult(
-                positionMs = position,
-                durationMs = duration,
-                isCompleted = isCompleted,
-                selectedSourceUrl = selectedSourceUrl,
-                selectedAudioTrackId = uiState.selectedAudioTrackId,
-                selectedSubtitleTrackId = uiState.selectedSubtitleTrackId,
-                subtitleSelectionWasManual = uiState.subtitleSelectionWasManual,
-                subtitleDelayMs = playbackController.persistableSubtitleDelayMs()
+        // Resolve the next details/resume target only after its local history is durable.
+        coroutineScope.launch {
+            historySave.join()
+            onBack(
+                PlayerSessionResult(
+                    positionMs = position,
+                    durationMs = duration,
+                    isCompleted = isCompleted,
+                    selectedSourceUrl = selectedSourceUrl,
+                    selectedAudioTrackId = uiState.selectedAudioTrackId,
+                    selectedSubtitleTrackId = uiState.selectedSubtitleTrackId,
+                    subtitleSelectionWasManual = uiState.subtitleSelectionWasManual,
+                    subtitleDelayMs = playbackController.persistableSubtitleDelayMs()
+                )
             )
-        )
+        }
+        Unit
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        val transitionToNextEpisode = { sourceUrl: String?, positionMs: Long, durationMs: Long? ->
+        val transitionToNextEpisode = { sourceUrl: String?, reportedPositionMs: Long, durationMs: Long? ->
+            val positionMs = if (uiState.isEnded) ProgressSnapshotPolicy.terminalPosition(reportedPositionMs, durationMs ?: 0L)
+                else reportedPositionMs
             finalizedTransitionId = movieId
             val duration = durationMs?.takeIf { it > 0L }
             val isCompleted = WatchProgressPolicy.evaluate(
@@ -599,25 +619,37 @@ fun PlayerScreen(
                 existingDurationMs = null,
                 watchedThreshold = playbackSettings.watchedThresholdPercent.coerceIn(50, 99) / 100.0
             ).isCompleted
-            if (isCompleted) {
+            val historySave = if (isCompleted) {
                 viewModel.markCompleted(movieId, mediaType, title, poster, positionMs, duration, profileId = playbackSettings.profileId)
             } else {
-                viewModel.saveProgress(movieId, mediaType, title, poster, positionMs, duration, profileId = playbackSettings.profileId)
+                viewModel.saveProgress(movieId, mediaType, title, poster, positionMs, duration,
+                    syncBoundary = true, playbackEstablished = uiState.isReady || uiState.hasRenderedFirstFrame || uiState.isEnded,
+                    profileId = playbackSettings.profileId)
             }
             duration?.let {
                 if (isCompleted) viewModel.scrobbleStop(movieId, mediaType, positionMs, it)
                 else viewModel.scrobblePause(movieId, mediaType, positionMs, it, force = true)
             }
-            onAutoplayNextEpisode?.invoke(sourceUrl, positionMs, durationMs)
+            coroutineScope.launch {
+                historySave.join()
+                onAutoplayNextEpisode?.invoke(sourceUrl, positionMs, durationMs)
+            }
             Unit
         }
-        val transitionToSelectedEpisode = { episode: MetaVideo, sourceUrl: String?, positionMs: Long, durationMs: Long? ->
+        val transitionToSelectedEpisode = { episode: MetaVideo, sourceUrl: String?, reportedPositionMs: Long, durationMs: Long? ->
+            val positionMs = if (uiState.isEnded) ProgressSnapshotPolicy.terminalPosition(reportedPositionMs, durationMs ?: 0L)
+                else reportedPositionMs
             finalizedTransitionId = movieId
-            viewModel.saveProgress(movieId, mediaType, title, poster, positionMs, durationMs, profileId = playbackSettings.profileId)
+            val historySave = viewModel.saveProgress(movieId, mediaType, title, poster, positionMs, durationMs,
+                syncBoundary = true, playbackEstablished = uiState.isReady || uiState.hasRenderedFirstFrame || uiState.isEnded,
+                profileId = playbackSettings.profileId)
             durationMs?.takeIf { it > 0L }?.let {
                 viewModel.scrobblePause(movieId, mediaType, positionMs, it, force = true)
             }
-            onEpisodeSelected?.invoke(episode, sourceUrl, positionMs, durationMs)
+            coroutineScope.launch {
+                historySave.join()
+                onEpisodeSelected?.invoke(episode, sourceUrl, positionMs, durationMs)
+            }
             Unit
         }
         BasePlayerScaffold(

@@ -1,7 +1,11 @@
 import java.util.Properties
+import org.gradle.testing.jacoco.tasks.JacocoReport
+import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
+import org.gradle.testing.jacoco.plugins.JacocoTaskExtension
 
 plugins {
     id("com.android.application")
+    id("jacoco")
     id("org.jetbrains.kotlin.android")
     // Apply the Compose Compiler plugin
     alias(libs.plugins.kotlin.compose)
@@ -9,6 +13,155 @@ plugins {
     id("kotlin-kapt")
     id("com.google.dagger.hilt.android")
 
+}
+
+jacoco { toolVersion = "0.8.12" }
+
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "2g"
+    maxParallelForks = 1
+    jvmArgs(
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-opens=java.base/java.util=ALL-UNNAMED",
+        "--add-opens=java.base/java.io=ALL-UNNAMED",
+        "--add-opens=java.base/java.net=ALL-UNNAMED",
+        "--add-opens=java.base/java.security=ALL-UNNAMED",
+        "--add-opens=java.base/java.text=ALL-UNNAMED",
+        "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED"
+    )
+    extensions.configure<JacocoTaskExtension> {
+        isIncludeNoLocationClasses = true
+        excludes = listOf("jdk.internal.*")
+    }
+}
+
+// Every application package is measured, including UI, services and repositories.
+// Only build-generated resource identifiers/configuration are omitted.
+val regressionClasses = files(
+    fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
+        exclude("**/R.class", "**/R$*.class", "**/BuildConfig.class")
+    },
+    fileTree(layout.buildDirectory.dir("intermediates/javac/debug/compileDebugJavaWithJavac/classes")) {
+        exclude("**/R.class", "**/R$*.class", "**/BuildConfig.class")
+    }
+)
+val regressionExecution = layout.buildDirectory.file("jacoco/testDebugUnitTest.exec")
+
+tasks.register<JacocoReport>("unitRegressionCoverage") {
+    dependsOn("testDebugUnitTest")
+    classDirectories.setFrom(regressionClasses)
+    sourceDirectories.setFrom(files("src/main/java", "src/main/kotlin"))
+    executionData.setFrom(regressionExecution)
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+        csv.required.set(true)
+    }
+}
+
+tasks.register<JacocoCoverageVerification>("verifyFullUnitRegressionCoverage") {
+    dependsOn("unitRegressionCoverage")
+    classDirectories.setFrom(regressionClasses)
+    executionData.setFrom(regressionExecution)
+    violationRules {
+        rule {
+            listOf("LINE", "BRANCH", "METHOD", "CLASS", "INSTRUCTION").forEach { metric ->
+                limit {
+                    counter = metric
+                    value = "COVEREDRATIO"
+                    minimum = "1.0000".toBigDecimal()
+                }
+            }
+        }
+    }
+}
+
+// Whole-application target: the same unfiltered denominator as the HTML report.
+// Run explicitly until the missing Android/UI tests make this gate pass.
+tasks.register<JacocoCoverageVerification>("verify90PercentUnitLineCoverage") {
+    dependsOn("unitRegressionCoverage")
+    classDirectories.setFrom(regressionClasses)
+    executionData.setFrom(regressionExecution)
+    violationRules {
+        rule {
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.9000".toBigDecimal()
+            }
+        }
+    }
+}
+
+tasks.register<JacocoCoverageVerification>("verifyProgressBoundaryRegressionCoverage") {
+    dependsOn("unitRegressionCoverage")
+    classDirectories.setFrom(regressionClasses)
+    executionData.setFrom(regressionExecution)
+    violationRules {
+        rule {
+            element = "CLASS"
+            includes = listOf("com.saab.tv.ui.player.ProgressSnapshotPolicy")
+            listOf("LINE", "BRANCH", "METHOD", "INSTRUCTION").forEach { metric ->
+                limit {
+                    counter = metric
+                    value = "COVEREDRATIO"
+                    minimum = "1.0".toBigDecimal()
+                }
+            }
+        }
+    }
+}
+
+// Protect the completed policy regression suite, including nested comparator classes.
+tasks.register<JacocoCoverageVerification>("verifyCorePolicyRegressionCoverage") {
+    dependsOn("unitRegressionCoverage")
+    classDirectories.setFrom(regressionClasses)
+    executionData.setFrom(regressionExecution)
+    val policyClasses = listOf(
+        "com.saab.tv.ui.details.SeriesActionLabelKt*",
+        "com.saab.tv.data.profile.ProfilePin*",
+        "com.saab.tv.data.profile.ProfileOnboardingDefaultsKt*",
+        "com.saab.tv.ui.trailer.TrailerPreviewPolicy*",
+        "com.saab.tv.data.cache.SeekThumbnailWorkerMemoryPolicy*",
+        "com.saab.tv.data.cache.ThumbnailWorkPolicy*",
+        "com.saab.tv.data.cache.ThumbnailTimelinePolicy*",
+        "com.saab.tv.ui.home.ContinueResumePolicy*",
+        "com.saab.tv.ui.home.HomePreviewMetadataPolicy*",
+        "com.saab.tv.DiagnosticRecordingPolicy*",
+        "com.saab.tv.ui.watchlist.WatchlistFocusPolicy*",
+        "com.saab.tv.ui.player.base.PlaybackReliabilityStateMachine*",
+        "com.saab.tv.ui.player.base.SubtitleTrackPreference*",
+        "com.saab.tv.ui.player.base.SubtitleSelectionPolicy*",
+        "com.saab.tv.ui.player.base.PlaybackBufferRecoveryPolicy*",
+        "com.saab.tv.ui.player.base.AutoplayNextEpisodePolicy*",
+        "com.saab.tv.ui.player.base.AdaptiveBufferPolicy*",
+        "com.saab.tv.ui.player.base.SeekThumbnailCarouselPolicy*",
+        "com.saab.tv.ui.player.base.VideoJitterRecoveryPolicy*",
+        "com.saab.tv.ui.common.ListStateSafety*",
+        "com.saab.tv.ui.player.ProgressSnapshotPolicy*",
+        "com.saab.tv.ui.player.WatchProgressPolicy*",
+    )
+    doFirst {
+        policyClasses.forEach { pattern ->
+            val relativePath = pattern.removeSuffix("*").replace('.', '/') + ".class"
+            check(layout.buildDirectory.file("tmp/kotlin-classes/debug/$relativePath").get().asFile.exists()) {
+                "Required regression policy disappeared: $pattern"
+            }
+        }
+    }
+    violationRules {
+        rule {
+            element = "CLASS"
+            includes = policyClasses
+            listOf("LINE", "BRANCH", "METHOD", "CLASS", "INSTRUCTION").forEach { metric ->
+                limit {
+                    counter = metric
+                    value = "COVEREDRATIO"
+                    minimum = "1.0000".toBigDecimal()
+                }
+            }
+        }
+    }
 }
 
 // Read ACRA config from local.properties (keeps secrets out of version control)
@@ -53,8 +206,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 92
-        versionName = "0.1.91-beta"
+        versionCode = 96
+        versionName = "0.1.92"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -124,6 +277,9 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = true
+    }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
     }
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
@@ -242,6 +398,8 @@ dependencies {
 
     testImplementation(libs.catalog.junit.junit)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.catalog.androidx.test.runner)
     androidTestImplementation(libs.catalog.androidx.test.core.ktx)
     androidTestImplementation(libs.catalog.androidx.test.ext.junit.ktx)

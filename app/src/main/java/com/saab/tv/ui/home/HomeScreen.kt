@@ -126,7 +126,6 @@ fun HomeScreen(
     onPreviewActiveChanged: (Boolean) -> Unit = {},
     onViewMore: (String, List<MetaItem>, String) -> Unit = { _, _, _ -> }
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val state by viewModel.state.collectAsStateWithLifecycle()
     val actionScope = rememberCoroutineScope()
@@ -186,7 +185,7 @@ fun HomeScreen(
     // If Top-Nav mode AND content is NOT focused AND focus was already set, disable this
     // handler so TopNavigationBar's handler can "Close Nav" (return to content).
     BackHandler(enabled = isContentFocused) {
-        requestMenuFocus()
+        drawerRequester.requestFocus()
     }
 
     Box(
@@ -1095,7 +1094,7 @@ private fun buildContinueWatchingItems(
 
     val chosenSeries = mutableMapOf<String, WatchHistoryEntity>()
     seriesByCanonicalId.forEach { (canonicalId, entries) ->
-        val preferred = entries.firstOrNull { isEpisodePlaybackId(it.id) } ?: entries.firstOrNull()
+        val preferred = ContinueResumePolicy.latestEpisode(entries)
         if (preferred != null) {
             chosenSeries[canonicalId] = preferred
         }
@@ -1114,7 +1113,8 @@ private fun buildContinueWatchingItems(
                 poster = entry.poster,
                 background = chosen.background,
                 logo = chosen.logo,
-                progress = chosen.progress()
+                progress = chosen.progress(),
+                resumePlaybackId = chosen.id
             ))
         } else {
             val chosen = movieById[entry.id] ?: return@forEach
@@ -1152,7 +1152,8 @@ private fun buildContinueWatchingItems(
             type = "series",
             name = nextUp.title,
             poster = nextUp.poster,
-            hasNewEpisode = isReturning
+            hasNewEpisode = isReturning,
+            resumePlaybackId = "${nextUp.seriesId}:${nextUp.nextSeason}:${nextUp.nextEpisode}"
         ))
     }
 

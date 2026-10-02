@@ -5,8 +5,9 @@ internal class NavigationFocusEntryPolicy(private val now: () -> Long) {
     private var allowedUntil = -1L
     var insideNavigation = false
         private set
-    fun authorize() { if (!insideNavigation) allowedUntil = now() + 250 }
-    fun input(requestsNavigation: Boolean) { if (!requestsNavigation && !insideNavigation) allowedUntil = -1L }
+    fun input(requestsNavigation: Boolean) {
+        if (!insideNavigation) allowedUntil = if (requestsNavigation) now() + 250 else -1L
+    }
     fun enter(): Boolean {
         if (insideNavigation || now() <= allowedUntil) {
             insideNavigation = true

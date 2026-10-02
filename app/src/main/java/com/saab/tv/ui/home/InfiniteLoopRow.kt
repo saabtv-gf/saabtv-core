@@ -348,7 +348,6 @@ private fun LinearContent(
     enrichedItems: Map<String, MetaItem> = emptyMap(),
     effectiveItemWidth: Dp = ITEM_WIDTH
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val context = LocalContext.current
     // Prefetch image URLs list (cached to avoid allocation during scroll)
     val imageUrls = remember(items, isLandscapeCards, enrichedItems) {
@@ -415,7 +414,7 @@ private fun LinearContent(
                                     if (isFirstItem) {
                                         // Only escape to navbar if this is a deliberate press (not rapid long-press repeat)
                                         if (!isTopNav && timeSinceLastLeft > navbarEscapeDebounceMs) {
-                                            requestMenuFocus()
+                                            drawerRequester.requestFocusSafely()
                                         }
                                         true // Consume at first item to prevent focus escaping
                                     } else {
@@ -432,7 +431,7 @@ private fun LinearContent(
                                         if (isFirstRow) {
                                             // Only escape to navbar if slow press
                                             if (timeSinceLastUp > 300L) {
-                                                requestMenuFocus()
+                                                drawerRequester.requestFocusSafely()
                                             }
                                             true // Block default
                                         } else {
@@ -540,7 +539,6 @@ private fun InfiniteGridContent(
     repeatGate: DpadRepeatGate,
     pivotFocusRequester: FocusRequester? = null
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val context = LocalContext.current
 
     val truncatedMovies = remember(items, visibleItemCount) { 
@@ -657,7 +655,7 @@ private fun InfiniteGridContent(
                                             if (isLoopStart) {
                                                 // Only escape to navbar if this is a deliberate press (not rapid long-press repeat)
                                                 if (!isTopNav && timeSinceLastLeft > navbarEscapeDebounceMs) {
-                                                    requestMenuFocus()
+                                                    drawerRequester.requestFocusSafely()
                                                 }
                                                 true // Consume at loop start to prevent focus escaping
                                             } else {
@@ -673,7 +671,7 @@ private fun InfiniteGridContent(
 
                                                 if (isFirstRow) {
                                                     if (timeSinceLastUp > 300L) {
-                                                        requestMenuFocus()
+                                                        drawerRequester.requestFocusSafely()
                                                     }
                                                     true
                                                 } else {
@@ -786,7 +784,6 @@ private fun FiniteGridContent(
     repeatGate: DpadRepeatGate,
     pivotFocusRequester: FocusRequester? = null
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val context = LocalContext.current
     val truncatedMovies = remember(items, visibleItemCount) { 
         items.take(visibleItemCount.coerceIn(5, 50)) 
@@ -862,7 +859,7 @@ private fun FiniteGridContent(
                                             if (isFirstItem) {
                                                 // Only escape to navbar if this is a deliberate press (not rapid long-press repeat)
                                                 if (!isTopNav && timeSinceLastLeft > navbarEscapeDebounceMs) {
-                                                    requestMenuFocus()
+                                                    drawerRequester.requestFocusSafely()
                                                 }
                                                 true // Consume at first item to prevent focus escaping
                                             } else {
@@ -878,7 +875,7 @@ private fun FiniteGridContent(
 
                                                 if (isFirstRow) {
                                                     if (timeSinceLastUp > 300L) {
-                                                        requestMenuFocus()
+                                                        drawerRequester.requestFocusSafely()
                                                     }
                                                     true
                                                 } else {
@@ -933,7 +930,7 @@ private fun FiniteGridContent(
 
                                                 if (isFirstRow) {
                                                     if (timeSinceLastUp > 300L) {
-                                                        requestMenuFocus()
+                                                        drawerRequester.requestFocusSafely()
                                                     }
                                                     true
                                                 } else {
@@ -985,7 +982,6 @@ private fun InfiniteViewMoreCard(
     onFocused: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     var isFocused by remember { mutableStateOf(false) }
 
     val isToTheLeft = scrollIndex < currentFocusedIndex
@@ -1028,7 +1024,7 @@ private fun InfiniteViewMoreCard(
 
                                 if (isFirstRow) {
                                     if (timeSinceLastUp > 300L) {
-                                        requestMenuFocus()
+                                        drawerRequester.requestFocusSafely()
                                     }
                                     true
                                 } else {

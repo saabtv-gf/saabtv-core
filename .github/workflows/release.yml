@@ -83,11 +83,23 @@ jobs:
           SAABTV_RELEASE_KEY_PASSWORD: ${{ secrets.SAABTV_RELEASE_KEY_PASSWORD }}
         run: |
           ./gradlew --no-daemon \
-            :app:testDebugUnitTest \
+            :app:unitRegressionCoverage \
+            :app:verifyCorePolicyRegressionCoverage \
             :app:lintRelease \
             :app:assembleRelease \
             -Psaab32BitOnly=true \
             -Dorg.gradle.jvmargs=-Xmx4g
+
+      - name: Retain Regression Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-and-coverage-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/reports/jacoco/unitRegressionCoverage/
+            app/build/reports/lint-results-release.*
+          if-no-files-found: warn
 
       - name: Prepare Release Files
         id: prepare

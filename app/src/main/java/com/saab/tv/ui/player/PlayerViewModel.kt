@@ -11,6 +11,7 @@ import com.saab.tv.data.trakt.TraktScrobbleManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
@@ -56,13 +57,14 @@ class PlayerViewModel @Inject constructor(
         position: Long,
         duration: Long?,
         syncBoundary: Boolean = false,
+        playbackEstablished: Boolean = true,
         profileId: Int
-    ) {
+    ): Job {
         val recordedAt = System.currentTimeMillis()
-        viewModelScope.launch(Dispatchers.IO + NonCancellable) {
+        return viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             if (id.startsWith("trailer_")) return@launch
             val safePosition = position.coerceAtLeast(0L)
-            if (safePosition < 5_000L) return@launch
+            if (!ProgressSnapshotPolicy.shouldSave(safePosition, syncBoundary, playbackEstablished)) return@launch
             historyWriteMutex.withLock {
                 val existing = dao.getHistoryItemForProfile(profileId, id)
                 if (existing != null && existing.lastWatched > recordedAt) return@withLock
@@ -110,10 +112,10 @@ class PlayerViewModel @Inject constructor(
         position: Long,
         duration: Long?,
         profileId: Int
-    ) {
+    ): Job {
         val recordedAt = System.currentTimeMillis()
-        if (id.startsWith("trailer_")) return
-        viewModelScope.launch(Dispatchers.IO + NonCancellable) {
+        return viewModelScope.launch(Dispatchers.IO + NonCancellable) {
+            if (id.startsWith("trailer_")) return@launch
             historyWriteMutex.withLock {
                 val existing = dao.getHistoryItemForProfile(profileId, id)
                 if (existing != null && existing.lastWatched > recordedAt) return@withLock
@@ -222,7 +224,10 @@ class PlayerViewModel @Inject constructor(
                 isWatched = item.watched,
                 watchedThreshold = watchedThreshold
             )
-            if (canResume) item.position else 0L
+            val position = if (canResume) item.position else 0L
+            com.saab.tv.AppDiagnostics.event("Resume", "Timestamp Resolved",
+                "profile=$profileId id=$id position=${position}ms duration=${item?.duration ?: 0}ms watched=${item?.watched ?: false}")
+            position
         }
     }
 

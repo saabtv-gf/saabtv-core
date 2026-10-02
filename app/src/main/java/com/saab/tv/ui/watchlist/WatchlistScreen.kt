@@ -70,7 +70,6 @@ fun WatchlistScreen(
     viewModel: WatchlistViewModel = hiltViewModel(),
     actionsViewModel: HomeViewModel = hiltViewModel()
 ) {
-    val requestMenuFocus = com.saab.tv.ui.navigation.navigationMenuRequest(drawerRequester)
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val movies by viewModel.movieItems.collectAsStateWithLifecycle()
     val series by viewModel.seriesItems.collectAsStateWithLifecycle()
@@ -87,7 +86,7 @@ fun WatchlistScreen(
         actionItem = item
     }
 
-    androidx.activity.compose.BackHandler(enabled = hasContentFocus) { runCatching { requestMenuFocus() } }
+    androidx.activity.compose.BackHandler(enabled = hasContentFocus) { runCatching { drawerRequester.requestFocus() } }
 
     val upKeyDebouncer = remember { UpKeyDebouncer() }
     val dpadRepeatGate = remember { DpadRepeatGate() }
@@ -165,7 +164,7 @@ fun WatchlistScreen(
                     .focusRequester(entryRequester)
                     .onPreviewKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft) {
-                            runCatching { requestMenuFocus() }
+                            runCatching { drawerRequester.requestFocus() }
                             true
                         } else false
                     }

@@ -54,7 +54,6 @@ import androidx.compose.ui.text.style.TextOverflow
  * Icon-only by default, text reveals on focus with bubble background
  */
 @Composable
-@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 fun TopNavigationBar(
     currentDestination: NavDestination,
     currentProfile: ProfileEntity?,
@@ -102,7 +101,7 @@ fun TopNavigationBar(
     var isProfileFocused by remember { mutableStateOf(false) }
     var isExitFocused by remember { mutableStateOf(false) }
     // Menu is open if Settings or any menu item is focused
-    val showSettingsMenu = isTopNavActive && (isSettingsFocused || isProfileFocused || isExitFocused)
+    val showSettingsMenu = isSettingsFocused || isProfileFocused || isExitFocused
 
     val backgroundColor = MaterialTheme.colorScheme.background
     val showStaticMask = currentDestination in listOf(
@@ -116,13 +115,8 @@ fun TopNavigationBar(
 
         // LAYER 1: Content (Full Screen)
         Box(modifier = Modifier.fillMaxSize().zIndex(
-            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)
-            .focusProperties { exit = { direction -> focusGuard.contentExit(direction, topNavRequesters[currentDestination]) } }
-            .onFocusChanged { focusGuard.contentFocused(it.hasFocus) }
-            .focusGroup()) {
-            androidx.compose.runtime.CompositionLocalProvider(LocalNavigationMenuRequest provides {
-                    focusGuard.requestNavigation { topNavRequesters[currentDestination] }
-            }) { content() }
+            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
+            content()
         }
 
         // LAYER 2: Static Top Gradient (Hero Mask)

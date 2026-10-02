@@ -25,6 +25,7 @@ data class MetaItem(
     val trailers: List<MetaTrailer>? = null,
     val trailerStreams: List<MetaTrailerStream>? = null,
     @Transient val progress: Float = 0f, // Watch progress (0.0–1.0), used by Continue Watching
+    @Transient val resumePlaybackId: String? = null, // Exact episode represented by a Continue Watching card
     @Transient val addonBaseUrl: String? = null, // Origin addon URL, used for preferred meta resolution
     @Transient val hasNewEpisode: Boolean = false // True when a next-up episode recently aired
 )

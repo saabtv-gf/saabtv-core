@@ -79,6 +79,7 @@ class DetailsViewModel @Inject constructor(
         val isLoading: Boolean = true,
         val isLoadingStreams: Boolean = false,
         val resumePlaybackId: String? = null,
+        val resumeStateReady: Boolean = false,
         val resumeIsNextEpisode: Boolean = false,
         val lastPlayedEpisodeId: String? = null,
         val isMovieWatched: Boolean = false,
@@ -222,6 +223,7 @@ class DetailsViewModel @Inject constructor(
                     contentKey = requestKey,
                     isLoading = false,
                     resumePlaybackId = resumePlaybackId,
+                    resumeStateReady = true,
                     resumeIsNextEpisode = details.type == "series" && resumePlaybackId != null && dao.getHistoryItem(resumePlaybackId)?.let { !it.watched && it.position > 0 } != true,
                     lastPlayedEpisodeId = lastPlayedEpisodeId,
                     isMovieWatched = isMovieWatched,
@@ -284,6 +286,7 @@ class DetailsViewModel @Inject constructor(
         }
 
         resumeRefreshJob?.cancel()
+        _state.value = _state.value.copy(resumeStateReady = false)
         resumeRefreshJob = viewModelScope.launch {
             val seriesId = _state.value.resolvedId ?: meta.id
             if (meta.type == "series") computeAndStoreNextUp(seriesId, meta.name, meta.poster, meta.videos)
@@ -313,6 +316,7 @@ class DetailsViewModel @Inject constructor(
             if (_state.value.meta?.id == meta.id && _state.value.meta?.type == meta.type) {
                 _state.value = _state.value.copy(
                     resumePlaybackId = resumePlaybackId,
+                    resumeStateReady = true,
                     resumeIsNextEpisode = meta.type == "series" && resumePlaybackId != null && dao.getHistoryItem(resumePlaybackId)?.let { !it.watched && it.position > 0 } != true,
                     lastPlayedEpisodeId = lastPlayedEpisodeId,
                     isMovieWatched = isMovieWatched,

@@ -64,7 +64,6 @@ enum class NavDestination(
 }
 
 @Composable
-@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 fun NavDrawer(
     currentDestination: NavDestination,
     currentProfile: ProfileEntity?,
@@ -112,13 +111,8 @@ fun NavDrawer(
 
         // LAYER 1: Content
         Box(modifier = Modifier.fillMaxSize().zIndex(
-            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)
-            .focusProperties { exit = { direction -> focusGuard.contentExit(direction, drawerRequesters[currentDestination]) } }
-            .onFocusChanged { focusGuard.contentFocused(it.hasFocus) }
-            .focusGroup()) {
-            androidx.compose.runtime.CompositionLocalProvider(LocalNavigationMenuRequest provides {
-                    focusGuard.requestNavigation { drawerRequesters[currentDestination] }
-            }) { content() }
+            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
+            content()
         }
 
         // LAYER 2: Static Hero Mask

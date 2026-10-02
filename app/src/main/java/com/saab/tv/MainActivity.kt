@@ -1131,7 +1131,7 @@ class MainActivity : ComponentActivity() {
                                                                 activeView = "details"
                                                             },
                                                             onContinueClick = { movie ->
-                                                                val canResumeOpenStream = selectedMovieId == movie.id &&
+                                                                val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.mayReuseOpenStream(movie.type) && selectedMovieId == movie.id &&
                                                                     selectedMovieType == movie.type &&
                                                                     selectedVideoUrl.startsWith("https://") &&
                                                                     playerState.currentStream != null &&
@@ -1146,8 +1146,8 @@ class MainActivity : ComponentActivity() {
                                                                 selectedMovieBackground = movie.background ?: ""
                                                                 selectedMovieLogo = movie.logo ?: ""
                                                                 selectedAddonBaseUrl = movie.addonBaseUrl
-                                                                detailsResumePlaybackHint = null
-                                                                if (!canResumeOpenStream) selectedPlaybackId = movie.id
+                                                                detailsResumePlaybackHint = movie.resumePlaybackId
+                                                                if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
                                                                 selectedPlaybackType = movie.type
                                                                 selectedPlaybackTitle = movie.name
                                                                 autoResumeFromContinue = !canResumeOpenStream
@@ -1255,7 +1255,7 @@ class MainActivity : ComponentActivity() {
                                                         currentProfile = currentProfile,
                                                         onBack = {
                                                             currentNav = NavDestination.Home
-                                                            handleEnterContent()
+                                                            drawerRequesters[NavDestination.Home]?.requestFocusSafely()
                                                         },
                                                         entryRequester = settingsEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Settings]!!,
@@ -1317,7 +1317,7 @@ class MainActivity : ComponentActivity() {
                                                                 activeView = "details"
                                                             },
                                                             onContinueClick = { movie ->
-                                                                val canResumeOpenStream = selectedMovieId == movie.id &&
+                                                                val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.mayReuseOpenStream(movie.type) && selectedMovieId == movie.id &&
                                                                     selectedMovieType == movie.type &&
                                                                     selectedVideoUrl.startsWith("https://") &&
                                                                     playerState.currentStream != null &&
@@ -1332,8 +1332,8 @@ class MainActivity : ComponentActivity() {
                                                                 selectedMovieBackground = movie.background ?: ""
                                                                 selectedMovieLogo = movie.logo ?: ""
                                                                 selectedAddonBaseUrl = movie.addonBaseUrl
-                                                                detailsResumePlaybackHint = null
-                                                                if (!canResumeOpenStream) selectedPlaybackId = movie.id
+                                                                detailsResumePlaybackHint = movie.resumePlaybackId
+                                                                if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
                                                                 selectedPlaybackType = movie.type
                                                                 selectedPlaybackTitle = movie.name
                                                                 autoResumeFromContinue = !canResumeOpenStream
@@ -1438,7 +1438,7 @@ class MainActivity : ComponentActivity() {
                                                         currentProfile = currentProfile,
                                                         onBack = {
                                                             currentNav = NavDestination.Home
-                                                            handleEnterContent()
+                                                            drawerRequesters[NavDestination.Home]?.requestFocusSafely()
                                                         },
                                                         entryRequester = settingsEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Settings]!!,

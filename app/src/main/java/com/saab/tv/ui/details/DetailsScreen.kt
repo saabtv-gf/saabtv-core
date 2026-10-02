@@ -232,14 +232,28 @@ fun DetailsScreen(
     val tmdbPending = state.tmdbEnabled && state.tmdbLoading
     val contentReady = showMovieContent && !tmdbPending
     var autoStartRequested by remember(type, id) { mutableStateOf(false) }
-    LaunchedEffect(showMovieContent, autoStartPlayback, state.resumePlaybackId, streamId) {
-        if (!showMovieContent || !autoStartPlayback || autoStartRequested) return@LaunchedEffect
+    LaunchedEffect(showMovieContent, autoStartPlayback, state.resumeStateReady, state.resumePlaybackId, streamId, resumePlaybackHint) {
+        if (!showMovieContent || !state.resumeStateReady || !viewModel.state.value.resumeStateReady ||
+            !autoStartPlayback || autoStartRequested) return@LaunchedEffect
         val readyMovie = movie ?: return@LaunchedEffect
         if (type == "series") {
-            val episode = resolveEpisodeForPlaybackId(readyMovie.id, readyMovie.videos, state.resumePlaybackId)
-                ?: findFirstEpisode(readyMovie.videos) ?: return@LaunchedEffect
+            val resumeId = state.resumePlaybackId ?: resumePlaybackHint?.takeIf { candidate ->
+                playbackIdBelongsToSeries(id, candidate) &&
+                    parseSeasonEpisodeFromPlaybackId(candidate)?.let { (season, episode) ->
+                        state.episodeProgressMap["S${season}:E${episode}"]?.watched != true
+                    } == true
+            }
+            val episode = if (resumeId != null) {
+                resolveEpisodeForPlaybackId(readyMovie.id, readyMovie.videos, resumeId)
+                    ?: run {
+                        com.saab.tv.AppDiagnostics.event("Resume", "Episode Target Missing", "id=$resumeId")
+                        onAutoResumeNeedsSelection()
+                        return@LaunchedEffect // Never pair an unknown ID with episode one's source.
+                    }
+            } else findFirstEpisode(readyMovie.videos) ?: return@LaunchedEffect
             autoStartRequested = true
-            val playbackId = state.resumePlaybackId ?: episodePlaybackId(streamId, episode)
+            val playbackId = resumeId ?: episodePlaybackId(streamId, episode)
+            com.saab.tv.AppDiagnostics.event("Resume", "Episode Target Resolved", "id=$playbackId season=${episode.season} episode=${episode.episode}")
             val episodeTitle = episodeDisplayTitle(episode)
             pendingPlaybackId = playbackId
             pendingPlaybackType = type

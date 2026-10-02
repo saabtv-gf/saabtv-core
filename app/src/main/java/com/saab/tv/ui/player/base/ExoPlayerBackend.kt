@@ -802,6 +802,7 @@ class ExoPlayerBackend(
     }
 
     override fun selectSubtitleTrack(trackId: String?) {
+        if (released) return
         manualSubtitleSelection = true
         _uiState.update { it.copy(subtitleSelectionWasManual = true) }
         applySubtitleTrack(trackId)
