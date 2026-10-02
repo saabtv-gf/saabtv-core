@@ -166,7 +166,10 @@ fun BackdropTrailerPreview(
                 homeModel.toggleWatchlist(profileId, item)
                 watchlisted = !watchlisted; controlsVisible = true; interactionVersion++
             },
-            onFullscreen = { expanded = true; controlsVisible = true; interactionVersion++ },
+            onFullscreen = {
+                com.saab.tv.AppDiagnostics.event("Trailer Preview", "Expand Requested", "positionMs=${player.currentPosition}")
+                expanded = true; controlsVisible = true; interactionVersion++
+            },
             onDismiss = { dismiss() },
             onNavigate = { direction ->
                 dismiss(false)
@@ -179,7 +182,13 @@ fun BackdropTrailerPreview(
     }
     SideEffect {
         session.muted = muted; session.watchlisted = watchlisted; session.controlsVisible = inline || controlsVisible
-        if (inline) InlineTrailerAnchor.session = session else InlineTrailerAnchor.clearSession(owner)
+        if (inline) {
+            InlineTrailerAnchor.fullscreen(owner, false)
+            InlineTrailerAnchor.session = session
+        } else {
+            InlineTrailerAnchor.clearInlineSession(owner)
+            InlineTrailerAnchor.fullscreen(owner, true)
+        }
     }
     // Keep one PlayerView at one composition location. Replacing an inline
     // PlayerView with a fullscreen one lets the old onRelease detach the new
@@ -329,6 +338,11 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
             player.prepare(); player.playWhenReady = true
         }
         val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(size: androidx.media3.common.VideoSize) {
+                val format = player.videoFormat
+                com.saab.tv.AppDiagnostics.event("Trailer Preview", "Decoded Resolution",
+                    "width=${size.width} height=${size.height} mime=${format?.sampleMimeType} codecs=${format?.codecs} requested=${variants.getOrNull(index)?.qualityLabel}")
+            }
             override fun onRenderedFirstFrame() {
                 com.saab.tv.AppDiagnostics.event("Trailer Preview", "First Frame",
                     "variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel} prepareToFrameMs=${android.os.SystemClock.elapsedRealtime() - preparedAtMs}")

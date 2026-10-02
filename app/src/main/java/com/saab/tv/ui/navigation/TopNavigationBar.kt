@@ -85,7 +85,8 @@ fun TopNavigationBar(
     var isSettingsAreaFocused by remember { mutableStateOf(false) }
     var isCenterAreaFocused by remember { mutableStateOf(false) }
     // Combined: navbar is active if either section has focus
-    val navigationBlocked = hideNavigation || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
+    val hidden = hideNavigation || com.saab.tv.ui.trailer.InlineTrailerAnchor.fullscreenActive
+    val navigationBlocked = hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
         com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
     val isTopNavActive = (isSettingsAreaFocused || isCenterAreaFocused) && !navigationBlocked
     
@@ -113,12 +114,12 @@ fun TopNavigationBar(
 
         // LAYER 1: Content (Full Screen)
         Box(modifier = Modifier.fillMaxSize().zIndex(
-            if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
+            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
             content()
         }
 
         // LAYER 2: Static Top Gradient (Hero Mask)
-        if (showStaticMask && !hideNavigation) {
+        if (showStaticMask && !hidden) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -176,15 +177,15 @@ fun TopNavigationBar(
         }
 
         // Noise overlay to reduce gradient banding on budget panels
-        if (!hideNavigation) com.saab.tv.ui.components.NoiseOverlay(modifier = Modifier.zIndex(1.6f))
+        if (!hidden) com.saab.tv.ui.components.NoiseOverlay(modifier = Modifier.zIndex(1.6f))
 
         // LAYER 4: Main Navigation Bar (Settings + Center Items)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(70.dp)
-                .graphicsLayer { alpha = if (hideNavigation) 0f else 1f }
-                .then(Modifier.focusProperties { canFocus = !hideNavigation })
+                .graphicsLayer { alpha = if (hidden) 0f else 1f }
+                .then(Modifier.focusProperties { canFocus = !hidden })
                 .zIndex(2f)
                 .onFocusChanged { 
                     isCenterAreaFocused = it.hasFocus
@@ -285,7 +286,7 @@ fun TopNavigationBar(
                 .align(Alignment.TopStart)
                 .padding(start = 24.dp, top = 70.dp)
                 .zIndex(if (showSettingsMenu) 5f else -1f) // Behind everything when hidden
-                .graphicsLayer { alpha = if (hideNavigation) 0f else dropdownAlpha }
+                .graphicsLayer { alpha = if (hidden) 0f else dropdownAlpha }
                 .onFocusChanged { isSettingsAreaFocused = it.hasFocus }.focusGroup()
         ) {
             Column(

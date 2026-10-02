@@ -54,6 +54,7 @@ class SaabTvApplication : Application(), ImageLoaderFactory {
         if (isHelperProcess()) return
         AppHealthMonitor.install(this)
         AppDiagnostics.install(this)
+        com.saab.tv.data.trailer.YtDlpTrailerResolver.configure(this)
         TvLauncherManager.configure(this)
     }
 

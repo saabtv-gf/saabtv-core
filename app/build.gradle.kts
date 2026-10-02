@@ -53,8 +53,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 86
-        versionName = "0.1.85-beta"
+        versionCode = 87
+        versionName = "0.1.86-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -143,6 +143,8 @@ android {
         }
         jniLibs {
             useLegacyPackaging = true
+            // This is the Python runtime archive, not an ELF library.
+            keepDebugSymbols += "**/libpython.zip.so"
         }
     }
 }
@@ -227,6 +229,12 @@ dependencies {
         exclude(group = "org.mozilla", module = "rhino-engine")
     }
     coreLibraryDesugaring(libs.android.desugar.jdk.libs.nio)
+    // Metadata-only yt-dlp fallback; no FFmpeg or aria2 downloader.
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation(platform("com.fasterxml.jackson:jackson-bom:2.20.1"))
+    constraints {
+        implementation("commons-io:commons-io:2.20.0")
+    }
 
     // --- LOCAL WEB SERVER (used by remote input hub) ---
 

@@ -15,8 +15,18 @@ object InlineTrailerAnchor {
     var bounds by mutableStateOf<Rect?>(null)
         private set
     internal var session by mutableStateOf<InlineTrailerSession?>(null)
-    fun clearSession(owner: Any) {
+    private var fullscreenOwner by mutableStateOf<Any?>(null)
+    val fullscreenActive: Boolean get() = fullscreenOwner != null
+    internal fun fullscreen(owner: Any, active: Boolean) {
+        if (active) fullscreenOwner = owner
+        else if (fullscreenOwner === owner) fullscreenOwner = null
+    }
+    internal fun clearInlineSession(owner: Any) {
         if (session?.owner === owner) session = null
+    }
+    fun clearSession(owner: Any) {
+        clearInlineSession(owner)
+        fullscreen(owner, false)
     }
     fun update(item: MetaItem, rect: Rect) {
         if (rect.width > 0 && rect.height > 0) {

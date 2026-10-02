@@ -74,7 +74,8 @@ fun NavDrawer(
     content: @Composable () -> Unit
 ) {
     var drawerHasFocus by remember { mutableStateOf(false) }
-    val navigationBlocked = hideNavigation || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
+    val hidden = hideNavigation || com.saab.tv.ui.trailer.InlineTrailerAnchor.fullscreenActive
+    val navigationBlocked = hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
         com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
     val isMenuFocused = drawerHasFocus && !navigationBlocked
 
@@ -109,13 +110,13 @@ fun NavDrawer(
 
         // LAYER 1: Content
         Box(modifier = Modifier.fillMaxSize().zIndex(
-            if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
+            if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
             content()
         }
 
         // LAYER 2: Static Hero Mask
         val backgroundColor = MaterialTheme.colorScheme.background
-        if (showStaticMask && !hideNavigation) {
+        if (showStaticMask && !hidden) {
             Box(
                 modifier = Modifier
                     .width(400.dp)
@@ -172,14 +173,14 @@ fun NavDrawer(
         }
 
         // Noise overlay to reduce gradient banding on budget panels
-        if (!hideNavigation) com.saab.tv.ui.components.NoiseOverlay(modifier = Modifier.zIndex(1.6f))
+        if (!hidden) com.saab.tv.ui.components.NoiseOverlay(modifier = Modifier.zIndex(1.6f))
 
         // LAYER 4: Interactive Drawer
         Box(
             modifier = Modifier
                 .width(width)
-                .graphicsLayer { alpha = if (hideNavigation) 0f else 1f }
-                .then(Modifier.focusProperties { canFocus = !hideNavigation })
+                .graphicsLayer { alpha = if (hidden) 0f else 1f }
+                .then(Modifier.focusProperties { canFocus = !hidden })
                 .fillMaxHeight()
                 .zIndex(2f)
                 .onFocusChanged { drawerHasFocus = it.hasFocus }

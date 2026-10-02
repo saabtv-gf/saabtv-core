@@ -160,10 +160,14 @@ class YouTubeExtractor @Inject constructor() {
         val videoId = TrailerPolicy.videoId(videoKey) ?: return null
 
         val maintained = TrailerPolicy.rank(MaintainedYoutubeResolver.resolve(videoId)).take(16)
-        val verified = TrailerUrlVerifier.bestWithFallbacks(maintained)
-        // The maintained resolver already exposes the highest adaptive quality.
-        // A second complete extraction cannot improve a missing 4K rendition in
-        // this ladder reliably; reserve the legacy round for extraction failure.
+        val maintainedPlayable = TrailerUrlVerifier.bestWithFallbacks(maintained)
+        // Do not accept a 720p/1080p ceiling from one client as proof that the
+        // upload has no 4K rendition. Probe only higher alternate candidates.
+        val primaryHeight = maintainedPlayable.firstOrNull()?.height ?: 0
+        val alternate = if (primaryHeight < 2160) YtDlpTrailerResolver.resolve(videoId)
+            .filter { maintainedPlayable.isEmpty() || it.height > primaryHeight } else emptyList()
+        val higherPlayable = TrailerUrlVerifier.bestWithFallbacks(alternate)
+        val verified = TrailerPolicy.rank(higherPlayable + maintainedPlayable)
         val legacy = if (verified.isEmpty()) {
             try { withTimeoutOrNull(12_000) { extractLegacy(videoId) } }
             catch (cancelled: CancellationException) { throw cancelled }
@@ -177,7 +181,7 @@ class YouTubeExtractor @Inject constructor() {
         val ranked = TrailerPolicy.rank(candidates)
         val primary = ranked.firstOrNull() ?: return null
         com.saab.tv.AppDiagnostics.event("Trailer", "Verified Source Selected",
-            "quality=${primary.qualityLabel} fallbacks=${ranked.size - 1} resolver=${if (verified.isNotEmpty()) "maintained" else "legacy"}")
+            "quality=${primary.qualityLabel} fallbacks=${ranked.size - 1} resolver=${if (higherPlayable.isNotEmpty()) "yt-dlp" else if (maintainedPlayable.isNotEmpty()) "maintained" else "legacy"}")
         return TrailerPlaybackSource(primary.videoUrl, primary.audioUrl, ranked.drop(1),
             primary.qualityLabel, primary.requestHeaders)
     }

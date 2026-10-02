@@ -1,0 +1,7 @@
+Trailer metadata fallback uses youtubedl-android 0.18.1 (GPL-3.0).
+Source and build instructions: https://github.com/yausername/youtubedl-android
+Bundled yt-dlp: https://github.com/yt-dlp/yt-dlp
+Bundled Python runtime: https://www.python.org/psf/license/
+Additional dependency licenses are provided by their upstream distributions.
+Saab TV source: https://github.com/saabtv-gf/saabtv-core
+No FFmpeg or aria2 downloader is included for this fallback.
