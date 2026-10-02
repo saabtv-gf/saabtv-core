@@ -150,6 +150,7 @@ class DetailsViewModel @Inject constructor(
             !_state.value.isLoading
         ) {
             refreshResumeStateIfNeeded(_state.value.meta)
+            if (!playbackOnly) warmTrailer(_state.value.trailer)
             if (_state.value.sidebarState !is SidebarState.Closed) {
                 _state.value = _state.value.copy(sidebarState = SidebarState.Closed)
             }
@@ -239,6 +240,7 @@ class DetailsViewModel @Inject constructor(
                     tmdbLoading = isTmdbEnabled && !playbackOnly
                 )
                 if (!playbackOnly) {
+                    warmTrailer(_state.value.trailer)
                     loadTmdbEnrichment(details.type, streamFetchId, requestKey)
                     loadCinemetaTrailer(details.type, streamFetchId, requestKey)
                     loadCinemetaRecommendations(details, streamFetchId, requestKey)
@@ -557,6 +559,18 @@ class DetailsViewModel @Inject constructor(
         }
     }
 
+    private var trailerWarmupJob: Job? = null
+
+    private fun warmTrailer(trailer: TmdbVideoInfo?) {
+        if (trailer == null) return
+        trailerWarmupJob?.cancel()
+        trailerWarmupJob = viewModelScope.launch(Dispatchers.IO) {
+            // Resolve while the user reads details, never create a decoder or
+            // start playback. Manual and automatic previews share this cache.
+            com.saab.tv.data.trailer.YouTubeExtractor().extractPlaybackSource(trailer.key)
+        }
+    }
+
     private fun loadCinemetaTrailer(type: String, videoId: String, contentKey: String) {
         if (!videoId.startsWith("tt")) return
 
@@ -572,6 +586,7 @@ class DetailsViewModel @Inject constructor(
 
             if (_state.value.contentKey == contentKey) {
                 _state.value = _state.value.copy(trailer = trailer)
+                warmTrailer(trailer)
             }
         }
     }

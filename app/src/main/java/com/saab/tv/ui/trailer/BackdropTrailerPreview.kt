@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -105,10 +106,19 @@ fun BackdropTrailerPreview(
         source = null; activeItem = null
         if (!TrailerPreviewPolicy.canStart(settings.enabled && enabled, foreground, key, key,
                 dismissedKey, dismissedKey) || focusedItem == null) return@LaunchedEffect
-        delay(settings.delaySeconds * 1_000L)
-        val trailer = try { resolveTrailer(focusedItem) }
-            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
-        val resolved = trailer?.let { extractor.extractPlaybackSource(it.first) }
+        val delayMs = settings.delaySeconds * 1_000L
+        // Debounce rapid card navigation, then resolve during the configured
+        // hover delay rather than adding extraction latency after that delay.
+        val debounceMs = minOf(delayMs, 250L)
+        delay(debounceMs)
+        val pendingSource = async {
+            val trailer = try { resolveTrailer(focusedItem) }
+                catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            trailer?.let { extractor.extractPlaybackSource(it.first) }
+        }
+        delay(delayMs - debounceMs)
+        homeModel.startTrailerSourcePrefetch(focusedItem)
+        val resolved = pendingSource.await()
         if (resolved != null) { source = resolved; activeItem = focusedItem }
         else unavailableCallback()
     }
@@ -117,15 +127,10 @@ fun BackdropTrailerPreview(
         return
     }
     val item = activeItem ?: return
-    LaunchedEffect(profileId, item.type, item.id) {
-        try {
-            homeModel.prefetchTrailerSources(item)
-        } catch (cancelled: CancellationException) { throw cancelled }
-          catch (_: Exception) { /* Playback falls back to a fresh lookup. */ }
-    }
     var muted by remember(key) { mutableStateOf(settings.muted) }
     var started by remember(key) { mutableStateOf(false) }
     var controlsVisible by remember(key) { mutableStateOf(true) }
+    val fullscreenRootRequester = remember(key) { FocusRequester() }
     var interactionVersion by remember(key) { mutableIntStateOf(0) }
     var watchlisted by remember(key, profileId) { mutableStateOf(false) }
     LaunchedEffect(key, profileId) { watchlisted = homeModel.isWatchlisted(profileId, item.id) }
@@ -140,7 +145,14 @@ fun BackdropTrailerPreview(
     BackHandler { dismiss() }
     LaunchedEffect(started, interactionVersion, inline) {
         if (inline) controlsVisible = true
-        else if (started) { delay(5_000); controlsVisible = false }
+        else if (started) {
+            delay(5_000)
+            // Move focus while the focused button is still attached. Removing
+            // it first lets Android re-enter through a stale focus requester.
+            runCatching { fullscreenRootRequester.requestFocus() }
+            withFrameNanos { }
+            controlsVisible = false
+        }
     }
     val player = rememberNativeTrailerPlayer(source!!, muted, inline,
         onStarted = { started = true }, onEnded = { dismiss() })
@@ -201,7 +213,7 @@ fun BackdropTrailerPreview(
                 InlineTrailerCard(session, renderVideo = false)
             } else {
                 val playRequester = remember { FocusRequester() }
-                val rootRequester = remember { FocusRequester() }
+                val rootRequester = fullscreenRootRequester
                 var revealingKey by remember(key) { mutableStateOf<Key?>(null) }
                 LaunchedEffect(controlsVisible) {
                     withFrameNanos { }
@@ -270,14 +282,11 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
         val primaryHeight = Regex("(\\d{3,4})p").find(source.qualityLabel)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val all = listOf(TrailerPlaybackVariant(source.videoUrl, source.audioUrl,
             source.qualityLabel, height = primaryHeight, requestHeaders = source.requestHeaders)) + source.fallbackVariants
-        if (inline) {
-            val compact = all.filter { it.height in 1..720 }.sortedByDescending { it.height }
-            compact + all.filter { it !in compact }
-        } else all
+        all
     }
     val player = remember(source) {
         ExoPlayer.Builder(context, DefaultRenderersFactory(context).setEnableDecoderFallback(true))
-            .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 15_000, 750, 1_500)
+            .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 15_000, 250, 1_500)
                 .setTargetBufferBytes(24 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build())
             .build().apply {
                 volume = if (muted) 0f else 1f
@@ -292,10 +301,10 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
             "mode=${if (inline) "inline" else "fullscreen"} positionMs=${player.currentPosition} playing=${player.isPlaying}")
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .clearVideoSizeConstraints()
-            .apply { if (inline) setMaxVideoSize(1280, 720) }
-            .setForceHighestSupportedBitrate(!inline).build()
+            .setForceHighestSupportedBitrate(true).build()
     }
     DisposableEffect(player) {
+        val preparedAtMs = android.os.SystemClock.elapsedRealtime()
         val resumeMs = player.currentPosition.coerceAtLeast(0)
         var index = 0
         fun play() {
@@ -322,7 +331,7 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
         val listener = object : Player.Listener {
             override fun onRenderedFirstFrame() {
                 com.saab.tv.AppDiagnostics.event("Trailer Preview", "First Frame",
-                    "variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel}")
+                    "variant=${index + 1}/${variants.size} quality=${variants.getOrNull(index)?.qualityLabel} prepareToFrameMs=${android.os.SystemClock.elapsedRealtime() - preparedAtMs}")
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { if (isPlaying) latestStarted() }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) latestEnded() }

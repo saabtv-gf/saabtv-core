@@ -9,7 +9,7 @@ internal class PreviewWarmupCache<T>(
     private val ttlMs: Long = 60_000,
     private val capacity: Int = 2
 ) {
-    private data class Entry<T>(val created: Long, val work: Deferred<T>)
+    private data class Entry<T>(var completedAt: Long?, val work: Deferred<T>)
     private val entries = LinkedHashMap<String, Entry<T>>()
 
     @Synchronized
@@ -21,7 +21,9 @@ internal class PreviewWarmupCache<T>(
             entries.remove(oldest)?.work?.cancel()
         }
         val work = scope.async(start = CoroutineStart.LAZY) { loader() }
-        entries[key] = Entry(now(), work)
+        val entry = Entry<T>(null, work)
+        entries[key] = entry
+        work.invokeOnCompletion { synchronized(this) { entry.completedAt = now() } }
         work.start()
     }
 
@@ -36,6 +38,11 @@ internal class PreviewWarmupCache<T>(
     }
 
     @Synchronized
+    fun invalidate(key: String) {
+        entries.remove(key)?.work?.cancel()
+    }
+
+    @Synchronized
     private fun discard(key: String, work: Deferred<T>) {
         if (entries[key]?.work === work) entries.remove(key)
     }
@@ -44,7 +51,7 @@ internal class PreviewWarmupCache<T>(
         val iterator = entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next().value
-            if (now() - entry.created >= ttlMs || entry.work.isCancelled) {
+            if (entry.completedAt?.let { now() - it >= ttlMs } == true || entry.work.isCancelled) {
                 entry.work.cancel()
                 iterator.remove()
             }

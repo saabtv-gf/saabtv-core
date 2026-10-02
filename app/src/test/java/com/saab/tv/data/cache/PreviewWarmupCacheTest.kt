@@ -5,6 +5,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PreviewWarmupCacheTest {
+    @Test fun explicitInvalidationAllowsImmediateRetry() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val cache = PreviewWarmupCache<String?>(scope, { 0L })
+            cache.prefetch("trailer") { null }
+            assertNull(cache.awaitIfPresent("trailer"))
+            cache.invalidate("trailer")
+            cache.prefetch("trailer") { "fresh" }
+            assertEquals("fresh", cache.awaitIfPresent("trailer"))
+        } finally { scope.cancel() }
+    }
+    @Test fun slowWarmupExpiresAfterCompletionNotWhileItIsLoading() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            var now = 0L
+            var calls = 0
+            val gate = CompletableDeferred<Unit>()
+            val cache = PreviewWarmupCache<String>(scope, { now }, ttlMs = 100)
+            cache.prefetch("title") { calls++; gate.await(); "ready" }
+            now = 200
+            cache.prefetch("title") { calls++; "duplicate" }
+            gate.complete(Unit)
+            assertEquals("ready", cache.awaitIfPresent("title"))
+            assertEquals(1, calls)
+            now = 300
+            assertNull(cache.awaitIfPresent("title"))
+        } finally { scope.cancel() }
+    }
     @Test fun startWatchingReusesInFlightTrailerLookup() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {

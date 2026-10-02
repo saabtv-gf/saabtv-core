@@ -32,11 +32,11 @@ class AddonRepository @Inject constructor(
     private val gson = Gson()
     private val previewStreams = com.saab.tv.data.cache.PreviewWarmupCache<List<Stream>>(
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
-        android.os.SystemClock::elapsedRealtime
+        android.os.SystemClock::elapsedRealtime, ttlMs = 300_000
     )
     private val previewMetadata = com.saab.tv.data.cache.PreviewWarmupCache<MetaItem?>(
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
-        android.os.SystemClock::elapsedRealtime
+        android.os.SystemClock::elapsedRealtime, ttlMs = 300_000
     )
 
     private suspend fun previewMetadataKey(type: String, id: String, addon: String?): String =
@@ -67,6 +67,8 @@ class AddonRepository @Inject constructor(
                 streams.takeIf { previewStreamKey(type, id) == key }.orEmpty()
             }
         }
+        val ready = previewStreams.awaitIfPresent(key)
+        com.saab.tv.AppDiagnostics.event("Source Warmup", "Ready", "type=$type id=$id sources=${ready?.size ?: 0}")
     }
     private val MAX_CATALOG_PAGES = 30
 
@@ -439,8 +441,9 @@ class AddonRepository @Inject constructor(
     }
 
     suspend fun getStreams(type: String, id: String): List<Stream> = withContext(Dispatchers.IO) {
-        previewStreams.awaitIfPresent(previewStreamKey(type, id))?.takeIf { it.isNotEmpty() }
-            ?: fetchStreams(type, id)
+        val warmed = previewStreams.awaitIfPresent(previewStreamKey(type, id))?.takeIf { it.isNotEmpty() }
+        com.saab.tv.AppDiagnostics.event("Source Warmup", "Consumed", "type=$type id=$id cacheHit=${warmed != null} sources=${warmed?.size ?: 0}")
+        warmed ?: fetchStreams(type, id)
     }
 
     private suspend fun fetchStreams(type: String, id: String): List<Stream> = withContext(Dispatchers.IO) {

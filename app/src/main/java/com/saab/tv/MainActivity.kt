@@ -50,7 +50,6 @@ import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -1011,7 +1010,7 @@ class MainActivity : ComponentActivity() {
                             autoResumeFromContinue = true
                             previousView = com.saab.tv.ui.navigation.BrowseReturnPolicy.forPlayback(activeView, previousView)
                             selectedVideoUrl = ""
-                            torrentProgress = TorrentProgress("Finding your source...")
+                            torrentProgress = TorrentProgress("")
                             activeView = "resume"
                         }) {
                             com.saab.tv.ui.trailer.ManualTrailerHost(profileId = currentProfile?.id ?: 0) {
@@ -1057,21 +1056,6 @@ class MainActivity : ComponentActivity() {
                                 Box(
                                     modifier = Modifier.fillMaxSize()
                                         .onFocusChanged { browseHasFocus = it.hasFocus }
-                                        .focusProperties {
-                                            // Default re-entry after a removed button belongs to
-                                            // content. Explicit drawer requests still target it.
-                                            enter = {
-                                                if (backdropTrailerActive || manualTrailerActive ||
-                                                    com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) FocusRequester.Default
-                                                else when (currentNav) {
-                                                    NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> homeEntryRequester
-                                                    NavDestination.Search -> searchEntryRequester
-                                                    NavDestination.Settings -> settingsEntryRequester
-                                                    NavDestination.Watchlist -> watchlistEntryRequester
-                                                    else -> FocusRequester.Default
-                                                }
-                                            }
-                                        }
                                         .focusGroup()
                                         .onPreviewKeyEvent { event ->
                                             if (!browseHasFocus && !backdropTrailerActive &&

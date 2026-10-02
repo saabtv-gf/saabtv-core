@@ -10,6 +10,39 @@ import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
 
 class TrailerUrlVerifierTest {
+    @Test fun bestQualityDoesNotWaitForLowerQualityProbes() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(206).setBody("data"))
+        server.enqueue(MockResponse().setResponseCode(206).setBody("audio"))
+        server.start()
+        try {
+            val base = server.url("/").toString().trimEnd('/')
+            val result = TrailerUrlVerifier.bestWithFallbacks(listOf(
+                TrailerPlaybackVariant("$base/720", "$base/audio", height = 720),
+                TrailerPlaybackVariant("$base/4k", "$base/audio", height = 2160)))
+            assertEquals(listOf(2160, 720), result.map { it.height })
+            assertEquals(2, server.requestCount)
+            val paths = listOf(server.takeRequest().path, server.takeRequest().path)
+            assertFalse(paths.contains("/720"))
+        } finally { server.shutdown() }
+    }
+
+    @Test fun failedBestRenditionFallsBackWithoutRepeatingAudioProbe() = runBlocking {
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse()
+                .setResponseCode(if (request.path == "/4k") 403 else 206).setBody("data")
+        }
+        server.start()
+        try {
+            val base = server.url("/").toString().trimEnd('/')
+            val result = TrailerUrlVerifier.bestWithFallbacks(listOf(
+                TrailerPlaybackVariant("$base/4k", "$base/audio", height = 2160),
+                TrailerPlaybackVariant("$base/1080", "$base/audio", height = 1080)))
+            assertEquals(listOf(1080), result.map { it.height })
+            assertEquals(3, server.requestCount)
+        } finally { server.shutdown() }
+    }
     @Test fun rejectedFourKCannotOutrankReadableVideoAndSharedAudioIsProbedOnce() = runBlocking {
         val audioRequests = AtomicInteger()
         val server = MockWebServer()

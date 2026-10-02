@@ -18,6 +18,23 @@ internal object TrailerUrlVerifier {
     private val slots = Semaphore(4)
     private val client = TrailerHttpTransport.client.newBuilder().callTimeout(4, TimeUnit.SECONDS).build()
 
+    /** Verify the best rendition first, not the entire fallback ladder before
+     * first frame. Lower untested renditions are tried by the player on error. */
+    suspend fun bestWithFallbacks(variants: List<TrailerPlaybackVariant>): List<TrailerPlaybackVariant> = coroutineScope {
+        val ranked = TrailerPolicy.rank(variants)
+        val probes = mutableMapOf<Pair<String, Map<String, String>>, kotlinx.coroutines.Deferred<Boolean>>()
+        fun readable(url: String, headers: Map<String, String>) =
+            probes.getOrPut(url to headers) { async(Dispatchers.IO) { slots.withPermit { probe(url, headers) } } }
+        for ((index, variant) in ranked.withIndex()) {
+            val video = readable(variant.videoUrl, variant.requestHeaders)
+            val audio = variant.audioUrl?.let { readable(it, variant.requestHeaders) }
+            if (video.await() && (audio == null || audio.await())) {
+                return@coroutineScope listOf(variant) + ranked.drop(index + 1)
+            }
+        }
+        emptyList()
+    }
+
     suspend fun playable(variants: List<TrailerPlaybackVariant>): List<TrailerPlaybackVariant> = coroutineScope {
         // Probe each distinct video/audio URL once, even when multiple renditions
         // share the same audio. Both halves must be readable before selection.

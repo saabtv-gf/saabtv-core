@@ -57,9 +57,24 @@ class HomeViewModel @Inject constructor(
     suspend fun isWatchlisted(profileId: Int, id: String): Boolean = dao.isInWatchlist(profileId, id)
     suspend fun activeProfileId(): Int? = dao.getActiveProfileId()
 
+    // Owned by the ViewModel, not the trailer composition: Start Watching may
+    // dismiss the overlay while the same source lookup is still in flight.
+    fun startTrailerSourcePrefetch(item: MetaItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                com.saab.tv.AppDiagnostics.event("Source Warmup", "Started", "type=${item.type} id=${item.id}")
+                prefetchTrailerSources(item)
+            } catch (cancelled: CancellationException) { throw cancelled }
+              catch (failure: Exception) {
+                com.saab.tv.AppDiagnostics.event("Source Warmup", "Failed", "type=${failure.javaClass.simpleName}")
+            }
+        }
+    }
+
     /** Resolve only the episode actually targeted by Start Watching; never start a torrent. */
     suspend fun prefetchTrailerSources(item: MetaItem) {
         val profileId = dao.getActiveProfileId() ?: return
+        accountSync.preparePlaybackResume()
         val resolvedId = if (item.id.startsWith("tmdb:")) {
             val numericId = item.id.substringAfter(':').substringBefore(':').toIntOrNull()
             numericId?.let { tmdbService.tmdbToImdb(it, tmdbService.normalizeMediaType(item.type)) } ?: item.id
@@ -67,8 +82,9 @@ class HomeViewModel @Inject constructor(
         val streamId = if (item.type == "series") {
             val meta = repository.prefetchTrailerMetadata("series", resolvedId, item.addonBaseUrl) ?: return
             val episodes = com.saab.tv.domain.normalizeEpisodeList(meta.videos.orEmpty())
-            val history = dao.getSeriesEpisodeHistory("${meta.id}:%")
-            val latest = dao.getLatestSeriesEpisodeHistory("${meta.id}:%")
+            val history = accountSync.freshestPlaybackHistory(dao.getSeriesEpisodeHistory("${meta.id}:%"), profileId)
+                .filter { it.id.startsWith("${meta.id}:") }
+            val latest = history.maxByOrNull { it.lastWatched }
             fun watched(episode: com.saab.tv.data.model.stremio.MetaVideo) = history.any {
                 it.watched && com.saab.tv.domain.episodeMatchesPlaybackId(meta.id, it.id, episode)
             }
@@ -126,11 +142,10 @@ class HomeViewModel @Inject constructor(
         seekThumbnailCache.loadNearest(profileId, contentId, positionMs, intervalSeconds)
 
     suspend fun trailerFor(item: MetaItem): Pair<String, String>? {
+        com.saab.tv.data.trailer.TrailerPolicy.metadataTrailer(item)?.let { return it }
         if (item.id.startsWith("tt")) {
             val type = if (item.type == "series" || item.type == "tv") "series" else "movie"
-            val cinemeta = runCatching {
-                repository.getMetaDetails("https://v3-cinemeta.strem.io/meta/$type/${item.id}.json")
-            }.getOrNull()
+            val cinemeta = repository.prefetchTrailerMetadata(type, item.id, "https://v3-cinemeta.strem.io")
             cinemeta?.let(com.saab.tv.data.trailer.TrailerPolicy::metadataTrailer)?.let { return it }
         }
         val details = repository.resolveMetaDetails(item.type, item.id, item.addonBaseUrl)

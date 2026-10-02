@@ -120,16 +120,29 @@ private val CLIENTS = listOf(
 
 @Singleton
 class YouTubeExtractor @Inject constructor() {
+    companion object {
+        private val sources = com.saab.tv.data.cache.PreviewWarmupCache<TrailerPlaybackSource?>(
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
+            { System.nanoTime() / 1_000_000 }, ttlMs = 120_000, capacity = 6)
+    }
     private val gson = Gson()
 
     private val httpClient = TrailerHttpTransport.client.newBuilder()
         .callTimeout(6, TimeUnit.SECONDS).build()
 
     suspend fun extractPlaybackSource(youtubeKey: String): TrailerPlaybackSource? = withContext(Dispatchers.IO) {
-        if (youtubeKey.isBlank()) return@withContext null
+        val videoId = TrailerPolicy.videoId(youtubeKey) ?: return@withContext null
+        sources.prefetch(videoId) { extractUncached(videoId) }
+        val result = sources.awaitIfPresent(videoId)
+        // A transient resolver failure must not poison the next explicit retry.
+        if (result == null) sources.invalidate(videoId)
+        result
+    }
+
+    private suspend fun extractUncached(youtubeKey: String): TrailerPlaybackSource? {
 
         Log.d(TAG, "Extracting playback source for key: $youtubeKey")
-        try {
+        return try {
             withTimeout(EXTRACTOR_TIMEOUT_MS) {
                 extractInternal(youtubeKey)
             }
@@ -147,10 +160,11 @@ class YouTubeExtractor @Inject constructor() {
         val videoId = TrailerPolicy.videoId(videoKey) ?: return null
 
         val maintained = TrailerPolicy.rank(MaintainedYoutubeResolver.resolve(videoId)).take(16)
-        val verified = TrailerUrlVerifier.playable(maintained)
-        // Keep the verified maintained rendition even if the optional client
-        // ladder fails. Only readable higher-resolution URLs can outrank it.
-        val legacy = if ((verified.firstOrNull()?.height ?: 0) < 2160) {
+        val verified = TrailerUrlVerifier.bestWithFallbacks(maintained)
+        // The maintained resolver already exposes the highest adaptive quality.
+        // A second complete extraction cannot improve a missing 4K rendition in
+        // this ladder reliably; reserve the legacy round for extraction failure.
+        val legacy = if (verified.isEmpty()) {
             try { withTimeoutOrNull(12_000) { extractLegacy(videoId) } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { null }
@@ -163,7 +177,7 @@ class YouTubeExtractor @Inject constructor() {
         val ranked = TrailerPolicy.rank(candidates)
         val primary = ranked.firstOrNull() ?: return null
         com.saab.tv.AppDiagnostics.event("Trailer", "Verified Source Selected",
-            "quality=${primary.qualityLabel} playable=${ranked.size} maintainedPlayable=${verified.size}/${maintained.size}")
+            "quality=${primary.qualityLabel} fallbacks=${ranked.size - 1} resolver=${if (verified.isNotEmpty()) "maintained" else "legacy"}")
         return TrailerPlaybackSource(primary.videoUrl, primary.audioUrl, ranked.drop(1),
             primary.qualityLabel, primary.requestHeaders)
     }
@@ -329,7 +343,7 @@ class YouTubeExtractor @Inject constructor() {
             )
         }
 
-        val distinctVariants = TrailerUrlVerifier.playable(TrailerPolicy.rank(variants).take(16))
+        val distinctVariants = TrailerUrlVerifier.bestWithFallbacks(TrailerPolicy.rank(variants).take(16))
         val primary = distinctVariants.firstOrNull() ?: return null
         com.saab.tv.AppDiagnostics.event("Trailer", "Selected Quality",
             "videoId=$videoId selected=${primary.qualityLabel} available=" +
