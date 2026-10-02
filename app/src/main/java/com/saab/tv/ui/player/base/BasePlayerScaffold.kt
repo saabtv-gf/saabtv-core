@@ -280,7 +280,16 @@ fun BasePlayerScaffold(
         }
     }
 
-    val isNearCompletion = remember(uiState.positionMs, uiState.durationMs, uiState.isEnded, skipSegmentInfo, autoplayThresholdMode, autoplayThresholdPercent, autoplayThresholdSeconds, hasError) {
+    val validOutro = skipSegmentInfo?.outroStartMs?.let { it > 0L && it < uiState.durationMs } == true
+    val smartPromptMs = rememberSmartCreditsPrompt(
+        enabled = autoplayEnabled && autoplayThresholdMode == "smart" && !validOutro &&
+            nextEpisodeInfo != null && !isTrailer && !hasError,
+        cacheKey = seekThumbnailCacheKey,
+        durationMs = uiState.durationMs,
+        intervalSeconds = seekThumbnailIntervalSeconds,
+        provider = seekThumbnailProvider
+    )
+    val isNearCompletion = remember(uiState.positionMs, uiState.durationMs, uiState.isEnded, skipSegmentInfo, autoplayThresholdMode, autoplayThresholdPercent, autoplayThresholdSeconds, hasError, smartPromptMs) {
         if (hasError) return@remember false
         val duration = uiState.durationMs
         val position = uiState.positionMs
@@ -291,7 +300,8 @@ fun BasePlayerScaffold(
             thresholdMode = autoplayThresholdMode,
             thresholdPercent = autoplayThresholdPercent,
             thresholdSeconds = autoplayThresholdSeconds,
-            playbackEnded = uiState.isEnded
+            playbackEnded = uiState.isEnded,
+            smartPromptMs = smartPromptMs
         )
     }
 

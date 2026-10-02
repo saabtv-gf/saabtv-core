@@ -49,7 +49,7 @@ data class ProfileEntity(
     val seekThumbnailsEnabled: Boolean = true,
     val seekThumbnailIntervalSeconds: Int = 30,  // Kept in sync with seekTimeIntervalSeconds
     val autoplayNextEpisode: Boolean = true,
-    val autoplayThresholdMode: String = "introdb",  // "introdb", "percentage" or "time"
+    val autoplayThresholdMode: String = "introdb",  // "introdb", "percentage", "time" or "smart"
     val autoplayThresholdPercent: Int = 95,             // 50..99
     val autoplayThresholdSeconds: Int = 30,             // 10..300
     val autoSelectSource: Boolean = true,

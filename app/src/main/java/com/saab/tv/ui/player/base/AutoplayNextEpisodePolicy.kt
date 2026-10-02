@@ -25,7 +25,8 @@ internal object AutoplayNextEpisodePolicy {
         thresholdMode: String,
         thresholdPercent: Int,
         thresholdSeconds: Int,
-        playbackEnded: Boolean
+        playbackEnded: Boolean,
+        smartPromptMs: Long? = null
     ): Boolean {
         if (playbackEnded) return true
         if (durationMs <= 0L) return false
@@ -36,6 +37,7 @@ internal object AutoplayNextEpisodePolicy {
 
         return when (thresholdMode) {
             "introdb" -> false
+            "smart" -> smartPromptMs != null && smartPromptMs >= 0L && positionMs >= smartPromptMs
             "time" -> durationMs - positionMs <= thresholdSeconds.coerceAtLeast(0) * 1_000L
             else -> positionMs.toDouble() / durationMs.toDouble() >=
                 thresholdPercent.coerceIn(0, 100) / 100.0

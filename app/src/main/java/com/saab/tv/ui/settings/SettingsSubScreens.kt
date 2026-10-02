@@ -438,13 +438,17 @@ fun PlaybackSettings(
 
                 SettingOptionRow(
                     label = "Manual Next-Episode Prompt Without IntroDB",
-                    options = listOf("Off" to "introdb", "Percentage" to "percentage", "Time" to "time"),
+                    options = listOf("Off" to "introdb", "Percentage" to "percentage", "Time" to "time", "Smart" to "smart"),
                     selectedOption = currentProfile.autoplayThresholdMode,
                     onOptionSelected = { viewModel.updateAutoplayThresholdMode(currentProfile.id, it) },
                     onBack = onGoBack
                 )
 
-                if (currentProfile.autoplayThresholdMode == "percentage") {
+                if (currentProfile.autoplayThresholdMode == "smart") {
+                    Text("Detect likely credits from cached thumbnails in the final five minutes. Shows the button one interval early; never auto-advances. Requires Seek Thumbnails. Detection is approximate.",
+                        color = Color.White.copy(0.6f), style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp))
+                } else if (currentProfile.autoplayThresholdMode == "percentage") {
                     Spacer(Modifier.height(4.dp))
                     Text(
                         text = "Trigger at ${currentProfile.autoplayThresholdPercent}%",
