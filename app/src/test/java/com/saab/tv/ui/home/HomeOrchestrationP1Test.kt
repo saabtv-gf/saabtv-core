@@ -63,4 +63,36 @@ class HomeOrchestrationP1Test {
         awaitAppState { !vm.state.value.isLoading && vm.state.value.loadedScreen == "movies" }
         assertTrue(vm.state.value.rows.isEmpty()); assertNull(vm.state.value.lastFocusedKey)
     }
+
+    @Test fun loadMoreCatalogPageDeduplicatesAndAppendsNewItems() = runBlocking {
+        val addonUrl = "https://fixture.invalid"
+        val catalogUrl = "$addonUrl/catalog/movie/top.json"
+        f.dao.insertAddon(AddonEntity(
+            transportUrl = addonUrl, id = "fixture", name = "Fixture", version = "1", description = null, iconUrl = null,
+            catalogsJson = """[{"id":"top","type":"movie","name":"Top","extra":[{"name":"skip"}]}]""",
+            supportsMeta = true, supportsStream = true
+        ))
+        f.dao.saveCatalogConfig(CatalogConfigEntity(
+            uniqueId = "fixture-movie-top", transportUrl = addonUrl, addonName = "Fixture",
+            catalogType = "movie", catalogId = "top", showInHome = true
+        ))
+        fun item(id: String) = MetaItem(
+            id = id, type = "movie", name = id,
+            poster = "android.resource://android/drawable/sym_def_app_icon", background = "background", logo = "logo",
+            description = "description", releaseInfo = "2026", imdbRating = "8.0", runtime = "90m", genres = listOf("Drama")
+        )
+        f.api.catalogPages[catalogUrl] = CatalogResponse(listOf(item("tt1"), item("tt2")))
+        f.api.catalogPages[catalogUrl.replace(".json", "/skip=2.json")] =
+            CatalogResponse(listOf(item("tt2"), item("tt3")))
+
+        vm.loadScreen("home", ProfileEntity(id = 1, name = "One", tmdbEnabled = false))
+        awaitAppState { !vm.state.value.isLoading && vm.state.value.loadedScreen == "home" }
+        val row = vm.state.value.rows.single()
+        assertTrue(row.supportsSkip)
+        assertEquals(listOf("tt1", "tt2"), row.items.map { it.id })
+
+        vm.loadMoreItems(row.configId)
+        awaitAppState { vm.state.value.rows.singleOrNull()?.items?.map { it.id } == listOf("tt1", "tt2", "tt3") }
+        assertTrue(f.api.calls.contains(catalogUrl.replace(".json", "/skip=2.json")))
+    }
 }

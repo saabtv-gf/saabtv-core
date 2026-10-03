@@ -812,12 +812,22 @@ private fun ProfilePinDialog(
     LaunchedEffect(title) {
         appeared = true
         delay(100)
-        firstDigitRequester.requestFocus()
+        // Dialog content is hosted in a separate window. On slower TV devices the
+        // first focus node may not be attached when the entrance delay expires.
+        // Retry on rendered frames instead of allowing a FocusRequester exception
+        // to break the whole profile-PIN flow.
+        repeat(3) {
+            withFrameNanos { }
+            if (runCatching { firstDigitRequester.requestFocus(); true }.getOrDefault(false)) {
+                return@LaunchedEffect
+            }
+        }
     }
 
     LaunchedEffect(pin.length) {
         if (pin.length == 4) {
             delay(70)
+            withFrameNanos { }
             runCatching { submitRequester.requestFocus() }
         }
     }

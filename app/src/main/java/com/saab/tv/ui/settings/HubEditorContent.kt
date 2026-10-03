@@ -78,7 +78,7 @@ fun HubEditorContent(
             value = name,
             onValueChange = onNameChange,
             placeholder = "Hub Row Name",
-            modifier = if (focusRequester != null) Modifier.focusRequester(focusRequester).onPreviewKeyEvent {
+            modifier = if (focusRequester != null) Modifier.onPreviewKeyEvent {
                 if (it.key == Key.DirectionDown && it.type == KeyEventType.KeyDown) {
                     shapeFocusRequester?.requestFocus()
                     true
@@ -92,7 +92,8 @@ fun HubEditorContent(
                     true
                 } else false
             },
-            onDone = { shapeFocusRequester?.requestFocus() }
+            onDone = { shapeFocusRequester?.requestFocus() },
+            focusRequester = focusRequester
         )
 
         Spacer(Modifier.height(20.dp))

@@ -1,5 +1,6 @@
 package com.saab.tv.ui.player
 
+import com.saab.tv.ui.player.base.PlayerUiState
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -35,5 +36,35 @@ class ProgressSnapshotPolicyTest {
         val progress = WatchProgressPolicy.evaluate(position, 1_800_000L, null, .95, true)
         assertTrue(progress.isCompleted)
         assertFalse(WatchProgressPolicy.canResume(position, progress.storedDurationMs, progress.isCompleted, .95))
+    }
+    @Test fun lifecycleStopPreservesPreparedEpisodeStartAndOmitsUnknownDuration() {
+        val snapshot = ProgressSnapshotPolicy.onLifecycleStop(
+            PlayerUiState(isReady = true, positionMs = 0L, durationMs = 0L)
+        )
+        assertEquals(0L, snapshot.positionMs)
+        assertNull(snapshot.durationMs)
+        assertTrue(snapshot.playbackEstablished)
+    }
+    @Test fun lifecycleStopTreatsRenderedFrameAsEstablishedWithoutReadyFlag() {
+        val snapshot = ProgressSnapshotPolicy.onLifecycleStop(
+            PlayerUiState(hasRenderedFirstFrame = true, positionMs = 12_000L, durationMs = 90_000L)
+        )
+        assertEquals(12_000L, snapshot.positionMs)
+        assertEquals(90_000L, snapshot.durationMs)
+        assertTrue(snapshot.playbackEstablished)
+    }
+    @Test fun lifecycleStopUsesTerminalPositionForEndedPlaybackAndRejectsUnstartedState() {
+        val ended = ProgressSnapshotPolicy.onLifecycleStop(
+            PlayerUiState(isEnded = true, isReady = false, positionMs = 1_790_000L, durationMs = 1_800_000L)
+        )
+        assertEquals(1_800_000L, ended.positionMs)
+        assertEquals(1_800_000L, ended.durationMs)
+        assertTrue(ended.playbackEstablished)
+
+        val unstarted = ProgressSnapshotPolicy.onLifecycleStop(
+            PlayerUiState(positionMs = -1L, durationMs = 90_000L)
+        )
+        assertEquals(0L, unstarted.positionMs)
+        assertFalse(unstarted.playbackEstablished)
     }
 }

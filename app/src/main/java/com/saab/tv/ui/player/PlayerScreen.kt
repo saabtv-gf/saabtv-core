@@ -424,19 +424,16 @@ fun PlayerScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
                 playbackController.pause()
-                val state = playbackController.uiState.value
-                val pos = if (state.isEnded) ProgressSnapshotPolicy.terminalPosition(state.positionMs, state.durationMs)
-                    else state.positionMs.coerceAtLeast(0L)
-                val dur = state.durationMs.takeIf { it > 0L }
+                val snapshot = ProgressSnapshotPolicy.onLifecycleStop(playbackController.uiState.value)
                 viewModel.saveProgress(profileId = playbackSettings.profileId,
                     id = movieId,
                     type = mediaType,
                     title = title,
                     poster = poster,
-                    position = pos,
-                    duration = dur,
+                    position = snapshot.positionMs,
+                    duration = snapshot.durationMs,
                     syncBoundary = true,
-                    playbackEstablished = state.isReady || state.hasRenderedFirstFrame || state.isEnded
+                    playbackEstablished = snapshot.playbackEstablished
                 )
             }
         }

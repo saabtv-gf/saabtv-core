@@ -583,8 +583,8 @@ fun DashboardEditorScreen(
                     value = newName,
                     onValueChange = { newName = it },
                     placeholder = "Category Name",
-                    modifier = Modifier.focusRequester(inputFocusRequester),
-                    onDone = { saveFocusRequester.requestFocus() }
+                    onDone = { saveFocusRequester.requestFocus() },
+                    focusRequester = inputFocusRequester
                 )
                 Spacer(Modifier.height(24.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -1379,15 +1379,16 @@ fun HubItemEditorRow(
     isReordering: Boolean,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    initialFocusRequester: FocusRequester? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val focusRequester = remember { FocusRequester() }
+    val reorderFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(isReordering) {
         if (isReordering) {
-            focusRequester.requestFocus()
+            reorderFocusRequester.requestFocus()
         }
     }
 
@@ -1405,7 +1406,10 @@ fun HubItemEditorRow(
             .background(if (isFocused || isReordering) Color.White.copy(0.1f) else Color.White.copy(0.03f))
             .border(borderWidth, borderColor, RoundedCornerShape(6.dp))
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusRequester(focusRequester)
+            .then(
+                if (isReordering) Modifier.focusRequester(reorderFocusRequester)
+                else initialFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier
+            )
             .focusable(interactionSource = interactionSource)
             .onPreviewKeyEvent {
                 if (isReordering) {

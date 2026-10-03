@@ -24,10 +24,14 @@ class FixtureStremioApi : StremioApiService {
     val calls = Collections.synchronizedList(mutableListOf<String>())
     val metadata = ConcurrentHashMap<String, MetaItem>()
     val streams = ConcurrentHashMap<String, List<Stream>>()
+    val catalogPages = ConcurrentHashMap<String, CatalogResponse>()
     var catalogs: List<MetaItem> = emptyList()
     var metadataGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     override suspend fun getManifest(url: String) = Manifest(id = "fixture", name = "Fixture", version = "1")
-    override suspend fun getCatalog(url: String): CatalogResponse { calls += url; return CatalogResponse(catalogs) }
+    override suspend fun getCatalog(url: String): CatalogResponse {
+        calls += url
+        return catalogPages[url] ?: CatalogResponse(catalogs)
+    }
     override suspend fun getMeta(url: String): MetaResponse {
         calls += url
         metadataGate?.await()

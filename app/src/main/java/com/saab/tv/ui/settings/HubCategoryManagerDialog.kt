@@ -21,7 +21,6 @@ import com.saab.tv.data.model.HubRowItemEntity
 import com.saab.tv.domain.HubShape
 import com.saab.tv.ui.addons.VoidButton
 import com.saab.tv.ui.addons.VoidDialog
-import androidx.compose.ui.focus.focusRequester
 import com.saab.tv.ui.addons.VoidInput
 import kotlinx.coroutines.delay
 
@@ -49,7 +48,7 @@ fun HubCategoryManagerDialog(
 
     LaunchedEffect(Unit) {
         delay(100)
-        focusRequester.requestFocus()
+        runCatching { focusRequester.requestFocus() }
     }
 
     if (managingItem == null && confirmRemoveItem == null && confirmRemoveImageItem == null && renameItem == null) {
@@ -68,6 +67,7 @@ fun HubCategoryManagerDialog(
                         HubItemEditorRow(
                             item = item,
                             isReordering = isReordering,
+                            initialFocusRequester = if (index == 0) focusRequester else null,
                             onMoveUp = {
                                 if (index > 0) {
                                     val mutable = currentItems.toMutableList()
@@ -164,7 +164,7 @@ fun HubCategoryManagerDialog(
 
     confirmRemoveItem?.let { itemToRemove ->
         val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
+        LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
         VoidDialog(
             onDismissRequest = { confirmRemoveItem = null },
@@ -200,7 +200,7 @@ fun HubCategoryManagerDialog(
     // Remove Image Confirmation Dialog
     confirmRemoveImageItem?.let { itemWhoseImageWillBeRemoved ->
         val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
+        LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
         VoidDialog(
             onDismissRequest = { confirmRemoveImageItem = null },
@@ -241,14 +241,14 @@ fun HubCategoryManagerDialog(
     // Rename Dialog
     renameItem?.let { itemToRename ->
         val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
+        LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
         VoidDialog(onDismissRequest = { renameItem = null }, title = "Rename Item") {
             com.saab.tv.ui.addons.VoidInput(
                 value = newRenameName,
                 onValueChange = { newRenameName = it },
                 placeholder = "Item Name",
-                modifier = Modifier.focusRequester(focusRequester)
+                focusRequester = focusRequester
             )
             Spacer(Modifier.height(24.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {

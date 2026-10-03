@@ -1,7 +1,7 @@
 package com.saab.tv.data.update
 
 import android.app.Application
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
@@ -13,7 +13,17 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import okio.Buffer
+import okio.BufferedSource
+import okio.Source
+import okio.Timeout
+import okio.buffer
+import java.io.File
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.security.MessageDigest
 
 /** Intercept HTTP before the socket: exercise the service, not just release policies. */
 @RunWith(RobolectricTestRunner::class)
@@ -84,5 +94,90 @@ class UpdaterServiceRegressionTest {
         repeat(3) { vm.resumePendingUpdate() }
         assertEquals(0,requests.get()); vm.cancelPendingUpdate(); vm.resumePendingUpdate()
         assertEquals(UpdateState.Idle,vm.state.value); assertEquals(0,requests.get())
+    }
+    @Test fun grantingInstallPermissionResumesDownloadButUnsignedApkNeverReachesInstaller() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val packageManager = org.robolectric.Shadows.shadowOf(context.packageManager)
+        packageManager.setCanRequestPackageInstalls(false)
+        val bytes = "not-a-signed-apk".toByteArray()
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        val downloads = AtomicInteger()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            downloads.incrementAndGet()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Fixture")
+                .body(bytes.toResponseBody("application/vnd.android.package-archive".toMediaType())).build()
+        }.build()
+        val vm = AppUpdateManager(client, context)
+        val url = "https://github.com/saabtv-gf/saabtv-core/releases/download/v99/app.apk"
+
+        vm.downloadAndInstall(url, digest)
+        assertEquals(UpdateState.AwaitingInstallPermission, vm.state.value)
+        assertEquals(0, downloads.get())
+
+        packageManager.setCanRequestPackageInstalls(true)
+        try {
+            vm.resumePendingUpdate()
+            assertEquals(1, downloads.get())
+            val state = vm.state.value
+            assertTrue("Malformed APK must fail safely, got $state", state is UpdateState.Error)
+            assertTrue((state as UpdateState.Error).message.startsWith("Download failed:"))
+        } finally {
+            packageManager.setCanRequestPackageInstalls(false)
+        }
+    }
+
+    @Test fun cancellingPartialDownloadRemovesTemporaryApk() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val packageManager = org.robolectric.Shadows.shadowOf(context.packageManager)
+        packageManager.setCanRequestPackageInstalls(true)
+        val reachedSecondRead = CountDownLatch(1)
+        val allowEndOfStream = CountDownLatch(1)
+        val downloads = AtomicInteger()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            downloads.incrementAndGet()
+            val body = object : okhttp3.ResponseBody() {
+                private val mediaType = "application/vnd.android.package-archive".toMediaType()
+                override fun contentType() = mediaType
+                override fun contentLength() = 1024L
+                override fun source(): BufferedSource = object : Source {
+                    private var emitted = false
+                    override fun read(sink: Buffer, byteCount: Long): Long {
+                        if (!emitted) {
+                            emitted = true
+                            sink.write(ByteArray(512) { 7 })
+                            return 512L
+                        }
+                        reachedSecondRead.countDown()
+                        try {
+                            allowEndOfStream.await(30, TimeUnit.SECONDS)
+                        } catch (interrupted: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            throw IOException("Fixture read interrupted", interrupted)
+                        }
+                        return -1L
+                    }
+                    override fun timeout() = Timeout.NONE
+                    override fun close() { allowEndOfStream.countDown() }
+                }.buffer()
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("Fixture")
+                .body(body).build()
+        }.build()
+        val vm = AppUpdateManager(client, context)
+        val url = "https://github.com/saabtv-gf/saabtv-core/releases/download/v99/app.apk"
+        val job = async(Dispatchers.Default) { vm.downloadAndInstall(url, "a".repeat(64)) }
+        try {
+            assertTrue("Download did not reach its blocked read", reachedSecondRead.await(10, TimeUnit.SECONDS))
+            assertEquals(1, downloads.get())
+            assertTrue(File(context.cacheDir, "updates/saabtv-update.part").length() > 0L)
+            job.cancelAndJoin()
+            assertFalse(File(context.cacheDir, "updates/saabtv-update.part").exists())
+            assertFalse(vm.state.value is UpdateState.ReadyToInstall)
+        } finally {
+            allowEndOfStream.countDown()
+            job.cancelAndJoin()
+            packageManager.setCanRequestPackageInstalls(false)
+        }
     }
 }

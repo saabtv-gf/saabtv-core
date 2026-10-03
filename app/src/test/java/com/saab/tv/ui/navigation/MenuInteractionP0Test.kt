@@ -64,4 +64,14 @@ class MenuInteractionP0Test {
         compose.onNodeWithText("Content").assertIsFocused()
         compose.runOnIdle {assertTrue(actions.isEmpty())}
     }
+    @Test fun rightClosesDrawerWithoutNavigationAndLeftCanReenter() {
+        show(); enter()
+        compose.onNodeWithText("Home").performKeyInput { pressKey(Key.DirectionRight) }
+        compose.onNodeWithText("Content").assertIsFocused()
+        compose.runOnIdle { assertTrue(actions.isEmpty()); assertTrue(returns > 0) }
+
+        enter()
+        compose.onNodeWithText("Home").assertIsFocused()
+        compose.runOnIdle { assertTrue(actions.isEmpty()) }
+    }
 }

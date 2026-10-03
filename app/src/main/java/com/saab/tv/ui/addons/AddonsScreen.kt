@@ -503,7 +503,8 @@ fun VoidInput(
     onValueChange: (String) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
-    onDone: (() -> Unit)? = null
+    onDone: (() -> Unit)? = null,
+    focusRequester: FocusRequester? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
 
@@ -536,6 +537,7 @@ fun VoidInput(
             ),
             modifier = Modifier
                 .fillMaxWidth()
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                 .onFocusChanged { isFocused = it.isFocused }
         )
     }

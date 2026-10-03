@@ -1,11 +1,14 @@
 # Test backlog for 90% line coverage
 
-Update 2026-10-03: 111 P0/P1 regression tests have been added; the full suite reports
-603 tests (601 passed, two existing external smoke tests skipped). Whole-app line
-coverage is now 9,826/39,394 (24.94%); the unchanged 90% target needs another 25,629
-covered lines. See [P0_P1_REGRESSION_STATUS.md](/Users/sanju/Documents/Codex/2026-08-24/bu/work/Lumerio/docs/P0_P1_REGRESSION_STATUS.md)
-for implemented and remaining scenarios. The source-range inventory below is the
-historical pre-expansion inventory, not a newly generated current coverage report.
+Update 2026-10-03: the full suite reports 685 tests (683 passed, two existing external
+smoke tests skipped). Whole-app line coverage is 17,266/39,412 (43.81%); the unchanged
+90% target needs another 18,205 covered lines. Recent additions include player UI with
+fake playback, home/details/settings Compose journeys, hub editor interactions,
+lifecycle progress-save projection, cloud-sync shutdown, and interrupted-updater
+regressions.
+See [P0_P1_REGRESSION_STATUS.md](/Users/sanju/Documents/Codex/2026-08-24/bu/work/Lumerio/docs/P0_P1_REGRESSION_STATUS.md)
+for the implemented/remaining scenario ledger. The detailed source-range inventory
+below is historical and has not been regenerated against the current report.
 
 Generated from the verified JaCoCo XML after the subtitle-release fix. This is a complete remaining handwritten-source coverage inventory plus a scenario checklist, not a claim that these tests already exist or a mathematically exact minimum test count.
 
@@ -301,4 +304,3 @@ The current gate additionally includes 3,405 generated/external source lines; 90
 4. Refresh this inventory after each batch: one test can cover many lines and multiple tests may cover the same lines. The remaining target is distinct executed lines, not number of tests.
 5. Require no failed tests, report every skipped test explicitly, keep the 100% core-policy gate and run the whole-app 90% gate.
 6. Track branch coverage and critical-journey assertions separately: 90% lines can still omit important error/focus paths. Run hardware acceptance independently.
-

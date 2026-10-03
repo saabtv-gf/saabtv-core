@@ -49,4 +49,25 @@ class DiagnosticsInteractionP1Test {
         compose.onNodeWithText("Export Report").performKeyInput { pressKey(Key.DirectionRight) }
         compose.onNodeWithText("Clear Logs").assertIsFocused()
     }
+
+    @Test fun activatingReadOnlyCrashRowDoesNotDismissDiagnosticsOrThrow() {
+        val context = RuntimeEnvironment.getApplication()
+        AppDiagnostics.failure(context, "Application", "Uncaught Exception", IllegalStateException("diagnostic crash row fixture"))
+        assertTrue(AppDiagnostics.report(context).events.any {
+            it.event == "Uncaught Exception" && it.details.contains("java.lang.IllegalStateException")
+        })
+        show()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Uncaught Exception").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        val crashRow = compose.onNodeWithText("Uncaught Exception").onParent()
+        crashRow.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        crashRow.assertIsFocused()
+        crashRow.performKeyInput { pressKey(Key.Enter) }
+        crashRow.performKeyInput { pressKey(Key.DirectionCenter) }
+
+        compose.onNodeWithText("Uncaught Exception").assertExists()
+        crashRow.assertIsFocused()
+    }
 }

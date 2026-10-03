@@ -85,6 +85,20 @@ class CloudOrchestrationP0Test {
         cloud.initialize(); assertEquals("Local Newer",app.dao.getProfileById(1)?.name)
         assertEquals(3L,row?.get("revision")?.asLong)
     }
+    @Test fun staleDeviceRevisionConflictPreservesDirtyLocalUntilNewerCloudIsApplied() = runBlocking {
+        cloud.upload()
+        app.dao.insertProfile(ProfileEntity(id=1,name="Unsynced older device")); cloud.noteLocalChange()
+        remoteSnapshot("Concurrent newer device",System.currentTimeMillis()+60_000,2)
+
+        try { cloud.upload(); fail("A stale revision must not overwrite the newer cloud snapshot") }
+        catch (_: java.io.IOException) { }
+        assertEquals("Unsynced older device",app.dao.getProfileById(1)?.name)
+        assertEquals(2L,row?.get("revision")?.asLong)
+
+        cloud.initialize()
+        assertEquals("Concurrent newer device",app.dao.getProfileById(1)?.name)
+        assertEquals(2L,row?.get("revision")?.asLong)
+    }
     @Test fun uninitializedDeviceDoesNotTreatLocalDefaultsAsNewerThanCloud() = runBlocking {
         remoteSnapshot("Account Profile",System.currentTimeMillis(),1)
         cloud.noteLocalChange();cloud.initialize()

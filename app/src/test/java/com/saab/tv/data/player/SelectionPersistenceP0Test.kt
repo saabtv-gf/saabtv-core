@@ -1,6 +1,8 @@
 package com.saab.tv.data.player
 
 import android.app.Application
+import com.saab.tv.data.account.AccountStorage
+import com.saab.tv.data.account.AccountSnapshotStore
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.model.stremio.*
 import com.saab.tv.testing.*
@@ -40,6 +42,28 @@ class SelectionPersistenceP0Test {
         val next = a.copy(fileIdx = 2, behaviorHints = StreamBehaviorHints(filename = "Show.S01E02.mkv", bingeGroup = "pack"))
         f.sources.rememberSelection("tt1:1:1", a)
         assertEquals(next, f.sources.findPreferredStream("tt1:1:2", listOf(stream("b"),next)))
+    }
+    @Test fun chosenSeasonPackAndExplicitSubtitleSurviveAccountRestore() = runBlocking {
+        val first = stream("a").copy(fileIdx = 1,
+            behaviorHints = StreamBehaviorHints(filename = "Show.S01E01.mkv", bingeGroup = "pack"))
+        val next = first.copy(fileIdx = 2,
+            behaviorHints = StreamBehaviorHints(filename = "Show.S01E02.mkv", bingeGroup = "pack"))
+        val lowerRanked = stream("b").copy(fileIdx = 2)
+        AccountStorage.setUserId(f.context, "portable-playback-test")
+        val sources = SourceSelectionStore(f.context, f.app.configuration)
+        val tracks = PlaybackTrackSelectionStore(f.context, f.app.configuration)
+        val snapshotStore = AccountSnapshotStore(f.context, f.app.db)
+        sources.rememberSelection("tt1:1:1", first)
+        tracks.updateSelection("tt1:1:1", "audio-ml", "embedded:ml", updateAudio = true, updateSubtitle = true)
+        val snapshot = snapshotStore.capture()
+
+        sources.clearSelection("tt1:1:1")
+        tracks.clearSelection("tt1:1:1")
+        snapshotStore.restore(snapshot)
+
+        assertEquals(next, sources.findPreferredStream("tt1:1:2", listOf(lowerRanked, next)))
+        assertEquals(PlaybackTrackSelectionStore.Selection("audio-ml", "embedded:ml", null),
+            tracks.getSelection("tt1:1:1"))
     }
     @Test fun clearingSeriesPrefixDoesNotClearAnotherTitle() {
         f.sources.rememberSelection("tt1:1:1", stream("a")); f.sources.rememberSelection("tt2", stream("b"))

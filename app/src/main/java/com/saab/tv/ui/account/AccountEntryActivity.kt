@@ -166,7 +166,7 @@ class AccountEntryActivity : ComponentActivity() {
 }
 
 @Composable
-private fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boolean, onSubmit: (String, String, Boolean) -> Unit) {
+internal fun AccountLoginForm(auth: AccountAuthManager, error: String?, busy: Boolean, onSubmit: (String, String, Boolean) -> Unit) {
     var signup by rememberSaveable { mutableStateOf(false) }
     var remote by remember { mutableStateOf(false) }
     if (remote) AccountRemoteDialog(auth, signup, onDismiss = { remote = false }, onSubmit = onSubmit)

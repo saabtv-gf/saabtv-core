@@ -1,29 +1,34 @@
 # Regression coverage: measured, not assumed
 
-## Latest P0/P1 expansion (2026-10-03)
+## Current measured coverage (2026-10-03)
 
-Added **111 regression tests** without changing production behavior or narrowing
-coverage scope. Full suite: **603 reported, 601 passed, 2 existing external-provider
-smoke tests skipped, zero failures/errors**. The core-policy coverage gate passes.
+The complete suite reports **685 tests: 683 passed, 2 existing external-provider
+smoke tests skipped, zero failures/errors**. The whole-app report includes UI,
+services, repositories and generated application code; the test denominator has not
+been narrowed.
 
 | Metric | Covered / total | Coverage |
 | --- | --- | --- |
-| Lines | 9,826 / 39,394 | 24.94% |
-| Branches | 5,173 / 37,579 | 13.77% |
-| Methods | 2,031 / 7,794 | 26.06% |
-| Classes | 497 / 2,011 | 24.71% |
-| Instructions | 82,438 / 433,825 | 19.00% |
+| Lines | 17,266 / 39,412 | 43.81% |
+| Branches | 10,871 / 37,545 | 28.95% |
+| Methods | 3,357 / 7,801 | 43.03% |
+| Classes | 861 / 2,012 | 42.79% |
+| Instructions | 173,142 / 433,926 | 39.90% |
 
-The unchanged 90% whole-app target still needs **25,629 additional covered lines**.
-This batch adds real Player/Details/Home/Watchlist/Profile ViewModel tests, encrypted
-cloud HTTP orchestration, source/track persistence, bitmap cache/warmup tests,
-TorBox cache evidence, managed-auth failure handling, phone-message crypto and
-Compose menu/trailer/diagnostics interactions. No real service or database was contacted.
+The unchanged 90% whole-app target needs **18,205 additional covered lines**. Recent
+tests exercise encrypted phone-pairing, OTT orchestration, thumbnail worker command
+gating, TV keyboard and account-form interactions, episode selection, profile PIN
+focus/confirmation, quick actions, crash-row activation, lifecycle progress snapshots,
+post-stop sync suppression, interrupted-update cleanup, fake-playback controls and
+hub/category editor journeys. UI testing also exposed and fixed focus-requester wiring
+that could crash hub editing. No production accounts, cloud rows, or external services
+were contacted.
 
-**Not every P0/P1 scenario is complete.** Implemented assertions and remaining
-JVM/device work for every group are recorded in
+**Not every P0/P1 scenario is complete.** Remaining scenarios are retained in the
+group-by-group ledger, separated into testable gaps and device/live-service work, in
 [P0_P1_REGRESSION_STATUS.md](/Users/sanju/Documents/Codex/2026-08-24/bu/work/Lumerio/docs/P0_P1_REGRESSION_STATUS.md).
-Figures below describe the preceding baseline and are retained for comparison.
+The detailed source-range inventory below remains the earlier baseline, not a freshly
+regenerated per-file inventory for this batch.
 
 ## Previous baseline (0.1.95-beta)
 
@@ -110,7 +115,7 @@ The only subsequent production change for this request is the subtitle-release g
 ## Latest expansion and 90% target
 
 The requested **90% whole-application line coverage has not been achieved**.
-It requires at least 35,455 covered lines: 28,113 more than the current report.
+It requires at least 35,471 covered lines: 18,205 more than the current report.
 The figures above come from the report-level XML counters, not a sum of CSV class
 rows (classes sharing a source file can count the same line more than once).
 
