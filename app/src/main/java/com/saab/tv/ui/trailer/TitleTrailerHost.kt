@@ -22,10 +22,11 @@ val LocalTrailerStartWatching = staticCompositionLocalOf<((MetaItem) -> Unit)?> 
 /** Shared fullscreen preview host for recommendation, cast and studio title shelves. */
 @Composable
 fun TitleTrailerHost(onOpen: (MetaItem) -> Unit, defaultItem: MetaItem? = null,
-    defaultEnabled: Boolean = true, onEpisodes: (() -> Unit)? = null, content: @Composable () -> Unit) {
-    val model: HomeViewModel = hiltViewModel()
+    defaultEnabled: Boolean = true, onEpisodes: (() -> Unit)? = null,
+    model: HomeViewModel? = null, content: @Composable () -> Unit) {
+    val resolvedModel = model ?: hiltViewModel()
     var profileId by remember { mutableStateOf<Int?>(null) }
-    LaunchedEffect(Unit) { profileId = model.activeProfileId() }
+    LaunchedEffect(resolvedModel) { profileId = resolvedModel.activeProfileId() }
     var item by remember { mutableStateOf<MetaItem?>(null) }
     var requester by remember { mutableStateOf<FocusRequester?>(null) }
     val contentRequester = remember { FocusRequester() }
@@ -53,9 +54,10 @@ fun TitleTrailerHost(onOpen: (MetaItem) -> Unit, defaultItem: MetaItem? = null,
         BackdropTrailerPreview(focusedItem = item ?: defaultItem, catalog = emptyList(), profileId = profileId ?: 0,
             settings = if (defaultItem != null) settings.copy(presentation = "fullscreen") else settings,
             enabled = !LocalManualTrailerActive.current && profileId != null && defaultEnabled,
-            resolveTrailer = model::trailerFor, onActiveChanged = { active = it }, onOpen = onOpen,
+            resolveTrailer = resolvedModel::trailerFor, onActiveChanged = { active = it }, onOpen = onOpen,
             onDismiss = { runCatching { requester?.requestFocus() ?: contentRequester.requestFocus() } },
             activityVersion = activityVersion,
+            homeViewModel = resolvedModel,
             onEpisodes = if ((item ?: defaultItem)?.type == "series" &&
                 (item ?: defaultItem)?.id == defaultItem?.id) onEpisodes else null)
     }

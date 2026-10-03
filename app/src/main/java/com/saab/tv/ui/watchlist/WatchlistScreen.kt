@@ -306,6 +306,7 @@ fun WatchlistScreen(
         resolveTrailer = actionsViewModel::trailerFor,
         onActiveChanged = { previewActive = it },
         onFullscreenChanged = onPreviewActiveChanged,
-        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: entryRequester.requestFocus() } }
+        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: entryRequester.requestFocus() } },
+        homeViewModel = actionsViewModel
     )
 }

@@ -188,8 +188,6 @@ class TorrentService : Service() {
         }
     }
 
-    private val videoExtensions = setOf("mkv", "mp4", "avi", "webm", "ts", "m4v", "mov", "wmv", "flv")
-
     private suspend fun resolveFileIndex(magnet: String, hintIdx: Int, hintName: String = ""): Int {
         val deadline = System.currentTimeMillis() + 15_000L
         while (System.currentTimeMillis() < deadline) {
@@ -199,47 +197,7 @@ class TorrentService : Service() {
                     Log.d(TAG, "File list (${files.size} files), hintIdx=$hintIdx, hintName=$hintName:")
                     files.forEach { f -> Log.d(TAG, "  id=${f.id} path=${f.path} size=${f.length / 1024 / 1024}MB") }
                 }
-                val videoFiles = files.filter { f ->
-                    val ext = f.path.substringAfterLast('.', "").lowercase()
-                    ext in videoExtensions
-                }
-                // Strategy 0: match by filename from behaviorHints (most reliable —
-                // immune to TorrServer reordering files alphabetically)
-                if (hintName.isNotEmpty()) {
-                    val byName = videoFiles.firstOrNull {
-                        it.path.endsWith(hintName, ignoreCase = true) ||
-                        it.path.substringAfterLast('/').equals(hintName, ignoreCase = true)
-                    }
-                    if (byName != null) {
-                        if (BuildConfig.DEBUG) Log.d(TAG, "Using filename hint: ${byName.path} (id=${byName.id})")
-                        return byName.id
-                    }
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Filename hint '$hintName' not found in file list")
-                }
-                // If addon provided a specific file index (0-based torrent index), use it
-                // TorrServer IDs are 1-based, so fileIdx N = TorrServer id N+1
-                if (hintIdx >= 0) {
-                    // Strategy 1: match by ID offset
-                    val byId = videoFiles.firstOrNull { it.id == hintIdx + 1 }
-                    if (byId != null) {
-                        if (BuildConfig.DEBUG) Log.d(TAG, "Using addon hint (by id): ${byId.path} (id=${byId.id})")
-                        return byId.id
-                    }
-                    // Strategy 2: positional index into full file list
-                    if (hintIdx < files.size) {
-                        val byPos = files[hintIdx]
-                        val ext = byPos.path.substringAfterLast('.', "").lowercase()
-                        if (ext in videoExtensions) {
-                            if (BuildConfig.DEBUG) Log.d(TAG, "Using addon hint (by pos): ${byPos.path} (id=${byPos.id})")
-                            return byPos.id
-                        }
-                    }
-                    if (BuildConfig.DEBUG) Log.w(TAG, "Hint idx=$hintIdx not resolved, falling back to largest")
-                }
-                // Fallback: pick largest video file
-                val target = videoFiles.maxByOrNull { it.length }
-                    ?: files.maxByOrNull { it.length }
-                    ?: continue
+                val target = TorrServerFileSelector.resolve(files, hintIdx, hintName) ?: continue
                 if (BuildConfig.DEBUG) Log.d(TAG, "Resolved file: ${target.path} (${target.length / 1024 / 1024} MB, id=${target.id})")
                 return target.id
             }
@@ -284,4 +242,28 @@ class TorrentService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+}
+
+/** Deterministic TorrServer file selection extracted from the polling service for regression tests. */
+internal object TorrServerFileSelector {
+    private val videoExtensions = setOf("mkv", "mp4", "avi", "webm", "ts", "m4v", "mov", "wmv", "flv")
+
+    fun resolve(files: List<TorrServerFile>, hintIdx: Int, hintName: String = ""): TorrServerFile? {
+        if (files.isEmpty()) return null
+        val videoFiles = files.filter { it.path.substringAfterLast('.', "").lowercase() in videoExtensions }
+        if (hintName.isNotEmpty()) {
+            videoFiles.firstOrNull {
+                it.path.endsWith(hintName, ignoreCase = true) ||
+                    it.path.substringAfterLast('/').equals(hintName, ignoreCase = true)
+            }?.let { return it }
+        }
+        if (hintIdx >= 0) {
+            videoFiles.firstOrNull { it.id == hintIdx + 1 }?.let { return it }
+            if (hintIdx < files.size) {
+                val byPosition = files[hintIdx]
+                if (byPosition.path.substringAfterLast('.', "").lowercase() in videoExtensions) return byPosition
+            }
+        }
+        return videoFiles.maxByOrNull { it.length } ?: files.maxByOrNull { it.length }
+    }
 }

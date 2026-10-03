@@ -260,8 +260,11 @@ fun BasePlayerScaffold(
     // --- Autoplay next episode (reset when playback controller changes, i.e. new episode) ---
     var autoplayCancelled by remember(playbackController) { mutableStateOf(false) }
     var introSkipCancelled by remember(playbackController) { mutableStateOf(false) }
+    var recapSkipCancelled by remember(playbackController) { mutableStateOf(false) }
     var introSkipped by remember(playbackController) { mutableStateOf(false) }
+    var recapSkipped by remember(playbackController) { mutableStateOf(false) }
     var introCountdown by remember(playbackController) { mutableIntStateOf(5) }
+    var recapCountdown by remember(playbackController) { mutableIntStateOf(5) }
     var countdownSeconds by remember(playbackController) {
         mutableIntStateOf(AutoplayNextEpisodePolicy.COUNTDOWN_SECONDS)
     }
@@ -287,7 +290,8 @@ fun BasePlayerScaffold(
         cacheKey = seekThumbnailCacheKey,
         durationMs = uiState.durationMs,
         intervalSeconds = seekThumbnailIntervalSeconds,
-        provider = seekThumbnailProvider
+        provider = seekThumbnailProvider,
+        requestMissingFrame = onSeekPreviewPosition
     )
     val isNearCompletion = remember(uiState.positionMs, uiState.durationMs, uiState.isEnded, skipSegmentInfo, autoplayThresholdMode, autoplayThresholdPercent, autoplayThresholdSeconds, hasError, smartPromptMs) {
         if (hasError) return@remember false
@@ -314,6 +318,14 @@ fun BasePlayerScaffold(
         !introSkipped && start >= 0 && end > start && uiState.positionMs >= start && uiState.positionMs < end
     }
 
+    val showSkipRecap = remember(uiState.positionMs, skipSegmentInfo, hasError, recapSkipped, showSkipIntro) {
+        if (hasError || showSkipIntro) return@remember false
+        val info = skipSegmentInfo ?: return@remember false
+        val start = info.recapStartMs ?: return@remember false
+        val end = info.recapEndMs ?: return@remember false
+        !recapSkipped && start >= 0 && end > start && uiState.positionMs >= start && uiState.positionMs < end
+    }
+
     val introCountdownActive = showSkipIntro && autoSkipIntro && introSkipCountdownSeconds > 0 && !introSkipCancelled &&
         pendingPreviewSeekPosition == null
     LaunchedEffect(introCountdownActive, introSkipCountdownSeconds) {
@@ -327,6 +339,24 @@ fun BasePlayerScaffold(
         }
         skipSegmentInfo?.introEndMs?.let {
             introSkipped = true
+            playbackController.seekTo(it)
+            onSeekPreviewPosition(it)
+        }
+    }
+
+    val recapCountdownActive = showSkipRecap && autoSkipIntro && introSkipCountdownSeconds > 0 &&
+        !recapSkipCancelled && pendingPreviewSeekPosition == null
+    LaunchedEffect(recapCountdownActive, introSkipCountdownSeconds) {
+        if (recapCountdownActive) recapCountdown = if (introSkipCountdownSeconds == 10) 10 else 5
+    }
+    LaunchedEffect(recapCountdownActive, uiState.isPlaying, uiState.isBuffering, uiState.isSeeking) {
+        if (!recapCountdownActive || !uiState.isPlaying || uiState.isBuffering || uiState.isSeeking) return@LaunchedEffect
+        while (recapCountdown > 0) {
+            delay(1_000L)
+            recapCountdown--
+        }
+        skipSegmentInfo?.recapEndMs?.let {
+            recapSkipped = true
             playbackController.seekTo(it)
             onSeekPreviewPosition(it)
         }
@@ -383,19 +413,19 @@ fun BasePlayerScaffold(
     }
 
     // Re-focus buttons when controls hide
-    LaunchedEffect(showControls, overlayVisible, showPlayNextButton) {
+    LaunchedEffect(showControls, overlayVisible, showPlayNextButton, showSkipIntro, showSkipRecap) {
         if (!showControls) {
             when {
                 overlayVisible -> runCatching { nextEpisodeFocusRequester.requestFocus() }
                 showPlayNextButton -> runCatching { playNextFocusRequester.requestFocus() }
-                showSkipIntro -> runCatching { skipIntroFocusRequester.requestFocus() }
+                showSkipIntro || showSkipRecap -> runCatching { skipIntroFocusRequester.requestFocus() }
             }
         }
     }
 
     // Also re-focus skip intro when it first appears and controls are not showing
-    LaunchedEffect(showSkipIntro) {
-        if (showSkipIntro && !showControls && !overlayVisible) {
+    LaunchedEffect(showSkipIntro, showSkipRecap) {
+        if ((showSkipIntro || showSkipRecap) && !showControls && !overlayVisible) {
             runCatching { skipIntroFocusRequester.requestFocus() }
         }
     }
@@ -502,6 +532,7 @@ fun BasePlayerScaffold(
                 showSeekOverlay = false
             }
             introCountdownActive -> { introSkipCancelled = true }
+            recapCountdownActive -> { recapSkipCancelled = true }
             episodeSwitchSources != null || isEpisodeSwitchLoading -> {
                 onEpisodeSwitchDismissed?.invoke()
                 activePanel = PlayerPanel.EPISODES
@@ -634,7 +665,7 @@ fun BasePlayerScaffold(
 
     LaunchedEffect(showControls, panelOpen, showSubtitleOffsetBar, showSubtitleSizeBar, showSubtitleDelayBar, showSubtitleColorBar, hasError, episodeSwitchOpen) {
         if (showSubtitleOffsetBar || showSubtitleSizeBar || showSubtitleDelayBar || showSubtitleColorBar) return@LaunchedEffect
-        if (overlayVisible || showPlayNextButton || showSkipIntro || hasError) return@LaunchedEffect
+        if (overlayVisible || showPlayNextButton || showSkipIntro || showSkipRecap || hasError) return@LaunchedEffect
         if (episodeSwitchOpen) return@LaunchedEffect
 
         if (showControls && !panelOpen) {
@@ -1160,7 +1191,7 @@ fun BasePlayerScaffold(
 
         // Skip intro button
         AnimatedVisibility(
-            visible = showSkipIntro && !overlayVisible,
+            visible = (showSkipIntro || showSkipRecap) && !overlayVisible,
             enter = fadeIn(animationSpec = tween(300)),
             exit = fadeOut(animationSpec = tween(200)),
             modifier = Modifier
@@ -1168,12 +1199,18 @@ fun BasePlayerScaffold(
                 .padding(bottom = buttonBottomPadding)
         ) {
             SkipIntroButton(
-                label = if (introCountdownActive) "Skip Intro In ${introCountdown}s · Back To Cancel" else "Skip Intro",
+                label = when {
+                    recapCountdownActive -> "Skip Recap In ${recapCountdown}s · Back To Cancel"
+                    showSkipRecap -> "Skip Recap"
+                    introCountdownActive -> "Skip Intro In ${introCountdown}s · Back To Cancel"
+                    else -> "Skip Intro"
+                },
                 onSkip = {
-                    skipSegmentInfo?.introEndMs?.let { endMs ->
-                        introSkipped = true
-                        playbackController.seekTo(endMs)
-                        onSeekPreviewPosition(endMs)
+                    val endMs = if (showSkipRecap) skipSegmentInfo?.recapEndMs else skipSegmentInfo?.introEndMs
+                    endMs?.let {
+                        if (showSkipRecap) recapSkipped = true else introSkipped = true
+                        playbackController.seekTo(it)
+                        onSeekPreviewPosition(it)
                     }
                 },
                 focusRequester = skipIntroFocusRequester
@@ -2176,7 +2213,7 @@ private fun formatSpeed(bytesPerSec: Long): String {
 }
 
 @Composable
-private fun BoxScope.AudioSelectionSidePanel(
+internal fun BoxScope.AudioSelectionSidePanel(
     visible: Boolean,
     title: String,
     audioTracks: List<PlayerTrackOption>,
@@ -2647,7 +2684,7 @@ private fun AudioVariantListItem(
 }
 
 @Composable
-private fun BoxScope.SubtitleSelectionSidePanel(
+internal fun BoxScope.SubtitleSelectionSidePanel(
     visible: Boolean,
     title: String,
     subtitleTracks: List<PlayerTrackOption>,

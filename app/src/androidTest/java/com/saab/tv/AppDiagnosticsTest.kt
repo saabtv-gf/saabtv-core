@@ -19,14 +19,25 @@ class AppDiagnosticsTest {
             override fun getFilesDir(): File = File(directory, "files").apply { mkdirs() }
             override fun getCacheDir(): File = File(directory, "cache").apply { mkdirs() }
         }
+        val basicWasEnabled = AppDiagnostics.isBasicEnabled(context)
         try {
+            // Ordinary diagnostics are opt-in; enable them for this test exception.
+            AppDiagnostics.setBasicEnabled(context, true)
             AppDiagnostics.failure(context, "Updater", "Test Failure", IllegalStateException("password=secret"))
-            val report = AppDiagnostics.report(context)
+            val deadline = System.currentTimeMillis() + 2_000
+            var report = AppDiagnostics.report(context)
+            while (report.events.none { it.event == "Test Failure" } && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25)
+                report = AppDiagnostics.report(context)
+            }
             assertTrue(report.events.any { it.event == "Test Failure" && it.details.contains("IllegalStateException") })
             val export = requireNotNull(AppDiagnostics.export(context)).readText()
             assertTrue(export.contains("Test Failure"))
             assertFalse(export.contains("password=secret"))
             assertFalse(export.contains("secret"))
-        } finally { directory.deleteRecursively() }
+        } finally {
+            AppDiagnostics.setBasicEnabled(context, basicWasEnabled)
+            directory.deleteRecursively()
+        }
     }
 }

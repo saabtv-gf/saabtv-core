@@ -17,19 +17,19 @@ class SmartCreditsPolicyTest {
         assertNull(SmartCreditsPolicy.promptAt(targets, mapOf(410_000L to true, 430_000L to true), 10))
         assertEquals(400_000L, SmartCreditsPolicy.promptAt(targets, mapOf(410_000L to true, 420_000L to true), 10))
     }
-    @Test fun rejectsBlankFramesAndOrdinaryScenes() {
-        assertFalse(SmartCreditsPolicy.looksLikeCredits(160, 90) { _, _ -> 0xff000000.toInt() })
-        assertFalse(SmartCreditsPolicy.looksLikeCredits(160, 90) { _, _ -> 0xffaaaaaa.toInt() })
-        assertFalse(SmartCreditsPolicy.looksLikeCredits(160, 90) { x, y ->
-            if (y in 70..73 && x in 40..120 && x % 8 < 4) -1 else 0xff000000.toInt()
-        })
+    @Test fun prioritizesEarliestUncachedCreditWindowFrame() {
+        val targets = listOf(400_000L, 410_000L, 420_000L)
+        assertEquals(410_000L, SmartCreditsPolicy.nextMissingTarget(targets, mapOf(400_000L to false)))
+        assertNull(SmartCreditsPolicy.nextMissingTarget(targets, targets.associateWith { false }))
     }
-    @Test fun recognizesSparseMultipleTextLinesOnBlack() {
-        assertTrue(SmartCreditsPolicy.looksLikeCredits(160, 90) { x, y ->
-            if (y in 20..22 || y in 35..37 || y in 50..52) {
-                if (x in 45..114 && x % 8 < 4) -1 else 0xff000000.toInt()
-            } else 0xff000000.toInt()
-        })
+    @Test fun recognizesMultiLineOcrWithCreditRoles() {
+        assertTrue(SmartCreditsPolicy.looksLikeCreditsText("Directed by\nJane Smith\nProduced by\nJohn Doe"))
+        assertTrue(SmartCreditsPolicy.looksLikeCreditsText("CINEMATOGRAPHY\nA. Operator\nMUSIC BY\nComposer"))
+    }
+    @Test fun rejectsBlankOrdinaryOrSingleLineOcr() {
+        assertFalse(SmartCreditsPolicy.looksLikeCreditsText(""))
+        assertFalse(SmartCreditsPolicy.looksLikeCreditsText("A dramatic scene\nwith dialogue"))
+        assertFalse(SmartCreditsPolicy.looksLikeCreditsText("Directed by"))
     }
     @Test fun smartDoesNotBecomePercentageFallbackOrAutoplay() {
         assertFalse(AutoplayNextEpisodePolicy.shouldOfferNextEpisode(990_000, 1_000_000, null, "smart", 95, 30, false))

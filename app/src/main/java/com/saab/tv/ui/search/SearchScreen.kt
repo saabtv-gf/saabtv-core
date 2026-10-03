@@ -165,7 +165,8 @@ fun SearchScreen(
         resolveTrailer = previewViewModel::trailerFor,
         onActiveChanged = { previewActive = it },
         onFullscreenChanged = onPreviewActiveChanged,
-        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: resultsRequester.requestFocusSafely() } }
+        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: resultsRequester.requestFocusSafely() } },
+        homeViewModel = previewViewModel
     )
 }
 

@@ -2,6 +2,7 @@ package com.saab.tv.ui.settings
 
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.*
@@ -29,6 +30,7 @@ class PersonalizationSettingsComposeInteractionTest {
     @get:Rule val compose = createComposeRule()
     private lateinit var app: OfflineAppFixture
     private lateinit var vm: SettingsViewModel
+    private val contentVisible = mutableStateOf(true)
 
     @Before fun setUp() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
@@ -36,14 +38,20 @@ class PersonalizationSettingsComposeInteractionTest {
         app.dao.insertProfile(ProfileEntity(id = 1, name = "Personalized"))
         vm = SettingsViewModel(app.dao, app.configuration, SeekThumbnailCache(context), context, app.display)
         compose.setContent {
-            MaterialTheme {
-                val profile = app.dao.getProfileFlow(1).collectAsState(initial = ProfileEntity(id = 1, name = "Personalized"))
-                PersonalizationSettings(profile.value, vm, {})
+            if (contentVisible.value) {
+                MaterialTheme {
+                    val profile = app.dao.getProfileFlow(1).collectAsState(initial = ProfileEntity(id = 1, name = "Personalized"))
+                    PersonalizationSettings(profile.value, vm, {})
+                }
             }
         }
     }
 
     @After fun tearDown() {
+        // Dispose collectAsState database observers before closing Room; Compose rule
+        // teardown runs after @After and otherwise can race a final query.
+        compose.runOnIdle { contentVisible.value = false }
+        compose.waitForIdle()
         vm.viewModelScope.cancel()
         app.close()
     }

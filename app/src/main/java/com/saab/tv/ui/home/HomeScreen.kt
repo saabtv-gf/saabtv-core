@@ -498,7 +498,8 @@ fun HomeScreen(
             onOpen = { item ->
                 if (state.lastFocusedKey?.startsWith("-1_") == true) onContinueClick(item) else onMovieClick(item)
             },
-            onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: contentEntryRequester.requestFocus() } }
+            onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: contentEntryRequester.requestFocus() } },
+            homeViewModel = viewModel
         )
     }
 }

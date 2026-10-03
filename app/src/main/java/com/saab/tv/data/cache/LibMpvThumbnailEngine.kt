@@ -18,9 +18,12 @@ import kotlinx.coroutines.CancellationException
  * a hidden UI or an encoder/output file.
  */
 internal class LibMpvThumbnailEngine(
-    private val context: Context
+    private val context: Context,
+    private val createSession: (Context) -> LibMpvSession? = { appContext ->
+        MPVLib.create(appContext)?.let(::NativeLibMpvSession)
+    }
 ) : Closeable, MPVLib.EventObserver {
-    private var mpv: MPVLib? = null
+    private var mpv: LibMpvSession? = null
 
     @Volatile private var fileLoaded = false
     @Volatile private var fileEnded = false
@@ -39,7 +42,7 @@ internal class LibMpvThumbnailEngine(
         lastError = null
         initializationTrace = ""
         return try {
-            val instance = MPVLib.create(context) ?: run {
+            val instance = createSession(context) ?: run {
                 lastError = "MPVLib.create returned null"
                 return false
             }
@@ -113,7 +116,7 @@ internal class LibMpvThumbnailEngine(
                 return null
             }
             var rawFrame = instance.screenshotRaw()
-            if (rawFrame == null) {
+            if (rawFrame == null && !fileEnded) {
                 val stepResult = instance.commandDetailed(arrayOf("frame-step"))
                 if (stepResult < 0) {
                     lastError = commandFailure(instance, "frame-step", stepResult)
@@ -149,7 +152,7 @@ internal class LibMpvThumbnailEngine(
         }
     }
 
-    private fun configure(instance: MPVLib): String {
+    private fun configure(instance: LibMpvSession): String {
         val options = mapOf(
             "config" to "no",
             "load-scripts" to "no",
@@ -202,7 +205,7 @@ internal class LibMpvThumbnailEngine(
         }
     }
 
-    private fun decodeThumbnail(payload: ByteArray): Bitmap? {
+    internal fun decodeThumbnail(payload: ByteArray): Bitmap? {
         if (payload.size < RAW_FRAME_HEADER_BYTES) return null
         val buffer = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
         val width = buffer.int
@@ -224,20 +227,21 @@ internal class LibMpvThumbnailEngine(
         }.getOrNull()
     }
 
-    private suspend fun waitForRawFrame(instance: MPVLib): ByteArray? {
+    private suspend fun waitForRawFrame(instance: LibMpvSession): ByteArray? {
         var frame: ByteArray? = null
         waitUntil(RAW_FRAME_TIMEOUT_MS) {
             frame = instance.screenshotRaw()
-            frame != null
+            frame != null || fileEnded
         }
         return frame
     }
 
     private suspend fun waitForSeek(
-        instance: MPVLib,
+        instance: LibMpvSession,
         previousRestart: Long,
         targetPositionSeconds: Double
     ): Boolean = waitUntil(SEEK_SETTLE_TIMEOUT_MS) {
+        if (fileEnded) return@waitUntil true
         // initDetailed has no event thread. Pump the bridge's queued lifecycle
         // callbacks while waiting for a genuinely decoded post-seek frame.
         val logs = sanitizeNativeLogs(instance.drainDiagnosticLogs())
@@ -287,7 +291,7 @@ internal class LibMpvThumbnailEngine(
     private fun errorSummary(error: Throwable): String =
         "${error::class.java.simpleName}: ${error.message.orEmpty()}".take(1_200)
 
-    private fun commandFailure(instance: MPVLib, command: String, result: Int): String {
+    private fun commandFailure(instance: LibMpvSession, command: String, result: Int): String {
         val nativeLogs = sanitizeNativeLogs(instance.drainDiagnosticLogs())
         return buildString {
             append("command=$command code=$result")
@@ -315,4 +319,39 @@ internal class LibMpvThumbnailEngine(
             "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+}
+
+/** Thin seam around the JNI library so lifecycle/error paths can be tested without a TV codec. */
+internal interface LibMpvSession {
+    fun addObserver(observer: MPVLib.EventObserver)
+    fun removeObserver(observer: MPVLib.EventObserver)
+    fun setOptionString(name: String, value: String): Int
+    fun initDetailed(): String?
+    fun commandDetailed(args: Array<String>): Int
+    fun command(args: Array<String>)
+    fun setPropertyBoolean(name: String, value: Boolean)
+    fun getPropertyString(name: String): String?
+    fun getPropertyDouble(name: String): Double?
+    fun getPropertyBoolean(name: String): Boolean?
+    fun drainDiagnosticLogs(): String
+    fun screenshotRaw(): ByteArray?
+    fun screenshotRawError(): String
+    fun destroy()
+}
+
+private class NativeLibMpvSession(private val instance: MPVLib) : LibMpvSession {
+    override fun addObserver(observer: MPVLib.EventObserver) = instance.addObserver(observer)
+    override fun removeObserver(observer: MPVLib.EventObserver) = instance.removeObserver(observer)
+    override fun setOptionString(name: String, value: String) = instance.setOptionString(name, value)
+    override fun initDetailed() = instance.initDetailed()
+    override fun commandDetailed(args: Array<String>) = instance.commandDetailed(args)
+    override fun command(args: Array<String>) { instance.command(args) }
+    override fun setPropertyBoolean(name: String, value: Boolean) = instance.setPropertyBoolean(name, value)
+    override fun getPropertyString(name: String) = instance.getPropertyString(name)
+    override fun getPropertyDouble(name: String) = instance.getPropertyDouble(name)
+    override fun getPropertyBoolean(name: String) = instance.getPropertyBoolean(name)
+    override fun drainDiagnosticLogs() = instance.drainDiagnosticLogs()
+    override fun screenshotRaw() = instance.screenshotRaw()
+    override fun screenshotRawError() = instance.screenshotRawError()
+    override fun destroy() = instance.destroy()
 }

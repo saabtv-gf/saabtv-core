@@ -14,7 +14,9 @@ internal object TvLauncherManager {
         // Enable first, so there is never an interval without a launcher entry.
         for ((name, state) in listOf(wanted to PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
             unwanted to PackageManager.COMPONENT_ENABLED_STATE_DISABLED)) {
-            val component = ComponentName(context.packageName, context.packageName + name)
+            // Activity aliases are qualified with the manifest namespace, while the
+            // installed package can differ (for example, the debug `.test` suffix).
+            val component = ComponentName(context.packageName, BuildConfig::class.java.packageName + name)
             if (pm.getComponentEnabledSetting(component) != state) {
                 pm.setComponentEnabledSetting(component, state, PackageManager.DONT_KILL_APP)
             }

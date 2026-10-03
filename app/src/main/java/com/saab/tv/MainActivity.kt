@@ -152,7 +152,7 @@ private suspend fun FocusRequester.requestFocusWhenAttached(hasFocus: () -> Bool
     return false
 }
 
-private fun isPlaybackSnapshotCompleted(
+internal fun isPlaybackSnapshotCompleted(
     positionMs: Long,
     durationMs: Long?,
     watchedThresholdPercent: Int = 95
@@ -164,7 +164,7 @@ private fun isPlaybackSnapshotCompleted(
         duration - position <= 30_000L
 }
 
-private data class PlayerSubtitlePayload(
+internal data class PlayerSubtitlePayload(
     val id: String,
     val url: String,
     val name: String,
@@ -172,7 +172,7 @@ private data class PlayerSubtitlePayload(
     val sourcePriority: Int
 )
 
-private data class PendingSourceSelection(
+internal data class PendingSourceSelection(
     val playbackId: String,
     val launchedStream: Stream,
     val candidateStreams: List<Stream>
@@ -219,7 +219,7 @@ private class PlayerState {
     }
 }
 
-private fun resolveSubtitleUrl(rawUrl: String, addonTransportUrl: String?): String? {
+internal fun resolveSubtitleUrl(rawUrl: String, addonTransportUrl: String?): String? {
     val value = rawUrl.trim()
     if (value.isEmpty()) return null
 
@@ -237,7 +237,7 @@ private fun resolveSubtitleUrl(rawUrl: String, addonTransportUrl: String?): Stri
     return "$base/$path"
 }
 
-private fun sanitizeSubtitleSourceName(rawName: String?, fallback: String): String {
+internal fun sanitizeSubtitleSourceName(rawName: String?, fallback: String): String {
     val cleaned = rawName
         ?.replace("[", "")
         ?.replace("]", "")
@@ -246,7 +246,7 @@ private fun sanitizeSubtitleSourceName(rawName: String?, fallback: String): Stri
     return cleaned.ifEmpty { fallback }
 }
 
-private fun subtitleNameFromUrl(rawUrl: String): String? {
+internal fun subtitleNameFromUrl(rawUrl: String): String? {
     val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return null
     val path = uri.path?.substringBefore('?').orEmpty()
     val rawName = path.substringAfterLast('/').ifEmpty { return null }
@@ -255,7 +255,7 @@ private fun subtitleNameFromUrl(rawUrl: String): String? {
     return withoutExtension.ifEmpty { null }
 }
 
-private fun normalizeSubtitleLanguageTag(rawLang: String?): String? {
+internal fun normalizeSubtitleLanguageTag(rawLang: String?): String? {
     val value = rawLang?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     return value.replace('_', '-').lowercase(Locale.ROOT)
 }
@@ -273,7 +273,7 @@ private val TORRENT_TRACKERS = listOf(
     "udp://exodus.desync.com:6969/announce"
 )
 
-private fun resolvePlayableSourceUrl(stream: Stream): String? {
+internal fun resolvePlayableSourceUrl(stream: Stream): String? {
     val directUrl = stream.url?.trim()?.takeIf { it.isNotEmpty() }
     if (directUrl != null) return directUrl
 
@@ -522,7 +522,7 @@ private fun buildSubtitleFallbackId(
     return "saabtv-sub:$canonicalLanguage|$canonicalName|$canonicalUrl"
 }
 
-private fun buildEmbeddedSubtitlePayload(stream: Stream): List<PlayerSubtitlePayload> {
+internal fun buildEmbeddedSubtitlePayload(stream: Stream): List<PlayerSubtitlePayload> {
     return stream.subtitles
         .orEmpty()
         .mapNotNull { subtitle ->
@@ -530,7 +530,7 @@ private fun buildEmbeddedSubtitlePayload(stream: Stream): List<PlayerSubtitlePay
         }
 }
 
-private fun buildEmbeddedSubtitlePayloadItem(
+internal fun buildEmbeddedSubtitlePayloadItem(
     stream: Stream,
     subtitle: StreamSubtitle
 ): PlayerSubtitlePayload? {
@@ -562,7 +562,7 @@ private fun buildEmbeddedSubtitlePayloadItem(
     )
 }
 
-private fun buildAddonSubtitlePayload(addonSubtitles: List<AddonSubtitle>): List<PlayerSubtitlePayload> {
+internal fun buildAddonSubtitlePayload(addonSubtitles: List<AddonSubtitle>): List<PlayerSubtitlePayload> {
     return addonSubtitles.mapNotNull { subtitle ->
         val resolvedUrl = resolveSubtitleUrl(subtitle.url, addonTransportUrl = null) ?: return@mapNotNull null
         val name = sanitizeSubtitleSourceName(subtitle.addonName, "Addon subtitle")
@@ -585,7 +585,7 @@ private fun buildAddonSubtitlePayload(addonSubtitles: List<AddonSubtitle>): List
     }
 }
 
-private fun buildSubtitlePayload(stream: Stream, addonSubtitles: List<AddonSubtitle>): List<PlayerSubtitlePayload> {
+internal fun buildSubtitlePayload(stream: Stream, addonSubtitles: List<AddonSubtitle>): List<PlayerSubtitlePayload> {
     return (buildEmbeddedSubtitlePayload(stream) + buildAddonSubtitlePayload(addonSubtitles))
         .distinctBy { payload ->
             val url = payload.url.lowercase(Locale.ROOT)
@@ -594,7 +594,7 @@ private fun buildSubtitlePayload(stream: Stream, addonSubtitles: List<AddonSubti
         }
 }
 
-private fun handlePlayerSessionEnd(
+internal fun handlePlayerSessionEnd(
     sessionResult: PlayerSessionResult,
     selectedPlaybackId: String,
     playbackTrackSelectionStore: PlaybackTrackSelectionStore,
@@ -1849,6 +1849,8 @@ class MainActivity : ComponentActivity() {
                                     skipSegmentInfo = SkipSegmentInfo(
                                         introStartMs = if (skipIntroEnabled) response.intro?.start_ms else null,
                                         introEndMs = if (skipIntroEnabled) response.intro?.end_ms else null,
+                                        recapStartMs = if (skipIntroEnabled) response.recap?.start_ms else null,
+                                        recapEndMs = if (skipIntroEnabled) response.recap?.end_ms else null,
                                         outroStartMs = response.outro?.start_ms,
                                         outroEndMs = response.outro?.end_ms
                                     )

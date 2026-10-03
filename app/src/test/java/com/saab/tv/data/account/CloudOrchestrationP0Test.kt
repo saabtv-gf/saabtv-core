@@ -120,4 +120,51 @@ class CloudOrchestrationP0Test {
         try { cloud.initialize();fail("Expected authentication failure") } catch(_:Exception) { }
         assertEquals("Local",app.dao.getProfileById(1)?.name)
     }
+
+    @Test fun syncManagerReportsSuccessThenKeepsDirtyLocalDataOnRetryableFailure() = runBlocking {
+        val manager = AccountSyncManager(transport.context, transport.auth, app.db, app.configuration)
+        try {
+            assertTrue(manager.syncNow())
+            assertEquals("Synced", manager.status.value)
+
+            app.dao.insertProfile(ProfileEntity(id = 1, name = "Pending local change"))
+            cloud.noteLocalChange()
+            failWrites = true
+            assertFalse(manager.syncNow())
+            assertTrue(manager.status.value.isNotBlank())
+            assertEquals("Pending local change", app.dao.getProfileById(1)?.name)
+
+            failWrites = false
+            assertTrue(manager.syncNow())
+            assertEquals("Synced", manager.status.value)
+        } finally {
+            manager.stop()
+        }
+    }
+
+    @Test fun syncManagerDetectsNewerCloudAndResolvesConflictBothWays() = runBlocking {
+        val manager = AccountSyncManager(transport.context, transport.auth, app.db, app.configuration)
+        try {
+            remoteSnapshot("Cloud copy", System.currentTimeMillis() + 60_000, 1)
+            assertTrue(manager.newerCloudBackupAvailable())
+
+            // A newer server revision must suspend automatic overwrite until the
+            // user chooses which copy to keep.
+            assertFalse(manager.syncNow())
+            assertTrue(manager.status.value.contains("newer cloud", ignoreCase = true))
+            manager.resolveConflict(useCloud = true)
+            assertEquals("Cloud copy", app.dao.getProfileById(1)?.name)
+            assertEquals("Synced", manager.status.value)
+
+            app.dao.insertProfile(ProfileEntity(id = 1, name = "Keep local"))
+            cloud.noteLocalChange()
+            remoteSnapshot("Older cloud copy", 1, (row?.get("revision")?.asLong ?: 1) + 1)
+            assertFalse(manager.syncNow())
+            manager.resolveConflict(useCloud = false)
+            assertEquals("Keep local", app.dao.getProfileById(1)?.name)
+            assertEquals("Synced", manager.status.value)
+        } finally {
+            manager.stop()
+        }
+    }
 }

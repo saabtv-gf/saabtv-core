@@ -66,7 +66,8 @@ fun ManualTrailerHost(profileId: Int, content: @Composable () -> Unit) {
                         request = null
                     },
                     onOpen = { request = null; startWatching?.invoke(it) },
-                    onDismiss = { request = null }
+                    onDismiss = { request = null },
+                    homeViewModel = model
                 )
                 }
             }

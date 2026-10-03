@@ -524,7 +524,7 @@ fun DashboardEditorScreen(
             val catalogDefault = if (config.catalogName != null) "${config.catalogName} - ${config.catalogType.replaceFirstChar { it.uppercase() }}" else "${config.addonName} - ${config.catalogId}"
             val title = config.customTitle ?: catalogDefault
             val focusRequester = remember { FocusRequester() }
-            LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
+            LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
             VoidDialog(onDismissRequest = { dialogState = DialogState.None }, title = "Manage Category") {
                 Text(
@@ -576,7 +576,7 @@ fun DashboardEditorScreen(
             var newName by remember { mutableStateOf(state.currentName) }
             val inputFocusRequester = remember { FocusRequester() }
             val saveFocusRequester = remember { FocusRequester() }
-            LaunchedEffect(Unit) { delay(100); inputFocusRequester.requestFocus() }
+            LaunchedEffect(Unit) { delay(100); runCatching { inputFocusRequester.requestFocus() } }
 
             VoidDialog(onDismissRequest = { dialogState = DialogState.None }, title = "Rename") {
                 VoidInput(
@@ -603,7 +603,7 @@ fun DashboardEditorScreen(
             val catalogDefault = if (config.catalogName != null) "${config.catalogName} - ${config.catalogType.replaceFirstChar { it.uppercase() }}" else "${config.addonName} - ${config.catalogId}"
             val title = config.customTitle ?: catalogDefault
             val focusRequester = remember { FocusRequester() }
-            LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
+            LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
             var isGridViewEnabled by remember(config) { mutableStateOf(config.isInfiniteLoopEnabled) }
             var itemCount by remember(config) { mutableFloatStateOf(config.visibleItemCount.toFloat()) }
@@ -661,7 +661,7 @@ fun DashboardEditorScreen(
 
         is DialogState.AddToTab -> {
             val focusRequester = remember { FocusRequester() }
-            LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
+            LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
             VoidDialog(
                 onDismissRequest = { dialogState = DialogState.None },
@@ -718,7 +718,7 @@ fun DashboardEditorScreen(
 
             if (!showDeleteHubConfirm) {
                 val focusRequester = remember { FocusRequester() }
-                LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
+                LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
                 VoidDialog(onDismissRequest = { dialogState = DialogState.None }, title = "Manage Hub Row") {
                 Text(
@@ -772,7 +772,7 @@ fun DashboardEditorScreen(
             }
             } else {
                 val confirmFocusRequester = remember { FocusRequester() }
-                LaunchedEffect(Unit) { delay(100); confirmFocusRequester.requestFocus() }
+                LaunchedEffect(Unit) { delay(100); runCatching { confirmFocusRequester.requestFocus() } }
 
                 VoidDialog(
                     onDismissRequest = { showDeleteHubConfirm = false },
@@ -839,7 +839,7 @@ fun DashboardEditorScreen(
             val manageCategoriesFocusRequester = remember { FocusRequester() }
             val context = LocalContext.current
             var lastSubDialog by remember { mutableStateOf<String?>(null) }
-            LaunchedEffect(Unit) { delay(100); shapeFocusRequester.requestFocus() }
+            LaunchedEffect(Unit) { delay(100); runCatching { shapeFocusRequester.requestFocus() } }
 
             val existingCategoryIds = currentItems.map { it.configUniqueId }.toSet()
             val availableForHub = configs.filter { it.uniqueId !in existingCategoryIds }
@@ -955,7 +955,7 @@ fun DashboardEditorScreen(
 
             if (showAddCategoryToHub) {
                 val addFocusRequester = remember { FocusRequester() }
-                LaunchedEffect(Unit) { delay(100); addFocusRequester.requestFocus() }
+                LaunchedEffect(Unit) { delay(100); runCatching { addFocusRequester.requestFocus() } }
 
                 VoidDialog(
                     onDismissRequest = { showAddCategoryToHub = false },
@@ -1007,7 +1007,7 @@ fun DashboardEditorScreen(
                 var posterCount by remember { mutableFloatStateOf(heroConfig.posterCount.toFloat()) }
                 var autoScrollSeconds by remember { mutableFloatStateOf(heroConfig.autoScrollSeconds.toFloat()) }
                 val focusRequester = remember { FocusRequester() }
-                LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
+                LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
                 val visibleConfigs = configs.filter {
                     when (tab) {
@@ -1096,7 +1096,7 @@ fun DashboardEditorScreen(
                     }
                 } else {
                     val confirmFocusRequester = remember { FocusRequester() }
-                    LaunchedEffect(Unit) { delay(100); confirmFocusRequester.requestFocus() }
+                    LaunchedEffect(Unit) { delay(100); runCatching { confirmFocusRequester.requestFocus() } }
 
                     VoidDialog(
                         onDismissRequest = { showDisableConfirm = false },
@@ -1134,7 +1134,7 @@ fun DashboardEditorScreen(
 
                 if (showCategoryPicker && !showDisableConfirm) {
                     val pickerFocusRequester = remember { FocusRequester() }
-                    LaunchedEffect(Unit) { delay(100); pickerFocusRequester.requestFocus() }
+                    LaunchedEffect(Unit) { delay(100); runCatching { pickerFocusRequester.requestFocus() } }
 
                     VoidDialog(
                         onDismissRequest = { showCategoryPicker = false },

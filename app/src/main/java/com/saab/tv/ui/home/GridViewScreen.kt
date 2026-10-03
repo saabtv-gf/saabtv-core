@@ -56,6 +56,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -107,14 +108,14 @@ fun GridViewScreen(
     initialScrollOffset: Int = 0,
     onScrollPositionChange: (Int, Int) -> Unit = { _, _ -> },
     watchedIds: Set<String> = emptySet(),
-    allowTrailerAutoplay: Boolean = true
+    allowTrailerAutoplay: Boolean = true,
+    previewViewModel: HomeViewModel = hiltViewModel()
 ) {
     var actionItem by remember { mutableStateOf<MetaItem?>(null) }
     var previewItem by remember { mutableStateOf<MetaItem?>(null) }
     var previewActive by remember { mutableStateOf(false) }
     var gridHasFocus by remember { mutableStateOf(false) }
     var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
-    val previewViewModel = androidx.hilt.navigation.compose.hiltViewModel<HomeViewModel>()
     var actionBounds by remember { mutableStateOf(Rect.Zero) }
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -478,6 +479,7 @@ fun GridViewScreen(
         settings = com.saab.tv.data.profile.rememberTrailerPreviewSettings(profileId),
         enabled = allowTrailerAutoplay && !com.saab.tv.ui.trailer.LocalManualTrailerActive.current && (gridHasFocus || previewActive) && !isBackIconFocused && actionItem == null,
         resolveTrailer = previewViewModel::trailerFor, onActiveChanged = { previewActive = it },
-        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: entryRequester.requestFocus() } }
+        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: entryRequester.requestFocus() } },
+        homeViewModel = previewViewModel
     )
 }

@@ -112,11 +112,15 @@ class DetailsOrchestrationP0Test {
         awaitAppState { !vm.state.value.isLoading }
 
         vm.toggleMovieWatched()
-        awaitAppState { runBlocking { f.dao.getHistoryItem("movie-id")?.watched == true && !f.dao.isInWatchlist(1, "movie-id") } }
+        awaitAppState {
+            vm.state.value.isMovieWatched && runBlocking {
+                f.dao.getHistoryItem("movie-id")?.watched == true && !f.dao.isInWatchlist(1, "movie-id")
+            }
+        }
         assertTrue(vm.state.value.isMovieWatched)
 
         vm.toggleMovieWatched()
-        awaitAppState { runBlocking { f.dao.getHistoryItem("movie-id") == null } }
+        awaitAppState { !vm.state.value.isMovieWatched && runBlocking { f.dao.getHistoryItem("movie-id") == null } }
         assertFalse(vm.state.value.isMovieWatched)
     }
 

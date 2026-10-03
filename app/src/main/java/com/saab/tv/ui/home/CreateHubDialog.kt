@@ -52,7 +52,7 @@ fun CreateHubDialog(
     
     LaunchedEffect(Unit) {
         kotlinx.coroutines.delay(100)
-        focusRequester.requestFocus()
+        runCatching { focusRequester.requestFocus() }
     }
 
     // Restore focus when returning from a sub-dialog
@@ -61,8 +61,8 @@ fun CreateHubDialog(
         if (isMainVisible && lastSubDialog != null) {
             kotlinx.coroutines.delay(100)
             when (lastSubDialog) {
-                "add" -> addCategoryFocusRequester.requestFocus()
-                "manage" -> manageCategoriesFocusRequester.requestFocus()
+                "add" -> runCatching { addCategoryFocusRequester.requestFocus() }
+                "manage" -> runCatching { manageCategoriesFocusRequester.requestFocus() }
             }
         }
     }
@@ -166,7 +166,7 @@ fun SelectCategoriesDialog(
                     },
                     modifier = if (isLastItem) Modifier.onPreviewKeyEvent {
                         if (it.key == Key.DirectionDown && it.type == KeyEventType.KeyDown) {
-                            confirmFocusRequester.requestFocus()
+                            runCatching { confirmFocusRequester.requestFocus() }
                             true
                         } else false
                     } else Modifier

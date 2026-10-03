@@ -44,7 +44,6 @@ import com.saab.tv.ui.addons.VoidButton
 import com.saab.tv.ui.addons.VoidDialog
 import com.saab.tv.ui.theme.ThemeManager
 import com.saab.tv.ui.components.cardFocusSound
-import kotlinx.coroutines.delay
 
 @Composable
 fun ThemeScreen(
@@ -230,8 +229,6 @@ fun ThemeScreen(
     val managedTheme = themeToManage
     if (managedTheme != null) {
         val theme = managedTheme
-        val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
         VoidDialog(
             onDismissRequest = { themeToManage = null },
@@ -250,8 +247,7 @@ fun ThemeScreen(
                     onEditTheme(theme)
                     themeToManage = null
                 },
-                modifier = Modifier.fillMaxWidth(),
-                focusRequester = focusRequester
+                modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(Modifier.height(12.dp))
@@ -277,8 +273,6 @@ fun ThemeScreen(
     val deletingTheme = themeToDelete
     if (deletingTheme != null) {
         val theme = deletingTheme
-        val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
         VoidDialog(
             onDismissRequest = { themeToDelete = null },
@@ -294,8 +288,7 @@ fun ThemeScreen(
                 VoidButton(
                     text = "No",
                     onClick = { themeToDelete = null },
-                    modifier = Modifier.weight(1f),
-                    focusRequester = focusRequester
+                    modifier = Modifier.weight(1f)
                 )
                 VoidButton(
                     text = "Yes",

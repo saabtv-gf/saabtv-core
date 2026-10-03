@@ -136,6 +136,8 @@ data class NextEpisodeInfo(
 data class SkipSegmentInfo(
     val introStartMs: Long? = null,
     val introEndMs: Long? = null,
+    val recapStartMs: Long? = null,
+    val recapEndMs: Long? = null,
     val outroStartMs: Long? = null,
     val outroEndMs: Long? = null
 )

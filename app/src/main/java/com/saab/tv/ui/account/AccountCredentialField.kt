@@ -55,7 +55,10 @@ internal fun AccountCredentialField(
                 fieldFocused = it.isFocused
                 if (!it.isFocused) { editing = false }
             }.focusRequester(focusRequester).onPreviewKeyEvent {
-                if (enabled && it.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter)) {
+                if (enabled && !editing && it.key == Key.DirectionDown && onNext != null) {
+                    if (it.type == KeyEventType.KeyDown) onNext()
+                    true
+                } else if (enabled && it.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter)) {
                     if (it.type == KeyEventType.KeyDown) editing = true
                     true
                 } else false

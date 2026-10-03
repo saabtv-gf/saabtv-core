@@ -72,9 +72,10 @@ fun BackdropTrailerPreview(
     onOpen: (MetaItem) -> Unit, onDismiss: () -> Unit,
     activityVersion: Int = 0,
     onUnavailable: () -> Unit = {},
-    onEpisodes: (() -> Unit)? = null
+    onEpisodes: (() -> Unit)? = null,
+    homeViewModel: com.saab.tv.ui.home.HomeViewModel? = null
 ) {
-    val homeModel: com.saab.tv.ui.home.HomeViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val homeModel = homeViewModel ?: androidx.hilt.navigation.compose.hiltViewModel()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val foreground = lifecycleState == Lifecycle.State.RESUMED

@@ -12,6 +12,7 @@ import com.saab.tv.testing.OfflineAppFixture
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -67,5 +68,27 @@ class SettingsScreenComposeJourneyTest {
             runBlocking { app.dao.getProfileById(profile.id)?.frameRateMatching == true }
         }
         compose.runOnIdle { assertTrue(runBlocking { app.dao.getProfileById(profile.id)!!.frameRateMatching }) }
+    }
+
+    @Test fun settingsNavigationOpensSortAndFilterWithoutLeavingTheSection() {
+        val entryRequester = FocusRequester()
+        val drawerRequester = FocusRequester()
+        compose.setContent {
+            MaterialTheme {
+                SettingsScreen(
+                    currentProfile = profile,
+                    onBack = {},
+                    entryRequester = entryRequester,
+                    drawerRequester = drawerRequester,
+                    viewModel = viewModel
+                )
+            }
+        }
+
+        compose.onNodeWithText("Sort & Filter").performClick()
+        compose.onNodeWithText("Configure how sources are sorted and filtered.").assertExists()
+        compose.onNodeWithText("Sort Sources").performScrollTo().performClick()
+        compose.waitUntil(5_000) { runBlocking { app.dao.getProfileById(profile.id)?.sourceSortingEnabled == false } }
+        assertEquals(false, runBlocking { app.dao.getProfileById(profile.id)?.sourceSortingEnabled })
     }
 }

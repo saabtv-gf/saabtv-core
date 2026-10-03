@@ -134,6 +134,7 @@ fun DetailsScreen(
     onTrailerClick: (youtubeKey: String, trailerName: String) -> Unit = { _, _ -> },
     isTrailerLoading: Boolean = false,
     trailerReturnToken: Int = 0,
+    trailerHostViewModel: com.saab.tv.ui.home.HomeViewModel? = null,
     viewModel: DetailsViewModel = hiltViewModel(key = "details_${type}_${id}")
 ) {
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
@@ -141,7 +142,8 @@ fun DetailsScreen(
     com.saab.tv.ui.trailer.TitleTrailerHost(onOpen = { onNavigateToDetails(it.type, it.id) },
         defaultItem = state.meta.takeIf { !state.isLoading && state.contentKey == "$type:$id" },
         onEpisodes = { viewModel.openEpisodes() },
-        defaultEnabled = !state.isLoadingStreams && state.sidebarState is SidebarState.Closed && !autoStartPlayback) {
+        defaultEnabled = !state.isLoadingStreams && state.sidebarState is SidebarState.Closed && !autoStartPlayback,
+        model = trailerHostViewModel) {
 
     LaunchedEffect(type, id, autoStartPlayback) { viewModel.loadDetails(type, id, addonBaseUrl, playbackOnly = autoStartPlayback) }
 

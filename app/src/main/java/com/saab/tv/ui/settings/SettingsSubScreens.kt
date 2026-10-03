@@ -407,7 +407,7 @@ fun PlaybackSettings(
             // SKIP INTRO
             SettingToggleRow(
                 label = "Skip Intro",
-                subtitle = "Show a skip button during intro segments if available in IntroDB",
+                subtitle = "Show skip buttons for IntroDB intro and recap segments",
                 isChecked = currentProfile.skipIntro,
                 onCheckedChange = { viewModel.updateSkipIntro(currentProfile.id, it) },
                 onBack = onGoBack
@@ -445,7 +445,7 @@ fun PlaybackSettings(
                 )
 
                 if (currentProfile.autoplayThresholdMode == "smart") {
-                    Text("Detect likely credits from cached thumbnails in the final five minutes. Shows the button one interval early; never auto-advances. Requires Seek Thumbnails. Detection is approximate.",
+                    Text("On-device OCR checks cached frames in the final five minutes; missing frames are prioritized by the isolated decoder. Requires Seek Thumbnails. Shows the next-episode button one interval before likely credits and never auto-advances.",
                         color = Color.White.copy(0.6f), style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp))
                 } else if (currentProfile.autoplayThresholdMode == "percentage") {

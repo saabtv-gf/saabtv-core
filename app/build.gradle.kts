@@ -39,16 +39,36 @@ tasks.withType<Test>().configureEach {
 // Only build-generated resource identifiers/configuration are omitted.
 val regressionClasses = files(
     fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
-        exclude("**/R.class", "**/R$*.class", "**/BuildConfig.class")
+        exclude(
+            "**/R.class", "**/R$*.class", "**/BuildConfig.class",
+            "com/saab/tv/SaabTvApplication.class",
+            "com/saab/tv/ui/account/AccountEntryActivity.class",
+            "com/saab/tv/ui/home/CreateHubDialogKt*.class",
+            "com/saab/tv/ui/settings/DashboardEditorScreenKt*.class"
+        )
     },
     fileTree(layout.buildDirectory.dir("intermediates/javac/debug/compileDebugJavaWithJavac/classes")) {
         exclude("**/R.class", "**/R$*.class", "**/BuildConfig.class")
+    },
+    // Use the runtime bytecode for classes modified by Android/Hilt/Compose transforms.
+    fileTree(layout.buildDirectory.dir("intermediates/classes/debug/transformDebugClassesWithAsm/dirs")) {
+        include(
+            "com/saab/tv/SaabTvApplication.class",
+            "com/saab/tv/ui/account/AccountEntryActivity.class",
+            "com/saab/tv/ui/home/CreateHubDialogKt*.class",
+            "com/saab/tv/ui/settings/DashboardEditorScreenKt*.class"
+        )
     }
 )
-val regressionExecution = layout.buildDirectory.file("jacoco/testDebugUnitTest.exec")
+val regressionExecution = files(
+    layout.buildDirectory.file("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec"),
+    fileTree(layout.buildDirectory.dir("outputs/code_coverage/debugAndroidTest/connected")) {
+        include("**/*.ec")
+    }
+)
 
 tasks.register<JacocoReport>("unitRegressionCoverage") {
-    dependsOn("testDebugUnitTest")
+    dependsOn("testDebugUnitTest", "createDebugAndroidTestCoverageReport")
     classDirectories.setFrom(regressionClasses)
     sourceDirectories.setFrom(files("src/main/java", "src/main/kotlin"))
     executionData.setFrom(regressionExecution)
@@ -206,8 +226,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 99
-        versionName = "0.1.95-beta"
+        versionCode = 100
+        versionName = "0.1.96-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -262,6 +282,8 @@ android {
         debug {
             applicationIdSuffix = ".test"
             resValue("string", "app_name", "Saab TV Test")
+            enableUnitTestCoverage = true
+            enableAndroidTestCoverage = true
         }
         release {
             if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
@@ -281,6 +303,7 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
+    sourceSets["androidTest"].assets.srcDir("schemas")
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
@@ -375,6 +398,9 @@ dependencies {
     implementation(libs.catalog.androidx.compose.material3.material3)
     implementation(libs.catalog.androidx.compose.material.material.icons.extended)
 
+    // Bundled offline Latin OCR: works on Fire TV devices without Play Services.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+
     // OkHttp is already available via Retrofit, but declare explicitly for TorrServer API
     implementation(libs.okhttp.client)
     implementation(libs.newpipe.extractor) {
@@ -400,10 +426,12 @@ dependencies {
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.catalog.androidx.test.runner)
     androidTestImplementation(libs.catalog.androidx.test.core.ktx)
     androidTestImplementation(libs.catalog.androidx.test.ext.junit.ktx)
     androidTestImplementation(libs.catalog.androidx.test.rules)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.catalog.androidx.room.room.testing)
     androidTestImplementation(libs.catalog.androidx.sqlite.sqlite.framework)
 
