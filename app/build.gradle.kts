@@ -228,8 +228,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 103
-        versionName = "0.1.99-beta"
+        versionCode = 104
+        versionName = "0.1.100-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -261,7 +261,7 @@ android {
             if (saab32BitOnly) {
                 include("armeabi-v7a")
             } else if (saabEmulatorTest) {
-                include("x86")
+                include("x86_64")
             } else {
                 include("arm64-v8a", "armeabi-v7a")
             }
