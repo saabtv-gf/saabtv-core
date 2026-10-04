@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme as Material3Theme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
@@ -235,12 +236,14 @@ class PlayerScaffoldFakePlaybackInteractionTest {
         playback.uiState.value = playback.uiState.value.copy(selectedAudioTrackId = "en-main")
         compose.setContent {
             Material3Theme { MaterialTheme {
+                val audioTracks = playback.audioTracks.collectAsState().value
+                val uiState = playback.uiState.collectAsState().value
                 Box(Modifier.fillMaxSize()) {
                     AudioSelectionSidePanel(
                         visible = true,
                         title = "Audio Tracks",
-                        audioTracks = playback.audioTracks.value,
-                        selectedAudioId = playback.uiState.value.selectedAudioTrackId,
+                        audioTracks = audioTracks,
+                        selectedAudioId = uiState.selectedAudioTrackId,
                         onClose = {},
                         onSelectTrack = { playback.selectAudioTrack(it) }
                     )
@@ -265,12 +268,14 @@ class PlayerScaffoldFakePlaybackInteractionTest {
         playback.uiState.value = playback.uiState.value.copy(selectedSubtitleTrackId = "en-sub")
         compose.setContent {
             Material3Theme { MaterialTheme {
+                val subtitleTracks = playback.subtitleTracks.collectAsState().value
+                val uiState = playback.uiState.collectAsState().value
                 Box(Modifier.fillMaxSize()) {
                     SubtitleSelectionSidePanel(
                         visible = true,
                         title = "Subtitles",
-                        subtitleTracks = playback.subtitleTracks.value,
-                        selectedSubtitleId = playback.uiState.value.selectedSubtitleTrackId,
+                        subtitleTracks = subtitleTracks,
+                        selectedSubtitleId = uiState.selectedSubtitleTrackId,
                         onClose = {},
                         onSelectTrack = { playback.selectSubtitleTrack(it) }
                     )
