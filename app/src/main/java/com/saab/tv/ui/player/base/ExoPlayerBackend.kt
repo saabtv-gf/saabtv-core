@@ -235,6 +235,55 @@ class ExoPlayerBackend(
     private val subtitleFormatHintsByLabelLanguage = mutableMapOf<String, String>()
     private val subtitleFormatHintsByLabel = mutableMapOf<String, String>()
     private var playerView: PlayerView? = null
+
+    override suspend fun captureVideoFrame(): android.graphics.Bitmap? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+            val videoView = playerView?.videoSurfaceView
+            if (videoView == null) {
+                com.saab.tv.AppDiagnostics.detailed("Smart Next Episode", "Live Capture Failed", "reason=video_surface_missing")
+                return@withContext null
+            }
+            if (videoView.width <= 0 || videoView.height <= 0) {
+                com.saab.tv.AppDiagnostics.detailed("Smart Next Episode", "Live Capture Failed", "reason=surface_unlaid_out type=${videoView.javaClass.simpleName}")
+                return@withContext null
+            }
+            if (videoView is android.view.TextureView) {
+                val width = minOf(videoView.width, 1280)
+                val height = (width.toLong() * videoView.height / videoView.width).toInt().coerceAtLeast(1)
+                return@withContext runCatching { videoView.getBitmap(width, height) }.getOrNull().also {
+                    if (it == null) com.saab.tv.AppDiagnostics.detailed("Smart Next Episode", "Live Capture Failed", "reason=texture_bitmap_unavailable")
+                }
+            }
+            val surface = videoView as? android.view.SurfaceView
+            if (surface == null) {
+                com.saab.tv.AppDiagnostics.detailed("Smart Next Episode", "Live Capture Failed", "reason=unsupported_surface type=${videoView.javaClass.simpleName}")
+                return@withContext null
+            }
+            if (!surface.holder.surface.isValid) {
+                com.saab.tv.AppDiagnostics.detailed("Smart Next Episode", "Live Capture Failed", "reason=invalid_surface tunneled=${playbackSettings.tunnelingEnabled}")
+                return@withContext null
+            }
+            val width = minOf(surface.width, 1280)
+            val height = (width.toLong() * surface.height / surface.width).toInt().coerceAtLeast(1)
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            kotlinx.coroutines.suspendCancellableCoroutine<android.graphics.Bitmap?> { continuation ->
+                try {
+                    android.view.PixelCopy.request(surface, bitmap, { result ->
+                        if (result == android.view.PixelCopy.SUCCESS && continuation.isActive) {
+                            continuation.resumeWith(Result.success(bitmap))
+                        } else {
+                            bitmap.recycle()
+                            com.saab.tv.AppDiagnostics.detailed("Smart Next Episode", "PixelCopy Failed", "result=$result tunneled=${playbackSettings.tunnelingEnabled} surface=${surface.width}x${surface.height}")
+                            if (continuation.isActive) continuation.resumeWith(Result.success(null))
+                        }
+                    }, android.os.Handler(android.os.Looper.getMainLooper()))
+                } catch (error: Exception) {
+                    bitmap.recycle()
+                    com.saab.tv.AppDiagnostics.failure("Smart Next Episode", "PixelCopy Request Failed", error)
+                    if (continuation.isActive) continuation.resumeWith(Result.success(null))
+                }
+            }
+        }
     private var subtitleVerticalOffsetPercent: Int = 0
     private var subtitleSizePercent: Int = 100
     private val subtitleDelayUs = AtomicLong(0L)

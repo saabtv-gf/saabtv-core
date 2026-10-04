@@ -183,6 +183,7 @@ fun BasePlayerScaffold(
     seekThumbnailCachePercent: Int? = null,
     seekThumbnailCachedFrames: Int? = null,
     seekThumbnailTotalFrames: Int? = null,
+    smartFallbackFrameProvider: (suspend (Long) -> Bitmap?)? = null,
     title: String,
     mediaType: String,
     seriesTitle: String? = null,
@@ -319,6 +320,8 @@ fun BasePlayerScaffold(
         durationMs = uiState.durationMs,
         intervalSeconds = seekThumbnailIntervalSeconds,
         provider = seekThumbnailProvider,
+        cachedFrames = seekThumbnailCachedFrames,
+        totalFrames = seekThumbnailTotalFrames,
         requestMissingFrame = onSeekPreviewPosition,
         diagnosticsSessionId = diagnosticsSessionId
     )

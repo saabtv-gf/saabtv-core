@@ -39,6 +39,7 @@ interface PlayerPlaybackController {
 
 interface PlayerRenderSurface {
     val backendType: PlayerBackendType
+    suspend fun captureVideoFrame(): android.graphics.Bitmap? = null
 
     @Composable
     fun Content(modifier: Modifier)

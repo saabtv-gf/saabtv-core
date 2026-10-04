@@ -6,9 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.os.Debug
 import android.os.IBinder
+import android.os.Bundle
+import android.os.ResultReceiver
 import com.saab.tv.data.player.PlaybackDiagnostics
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -50,6 +53,7 @@ class SeekThumbnailWorkerService : Service() {
     private var generationJob: Job? = null
     private var activeRequestKey: String? = null
     private var generationId = 0L
+    private val pendingCaptures = ConcurrentLinkedQueue<PendingCapture>()
     @Volatile private var pauseRequested = false
     @Volatile private var priorityPositionMs = 0L
 
@@ -73,6 +77,7 @@ class SeekThumbnailWorkerService : Service() {
                 }
                 if (generationJob?.isActive != true) stopSelf(startId)
             }
+            ACTION_CAPTURE_FRAME -> captureFrame(intent, startId)
             ACTION_CANCEL -> cancel(intent.getStringExtra(EXTRA_REQUEST_KEY))
         }
         return START_NOT_STICKY
@@ -197,6 +202,32 @@ class SeekThumbnailWorkerService : Service() {
                 if (!isProfileEnabled(this, request.profileId)) break
                 while (pauseRequested && currentCoroutineContext().isActive) {
                     delay(PAUSE_POLL_INTERVAL_MS)
+                }
+                while (true) {
+                    val capture = pendingCaptures.poll() ?: break
+                    if (capture.request.key != request.key) {
+                        capture.receiver.send(android.app.Activity.RESULT_CANCELED, Bundle())
+                        continue
+                    }
+                    val frame = if (mpvAvailable) engine.capture(capture.positionMs, OCR_CAPTURE_WIDTH)
+                        else if (platformAvailable) platformEngine.capture(capture.positionMs, OCR_CAPTURE_WIDTH) else null
+                    if (frame == null) {
+                        diagnostic(request, "OCR Frame Capture Failed", "position=${capture.positionMs} error=${engine.lastError ?: platformEngine.lastError.orEmpty()}", "WARN")
+                        capture.receiver.send(android.app.Activity.RESULT_CANCELED, Bundle())
+                        continue
+                    }
+                    val file = File(cacheDir, "smart-credit-${System.nanoTime()}.jpg")
+                    val saved = runCatching {
+                        file.outputStream().use { frame.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, it) }
+                    }.getOrDefault(false)
+                    if (!frame.isRecycled) frame.recycle()
+                    if (saved) {
+                        diagnostic(request, "OCR Frame Captured", "position=${capture.positionMs} size=${file.length()} direct=true")
+                        capture.receiver.send(android.app.Activity.RESULT_OK, Bundle().apply { putString(EXTRA_CAPTURE_PATH, file.absolutePath) })
+                    } else {
+                        file.delete()
+                        capture.receiver.send(android.app.Activity.RESULT_CANCELED, Bundle())
+                    }
                 }
                 val priority = priorityPositionMs
                 if (priority != plannedPriority) {
@@ -408,11 +439,36 @@ class SeekThumbnailWorkerService : Service() {
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun captureFrame(intent: Intent, startId: Int) {
+        val request = intent.toRequest()
+        val receiver = intent.getParcelableExtra<ResultReceiver>(EXTRA_CAPTURE_RECEIVER)
+        val position = intent.getLongExtra(EXTRA_CAPTURE_POSITION_MS, 0L).coerceAtLeast(0L)
+        if (request == null || receiver == null) {
+            receiver?.send(android.app.Activity.RESULT_CANCELED, Bundle())
+            return
+        }
+        if (activeRequestKey != null && activeRequestKey != request.key) {
+            receiver.send(android.app.Activity.RESULT_CANCELED, Bundle())
+            diagnostic(request, "OCR Frame Request Rejected", "reason=another_thumbnail_source_active", "WARN")
+            return
+        }
+        pendingCaptures.add(PendingCapture(request, position, receiver))
+        if (generationJob?.isActive != true) startOrResume(intent, startId)
+    }
+
+    private data class PendingCapture(
+        val request: SeekThumbnailWorkerRequest,
+        val positionMs: Long,
+        val receiver: ResultReceiver
+    )
+
     companion object {
         private const val ACTION_START = "com.saab.tv.thumbnail.START"
         private const val ACTION_PAUSE = "com.saab.tv.thumbnail.PAUSE"
         private const val ACTION_PRIORITIZE = "com.saab.tv.thumbnail.PRIORITIZE"
         private const val ACTION_CANCEL = "com.saab.tv.thumbnail.CANCEL"
+        private const val ACTION_CAPTURE_FRAME = "com.saab.tv.thumbnail.CAPTURE_FRAME"
         private const val EXTRA_PROFILE_ID = "profile_id"
         private const val EXTRA_CONTENT_ID = "content_id"
         private const val EXTRA_MEDIA_URL = "media_url"
@@ -421,6 +477,9 @@ class SeekThumbnailWorkerService : Service() {
         private const val EXTRA_PRIORITY_POSITION_MS = "priority_position_ms"
         private const val EXTRA_DIAGNOSTICS_SESSION_ID = "diagnostics_session_id"
         private const val EXTRA_REQUEST_KEY = "request_key"
+        private const val EXTRA_CAPTURE_RECEIVER = "capture_receiver"
+        private const val EXTRA_CAPTURE_POSITION_MS = "capture_position_ms"
+        private const val EXTRA_CAPTURE_PATH = "capture_path"
         private const val MPV_GUARD_DIRECTORY = "seek_thumbnail_mpv_guard"
         private const val MAX_FRAMES_PER_SESSION = 500
         private const val MAX_CONSECUTIVE_FAILURES = 3
@@ -431,6 +490,7 @@ class SeekThumbnailWorkerService : Service() {
         private const val PROFILE_ENABLED_PREFIX = "profile_enabled_"
         private const val RETRY_AFTER_PREFIX = "retry_after_"
         private const val FAILED_BATCH_RETRY_DELAY_MS = 30_000L
+        private const val OCR_CAPTURE_WIDTH = 960
 
         private fun isProfileEnabled(context: Context, profileId: Int): Boolean =
             com.saab.tv.data.account.AccountStorage.preferences(context, PREFS_NAME)
@@ -474,6 +534,42 @@ class SeekThumbnailWorkerService : Service() {
                 })
             }
         }
+
+        suspend fun captureFrame(context: Context, request: SeekThumbnailWorkerRequest, positionMs: Long): android.graphics.Bitmap? =
+            kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+                val receiver = object : ResultReceiver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                    override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                        val path = resultData?.getString(EXTRA_CAPTURE_PATH)
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                            val file = path?.let(::File)
+                            val bitmap = if (resultCode == android.app.Activity.RESULT_OK && file != null) {
+                                android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                            } else null
+                            file?.delete()
+                            if (continuation.isActive) continuation.resume(bitmap) { bitmap?.recycle() }
+                            else bitmap?.recycle()
+                        }
+                    }
+                }
+                continuation.invokeOnCancellation { /* The isolated worker deletes the temporary frame when returned. */ }
+                runCatching {
+                    val intent = Intent(context, SeekThumbnailWorkerService::class.java).apply {
+                        action = ACTION_CAPTURE_FRAME
+                        putExtra(EXTRA_PROFILE_ID, request.profileId)
+                        putExtra(EXTRA_CONTENT_ID, request.contentId)
+                        putExtra(EXTRA_MEDIA_URL, request.mediaUrl)
+                        putExtra(EXTRA_DURATION_MS, request.durationMs)
+                        putExtra(EXTRA_INTERVAL_SECONDS, request.intervalSeconds)
+                        putExtra(EXTRA_PRIORITY_POSITION_MS, positionMs)
+                        putExtra(EXTRA_DIAGNOSTICS_SESSION_ID, request.diagnosticsSessionId)
+                        putExtra(EXTRA_CAPTURE_POSITION_MS, positionMs)
+                        putExtra(EXTRA_CAPTURE_RECEIVER, receiver)
+                    }
+                    context.startService(intent)
+                }.onFailure {
+                    if (continuation.isActive) continuation.resume(null) { }
+                }
+            }
 
         fun cancel(context: Context, request: SeekThumbnailWorkerRequest) {
             context.startService(Intent(context, SeekThumbnailWorkerService::class.java).apply {

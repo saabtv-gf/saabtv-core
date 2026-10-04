@@ -710,6 +710,9 @@ fun PlayerScreen(
             seekThumbnailCachePercent = seekThumbnailCacheProgress.percent.takeIf { seekThumbnailsEnabled },
             seekThumbnailCachedFrames = seekThumbnailCacheProgress.cachedFrames.takeIf { seekThumbnailsEnabled },
             seekThumbnailTotalFrames = seekThumbnailCacheProgress.totalFrames.takeIf { seekThumbnailsEnabled },
+            smartFallbackFrameProvider = thumbnailWorkerRequest?.let { request ->
+                { position -> SeekThumbnailWorkerService.captureFrame(context, request, position) }
+            },
             title = title,
             seriesTitle = seriesTitle,
             logoUrl = logoUrl,

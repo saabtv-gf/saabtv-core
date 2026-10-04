@@ -29,7 +29,7 @@ internal class PlatformThumbnailEngine : Closeable {
         }
     }
 
-    fun capture(positionMs: Long): Bitmap? {
+    fun capture(positionMs: Long, outputWidth: Int = THUMBNAIL_WIDTH): Bitmap? {
         val instance = retriever ?: return null
         lastError = null
         return try {
@@ -38,8 +38,8 @@ internal class PlatformThumbnailEngine : Closeable {
                 instance.getScaledFrameAtTime(
                     positionUs,
                     MediaMetadataRetriever.OPTION_CLOSEST,
-                    THUMBNAIL_WIDTH,
-                    THUMBNAIL_HEIGHT
+                    outputWidth.coerceIn(THUMBNAIL_WIDTH, 960),
+                    (outputWidth.coerceIn(THUMBNAIL_WIDTH, 960) * 9 / 16).coerceAtLeast(1)
                 ).also { if (it == null) lastError = "decoder returned no frame" }
             } else {
                 val original = instance.getFrameAtTime(
@@ -48,8 +48,8 @@ internal class PlatformThumbnailEngine : Closeable {
                 ) ?: return null
                 Bitmap.createScaledBitmap(
                     original,
-                    THUMBNAIL_WIDTH,
-                    THUMBNAIL_HEIGHT,
+                    outputWidth.coerceIn(THUMBNAIL_WIDTH, 960),
+                    (outputWidth.coerceIn(THUMBNAIL_WIDTH, 960) * 9 / 16).coerceAtLeast(1),
                     false
                 ).also { scaled ->
                     if (scaled !== original && !original.isRecycled) original.recycle()

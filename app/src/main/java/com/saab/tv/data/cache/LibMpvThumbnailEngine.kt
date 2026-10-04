@@ -89,7 +89,7 @@ internal class LibMpvThumbnailEngine(
         }
     }
 
-    suspend fun capture(positionMs: Long): Bitmap? {
+    suspend fun capture(positionMs: Long, outputWidth: Int = THUMBNAIL_WIDTH): Bitmap? {
         val instance = mpv ?: return null
         if (closed || !fileLoaded || fileEnded) return null
         lastError = null
@@ -141,7 +141,7 @@ internal class LibMpvThumbnailEngine(
                 lastError = "frame timestamp mismatch requested=${positionMs}ms actual=${lastCapturePositionMs}ms"
                 return null
             }
-            decodeThumbnail(rawFrame).also { bitmap ->
+            decodeThumbnail(rawFrame, outputWidth).also { bitmap ->
                 if (bitmap == null) lastError = "invalid screenshot-raw payload=${rawFrame.size}"
             }
         } catch (cancelled: CancellationException) {
@@ -205,7 +205,7 @@ internal class LibMpvThumbnailEngine(
         }
     }
 
-    internal fun decodeThumbnail(payload: ByteArray): Bitmap? {
+    internal fun decodeThumbnail(payload: ByteArray, outputWidth: Int = THUMBNAIL_WIDTH): Bitmap? {
         if (payload.size < RAW_FRAME_HEADER_BYTES) return null
         val buffer = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
         val width = buffer.int
@@ -217,11 +217,13 @@ internal class LibMpvThumbnailEngine(
         ) return null
         val decoded = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         decoded.copyPixelsFromBuffer(buffer)
-        if (decoded.width == THUMBNAIL_WIDTH && decoded.height == THUMBNAIL_HEIGHT) {
+        val targetWidth = outputWidth.coerceIn(THUMBNAIL_WIDTH, 960)
+        val targetHeight = (targetWidth.toLong() * height / width).toInt().coerceAtLeast(1)
+        if (decoded.width == targetWidth && decoded.height == targetHeight) {
             return decoded
         }
         return runCatching {
-            Bitmap.createScaledBitmap(decoded, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, true)
+            Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
         }.also {
             if (!decoded.isRecycled) decoded.recycle()
         }.getOrNull()
