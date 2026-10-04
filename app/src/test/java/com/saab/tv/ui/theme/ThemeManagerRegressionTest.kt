@@ -46,11 +46,15 @@ class ThemeManagerRegressionTest {
         assertEquals(ProfileEntity(id = 2, name = "Two"), app.dao.getProfileById(2))
     }
     @Test fun activeProfileThemeChangesImmediatelyAfterPersistence() {
+        runBlocking { app.dao.insertProfile(ProfileEntity(id = 1, name = "One")) }
         val chosen = DefaultThemes.ALL.last()
         vm.setCurrentProfile(1, DefaultThemes.VOID.id)
         awaitAppState { vm.currentTheme.value.id == DefaultThemes.VOID.id }
         vm.selectTheme(1, chosen.id)
-        awaitAppState { vm.currentTheme.value.id == chosen.id }
+        awaitAppState {
+            vm.currentTheme.value.id == chosen.id &&
+                runBlocking { app.dao.getProfileById(1)?.themeId == chosen.id }
+        }
     }
     @Test fun unknownThemeFallsBackAndResetReturnsToDefault() {
         vm.setCurrentProfile(1, "missing")
