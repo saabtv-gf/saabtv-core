@@ -127,7 +127,9 @@ class AccountSnapshotStore(private val context: Context, private val database: S
                 if (table == "profiles" && snapshotSchema == 51 && !row.has("skipRecap")) {
                     // Version 51 used Skip Intro as the shared IntroDB control;
                     // retain its previous recap behavior for upgraded profiles.
-                    row.addProperty("skipRecap", true)
+                    // The Room column is INTEGER. Store legacy booleans using
+                    // SQLite's 1/0 representation so restore binds the right type.
+                    row.addProperty("skipRecap", 1)
                 }
                 require(row.keySet() == columns)
                 mapPaths(row, restoring = true)
