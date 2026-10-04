@@ -92,20 +92,7 @@ jobs:
           profile: tv_1080p
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: |
-            set -euo pipefail
-
-            ./gradlew --no-daemon \
-              :app:unitRegressionCoverage \
-              :app:verifyCorePolicyRegressionCoverage \
-              :app:lintRelease \
-              -PsaabEmulatorTest=true \
-              -Dorg.gradle.jvmargs=-Xmx4g
-
-            ./gradlew --no-daemon \
-              :app:assembleRelease \
-              -Psaab32BitOnly=true \
-              -Dorg.gradle.jvmargs=-Xmx4g
+          script: ./gradlew --no-daemon :app:unitRegressionCoverage :app:verifyCorePolicyRegressionCoverage :app:lintRelease -PsaabEmulatorTest=true -Dorg.gradle.jvmargs=-Xmx4g && ./gradlew --no-daemon :app:assembleRelease -Psaab32BitOnly=true -Dorg.gradle.jvmargs=-Xmx4g
 
       - name: Retain Regression Reports
         if: always()
