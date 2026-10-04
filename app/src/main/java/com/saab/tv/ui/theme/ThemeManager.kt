@@ -15,12 +15,15 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 
 @HiltViewModel
 class ThemeManager @Inject constructor(
     private val dao: AddonDao
 ) : ViewModel() {
+
+    private val themeRequest = AtomicLong()
 
     // Current profile ID for theme resolution
     private val _currentProfileId = MutableStateFlow<Int?>(null)
@@ -58,15 +61,20 @@ class ThemeManager @Inject constructor(
      * Set the current profile to resolve its theme
      */
     fun resetTheme() {
+        themeRequest.incrementAndGet()
         _currentProfileId.value = null
         _currentTheme.value = DefaultThemes.VOID
     }
 
     fun setCurrentProfile(profileId: Int, themeId: String) {
         _currentProfileId.value = profileId
+        val request = themeRequest.incrementAndGet()
+        _currentTheme.value = DefaultThemes.getById(themeId)
         viewModelScope.launch {
             val theme = dao.getThemeById(themeId) ?: DefaultThemes.getById(themeId)
-            _currentTheme.value = theme
+            if (themeRequest.get() == request && _currentProfileId.value == profileId) {
+                _currentTheme.value = theme
+            }
         }
     }
 
@@ -74,13 +82,18 @@ class ThemeManager @Inject constructor(
      * Assign a theme to a profile
      */
     fun selectTheme(profileId: Int, themeId: String) {
+        val request = if (_currentProfileId.value == profileId) {
+            themeRequest.incrementAndGet().also {
+                _currentTheme.value = DefaultThemes.getById(themeId)
+            }
+        } else null
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             val profile = dao.getProfileById(profileId)
             if (profile != null) {
                 dao.insertProfile(profile.copy(themeId = themeId))
             }
             // Update current theme if this is the active profile
-            if (_currentProfileId.value == profileId) {
+            if (request != null && themeRequest.get() == request && _currentProfileId.value == profileId) {
                 val theme = dao.getThemeById(themeId) ?: DefaultThemes.getById(themeId)
                 _currentTheme.value = theme
             }
