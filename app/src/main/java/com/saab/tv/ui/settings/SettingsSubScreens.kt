@@ -407,9 +407,17 @@ fun PlaybackSettings(
             // SKIP INTRO
             SettingToggleRow(
                 label = "Skip Intro",
-                subtitle = "Show skip buttons for IntroDB intro and recap segments",
+                subtitle = "Show a skip button for IntroDB intro segments",
                 isChecked = currentProfile.skipIntro,
                 onCheckedChange = { viewModel.updateSkipIntro(currentProfile.id, it) },
+                onBack = onGoBack
+            )
+
+            SettingToggleRow(
+                label = "Skip Recap",
+                subtitle = "Show a skip button for IntroDB recap segments",
+                isChecked = currentProfile.skipRecap,
+                onCheckedChange = { viewModel.updateSkipRecap(currentProfile.id, it) },
                 onBack = onGoBack
             )
 

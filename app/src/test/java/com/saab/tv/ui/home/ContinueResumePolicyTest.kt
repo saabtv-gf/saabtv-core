@@ -10,9 +10,9 @@ class ContinueResumePolicyTest {
         position = position, duration = 2_700_000, lastWatched = time, type = "series")
     @Test fun selectsMostRecentEpisodeNotFirstOrFurthest() {
         val old = episode("tt123:1:8", 100, 2_000_000)
-        val current = episode("tt123:2:3", 200, 650_000)
+        val current = episode("tt123:2:5", 200, 650_000)
         val selected = ContinueResumePolicy.latestEpisode(listOf(old, current))!!
-        assertEquals("tt123:2:3", selected.id)
+        assertEquals("tt123:2:5", selected.id)
         assertEquals(650_000L, selected.position)
         assertEquals(current, ContinueResumePolicy.latestEpisode(listOf(current, old)))
     }
@@ -20,6 +20,24 @@ class ContinueResumePolicyTest {
         assertFalse(ContinueResumePolicy.mayReuseOpenStream("series"))
         assertTrue(ContinueResumePolicy.mayReuseOpenStream("movie"))
     }
+
+    @Test fun continueCardEpisodeWinsOverStaleDetailsResume() {
+        assertEquals("tt123:2:5", ContinueResumePolicy.playbackId(
+            seriesId = "tt123", continueHint = "tt123:2:5", hintIsWatched = false,
+            calculatedResumeId = "tt123:1:1"
+        ))
+    }
+
+    @Test fun invalidOrWatchedContinueHintFallsBackToCalculatedResume() {
+        val fallback = "tt123:1:1"
+        assertEquals(fallback, ContinueResumePolicy.playbackId("tt123", null, false, fallback))
+        assertEquals(fallback, ContinueResumePolicy.playbackId("tt123", "tt1234:2:5", false, fallback))
+        assertEquals(fallback, ContinueResumePolicy.playbackId("tt123", "tt123:2:5", true, fallback))
+        assertEquals(fallback, ContinueResumePolicy.playbackId("tt123", "tt123:2", false, fallback))
+        assertEquals(fallback, ContinueResumePolicy.playbackId("tt123", "tt123:x:5", false, fallback))
+        assertNull(ContinueResumePolicy.playbackId("tt123", "tt123:x:5", false, null))
+    }
+
     @Test fun prefixedIdsAndEmptyHistoryRemainSafe() {
         assertNull(ContinueResumePolicy.latestEpisode(emptyList()))
         val current = episode("tmdb:123:3:4", 200, 650_000)

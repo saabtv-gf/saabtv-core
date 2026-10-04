@@ -14,6 +14,12 @@ class TrailerPreviewPolicyTest {
     @Test fun normalCataloguesAllowHoverPreviews() {
         assertTrue(TrailerPreviewPolicy.allowsHover(false, false))
     }
+    @Test fun detailsAutoplayIsCancelledByAnyUserActivityButBrowsePreviewsAreUnaffected() {
+        assertTrue(TrailerPreviewPolicy.allowsDetailsAutoplay(false, false))
+        assertTrue(TrailerPreviewPolicy.allowsDetailsAutoplay(false, true))
+        assertTrue(TrailerPreviewPolicy.allowsDetailsAutoplay(true, false))
+        assertFalse(TrailerPreviewPolicy.allowsDetailsAutoplay(true, true))
+    }
     @Test fun disabledAndBackgroundedPreviewsNeverStart() {
         assertFalse(TrailerPreviewPolicy.canStart(false, true, "movie:a", "movie:a", null, null))
         assertFalse(TrailerPreviewPolicy.canStart(true, false, "movie:a", "movie:a", null, null))

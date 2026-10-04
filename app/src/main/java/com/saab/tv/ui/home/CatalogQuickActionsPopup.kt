@@ -92,7 +92,10 @@ fun CatalogQuickActionsPopup(
             }
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
             .border(1.dp, Color.White.copy(alpha = 0.42f), RoundedCornerShape(12.dp))
-            .padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             CardActionIcon(Icons.Default.Videocam, "Watch Trailer", onClick = {
                 onDismiss()
                 if (manualTrailerLauncher != null) {
@@ -104,13 +107,13 @@ fun CatalogQuickActionsPopup(
                     if (trailer != null) onTrailerClick(trailer.first, trailer.second)
                     else android.widget.Toast.makeText(context, "No trailer available", android.widget.Toast.LENGTH_SHORT).show()
                 }
-            }, modifier = Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
+            }, modifier = Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
             watchlisted?.let { saved ->
                 CardActionIcon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                     if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
                         viewModel.toggleWatchlist(profileId, item)
                         onDismiss()
-                    }, modifier = Modifier.weight(1f), enabled = actionsArmed, destructive = saved)
+                    }, modifier = Modifier, enabled = actionsArmed, destructive = saved)
             }
         }
     }

@@ -46,6 +46,8 @@ class PlayerScaffoldFakePlaybackInteractionTest {
         nextEpisodeInfo: NextEpisodeInfo? = null,
         onAutoplayNextEpisode: ((String?, Long, Long?) -> Unit)? = null,
         skipSegmentInfo: SkipSegmentInfo? = null,
+        skipIntroEnabled: Boolean = true,
+        skipRecapEnabled: Boolean = true,
         autoSkipIntro: Boolean = true,
         introSkipCountdownSeconds: Int = 5,
         seekThumbnailProvider: (suspend (Long) -> Bitmap?)? = null,
@@ -67,6 +69,8 @@ class PlayerScaffoldFakePlaybackInteractionTest {
                         mediaType = "movie",
                         onBack = { backCalls++ },
                         skipSegmentInfo = skipSegmentInfo,
+                        skipIntroEnabled = skipIntroEnabled,
+                        skipRecapEnabled = skipRecapEnabled,
                         autoSkipIntro = autoSkipIntro,
                         introSkipCountdownSeconds = introSkipCountdownSeconds,
                         onSourceChosen = { chosenSources += it },
@@ -182,6 +186,54 @@ class PlayerScaffoldFakePlaybackInteractionTest {
         compose.runOnIdle { assertEquals(42_000L, playback.uiState.value.positionMs) }
     }
 
+    @Test fun skipRecapSettingHidesOnlyTheRecapAction() {
+        playback.uiState.value = playback.uiState.value.copy(positionMs = 10_000L)
+        show(
+            skipSegmentInfo = SkipSegmentInfo(
+                introStartMs = 5_000L, introEndMs = 8_000L,
+                recapStartMs = 9_000L, recapEndMs = 30_000L
+            ),
+            skipIntroEnabled = true,
+            skipRecapEnabled = false,
+            autoSkipIntro = false
+        )
+
+        compose.onNodeWithText("Skip Recap").assertDoesNotExist()
+        compose.onNodeWithText("Skip Intro").assertDoesNotExist()
+    }
+
+    @Test fun skipRecapCanBeDisabledWithoutDisablingIntroSkipping() {
+        playback.uiState.value = playback.uiState.value.copy(positionMs = 6_000L)
+        show(
+            skipSegmentInfo = SkipSegmentInfo(
+                introStartMs = 5_000L, introEndMs = 8_000L,
+                recapStartMs = 5_000L, recapEndMs = 30_000L
+            ),
+            skipIntroEnabled = true,
+            skipRecapEnabled = false,
+            autoSkipIntro = false
+        )
+
+        compose.onNodeWithText("Skip Intro").assertExists()
+        compose.onNodeWithText("Skip Recap").assertDoesNotExist()
+    }
+
+    @Test fun skipIntroCanBeDisabledWithoutDisablingRecapSkipping() {
+        playback.uiState.value = playback.uiState.value.copy(positionMs = 10_000L)
+        show(
+            skipSegmentInfo = SkipSegmentInfo(
+                introStartMs = 5_000L, introEndMs = 8_000L,
+                recapStartMs = 9_000L, recapEndMs = 30_000L
+            ),
+            skipIntroEnabled = false,
+            skipRecapEnabled = true,
+            autoSkipIntro = false
+        )
+
+        compose.onNodeWithText("Skip Intro").assertDoesNotExist()
+        compose.onNodeWithText("Skip Recap").assertExists()
+    }
+
     @Test fun introDbRecapAutoSkipsWithTheSharedCountdownAndWaitsWhilePaused() {
         playback.uiState.value = playback.uiState.value.copy(positionMs = 10_000L, isPlaying = false)
         compose.mainClock.autoAdvance = false
@@ -222,6 +274,7 @@ class PlayerScaffoldFakePlaybackInteractionTest {
             }
         )
 
+        compose.onNodeWithText("NEXT EPISODE IN", substring = true).assertDoesNotExist()
         compose.onNodeWithText("Play Next Episode")
             .performSemanticsAction(SemanticsActions.RequestFocus)
             .performKeyInput { pressKey(Key.DirectionCenter) }

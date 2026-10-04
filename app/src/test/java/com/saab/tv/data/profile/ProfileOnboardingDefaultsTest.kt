@@ -12,6 +12,7 @@ class ProfileOnboardingDefaultsTest {
         assertEquals(30, profile.seekThumbnailIntervalSeconds)
         assertTrue(profile.seekThumbnailsEnabled && profile.rememberSourceSelection && profile.autoSelectSource)
         assertTrue(profile.autoSkipIntro && profile.skipIntro && profile.autoplayNextEpisode)
+        assertTrue(profile.skipRecap)
         assertEquals("introdb", profile.autoplayThresholdMode)
         assertEquals(5, profile.introSkipCountdownSeconds)
         assertEquals(5, profile.outroSkipCountdownSeconds)

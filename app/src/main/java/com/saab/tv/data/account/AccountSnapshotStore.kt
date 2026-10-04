@@ -16,6 +16,8 @@ class AccountSnapshotStore(private val context: Context, private val database: S
     companion object {
         val TABLES = listOf("profiles", "themes", "addons", "catalog_configs", "hub_rows", "hub_row_items",
             "watchlist", "watch_history", "series_next_up")
+        private const val SNAPSHOT_SCHEMA = 52
+        private const val MIN_SUPPORTED_SNAPSHOT_SCHEMA = 51
         const val MAX_BYTES = 14 * 1024 * 1024
         private val PREFERENCES = listOf("profile_configuration_prefs", "source_selection_prefs",
             "playback_track_selection_prefs", "playback_diagnostics_settings")
@@ -70,7 +72,7 @@ class AccountSnapshotStore(private val context: Context, private val database: S
         }
         val snapshot = JsonObject().apply {
             addProperty("format", 1)
-            addProperty("schema", 51)
+            addProperty("schema", SNAPSHOT_SCHEMA)
             addProperty("userId", AccountStorage.userId(context))
             add("tables", tables); add("preferences", prefs); add("files", files)
         }
@@ -82,7 +84,10 @@ class AccountSnapshotStore(private val context: Context, private val database: S
     fun restore(bytes: ByteArray) {
         require(bytes.size <= MAX_BYTES)
         val snapshot = JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject
-        require(snapshot.get("format").asInt == 1 && snapshot.get("schema").asInt == 51) { "Unsupported account backup version." }
+        val snapshotSchema = snapshot.get("schema")?.asInt ?: 0
+        require(snapshot.get("format").asInt == 1 && snapshotSchema in MIN_SUPPORTED_SNAPSHOT_SCHEMA..SNAPSHOT_SCHEMA) {
+            "Unsupported account backup version."
+        }
         require(snapshot.get("userId").asString == AccountStorage.userId(context)) { "Account backup belongs to another user." }
         val tables = snapshot.getAsJsonObject("tables")
         require(tables.keySet() == TABLES.toSet())
@@ -118,9 +123,15 @@ class AccountSnapshotStore(private val context: Context, private val database: S
             val columns = mutableSetOf<String>()
             sql.query("PRAGMA table_info(`$table`)").use { while (it.moveToNext()) columns.add(it.getString(1)) }
             tables.getAsJsonArray(table).forEach {
-                require(it.asJsonObject.keySet() == columns)
-                mapPaths(it, restoring = true)
-                it.asJsonObject.entrySet().forEach { (_, value) -> require(value.isJsonNull || value.isJsonPrimitive) }
+                val row = it.asJsonObject
+                if (table == "profiles" && snapshotSchema == 51 && !row.has("skipRecap")) {
+                    // Version 51 used Skip Intro as the shared IntroDB control;
+                    // retain its previous recap behavior for upgraded profiles.
+                    row.addProperty("skipRecap", true)
+                }
+                require(row.keySet() == columns)
+                mapPaths(row, restoring = true)
+                row.entrySet().forEach { (_, value) -> require(value.isJsonNull || value.isJsonPrimitive) }
             }
         }
         decodedFiles.forEach { (file, data) ->

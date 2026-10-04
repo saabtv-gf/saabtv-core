@@ -8,7 +8,7 @@ import java.util.zip.GZIPOutputStream
 
 class AccountSyncCodecTest {
     private fun snapshot() = JsonParser.parseString("""{
-        "format":1,"schema":51,"userId":"test-user","changedAt":42,
+        "format":1,"schema":52,"userId":"test-user","changedAt":42,
         "tables":{"profiles":[{"id":1}],"watch_history":[
           {"profileId":1,"id":"episode:1","position":100},
           {"profileId":1,"id":"episode:2","position":200}]},

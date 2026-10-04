@@ -67,6 +67,7 @@ data class ProfileEntity(
     val sourceLanguagePriority2: String = "te",
     val sourceLanguagePriority3: String = "hi",
     val skipIntro: Boolean = true,
+    val skipRecap: Boolean = true,
     val autoSkipIntro: Boolean = true,
     val introSkipCountdownSeconds: Int = 5,
     val outroSkipCountdownSeconds: Int = 5,

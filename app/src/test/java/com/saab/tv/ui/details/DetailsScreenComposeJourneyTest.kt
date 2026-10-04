@@ -6,6 +6,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.model.ProfileEntity
+import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.model.AddonEntity
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.data.model.stremio.MetaVideo
@@ -15,6 +16,7 @@ import com.saab.tv.testing.awaitAppState
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -35,6 +37,7 @@ class DetailsScreenComposeJourneyTest {
     private lateinit var fixture: FeatureFixture
     private lateinit var detailsViewModel: DetailsViewModel
     private lateinit var homeViewModel: com.saab.tv.ui.home.HomeViewModel
+    private var startedPlaybackId: String? = null
 
     @Before fun setUp() = runBlocking {
         fixture = FeatureFixture(RuntimeEnvironment.getApplication())
@@ -94,7 +97,40 @@ class DetailsScreenComposeJourneyTest {
         assertTrue(detailsViewModel.state.value.availableStreams.any { it.url == "https://fixture.invalid/episode-2" })
     }
 
-    private fun showDetails(type: String, id: String) {
+    @Test fun continueResumeHintPlaysTheSelectedSeasonAndEpisodeInsteadOfStaleDetailsState() = runBlocking {
+        val seriesId = "tt-detail-resume-series"
+        val continueEpisode = "$seriesId:2:5"
+        fixture.api.metadata[seriesId] = MetaItem(seriesId, "series", "Resume Series", videos = listOf(
+            MetaVideo(id = "$seriesId:1:1", season = 1, episode = 1, title = "Pilot"),
+            MetaVideo(id = continueEpisode, season = 2, episode = 5, title = "Current Episode")
+        ))
+        fixture.api.streams[continueEpisode] = listOf(
+            Stream(url = "https://fixture.invalid/season-2-episode-5", title = "1080p English")
+        )
+        fixture.dao.updateProfile(fixture.dao.getProfileById(71)!!.copy(sourceSeasonPacksOnly = false))
+        fixture.dao.insertHistory(WatchHistoryEntity(
+            profileId = 71, id = "$seriesId:1:1", title = "Resume Series", poster = null,
+            position = 400_000, duration = 1_800_000, lastWatched = 200, type = "series"
+        ))
+        fixture.dao.insertHistory(WatchHistoryEntity(
+            profileId = 71, id = continueEpisode, title = "Resume Series", poster = null,
+            position = 250_000, duration = 1_800_000, lastWatched = 100, type = "series"
+        ))
+
+        showDetails("series", seriesId, autoStartPlayback = true, resumePlaybackHint = continueEpisode)
+        awaitAppState { startedPlaybackId == continueEpisode }
+
+        assertEquals(continueEpisode, startedPlaybackId)
+        assertTrue(fixture.api.calls.any { it.contains("/stream/series/$continueEpisode.json") })
+    }
+
+    private fun showDetails(
+        type: String,
+        id: String,
+        autoStartPlayback: Boolean = false,
+        resumePlaybackHint: String? = null
+    ) {
+        startedPlaybackId = null
         detailsViewModel.loadDetails(type, id, addonBaseUrl = "https://fixture.invalid")
         awaitAppState {
             !detailsViewModel.state.value.isLoading && detailsViewModel.state.value.contentKey == "$type:$id"
@@ -104,7 +140,9 @@ class DetailsScreenComposeJourneyTest {
                 DetailsScreen(
                     type = type,
                     id = id,
-                    onPlayClick = { _, _, _, _, _, _, _, _, _, _ -> },
+                    autoStartPlayback = autoStartPlayback,
+                    resumePlaybackHint = resumePlaybackHint,
+                    onPlayClick = { _, playbackId, _, _, _, _, _, _, _, _ -> startedPlaybackId = playbackId },
                     viewModel = detailsViewModel,
                     trailerHostViewModel = homeViewModel
                 )

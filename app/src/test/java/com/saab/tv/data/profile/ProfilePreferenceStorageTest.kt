@@ -15,9 +15,12 @@ class ProfilePreferenceStorageTest {
     @Test fun trailerDefaultsAndExplicitSettingsRoundTrip() {
         val context = RuntimeEnvironment.getApplication()
         assertEquals(TrailerPreviewSettings(), TrailerPreviewPreferences.read(context, 1))
+        assertFalse(TrailerPreviewPreferences.read(context, 1).muted)
         val settings = TrailerPreviewSettings(false, 15, false, "fullscreen")
         TrailerPreviewPreferences.set(context, 1, settings)
         assertEquals(settings, TrailerPreviewPreferences.read(context, 1))
+        TrailerPreviewPreferences.set(context, 1, settings.copy(muted = true))
+        assertTrue(TrailerPreviewPreferences.read(context, 1).muted)
         assertEquals(TrailerPreviewSettings(), TrailerPreviewPreferences.read(context, 2))
     }
     @Test fun invalidDelayAndPresentationFallBackToSafeDefaults() {

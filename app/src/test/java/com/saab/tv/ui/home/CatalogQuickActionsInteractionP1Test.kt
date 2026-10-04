@@ -74,7 +74,14 @@ class CatalogQuickActionsInteractionP1Test {
 
         compose.onNodeWithContentDescription("Add To Watchlist").assertDoesNotExist()
         compose.mainClock.advanceTimeBy(600)
-        compose.onNodeWithContentDescription("Remove From Watchlist").assertExists().performClick()
+        compose.onNodeWithContentDescription("Remove From Watchlist").assertExists()
+        val trailerBounds = compose.onNodeWithContentDescription("Watch Trailer")
+            .fetchSemanticsNode().boundsInRoot
+        val removeBounds = compose.onNodeWithContentDescription("Remove From Watchlist")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(trailerBounds.center.y, removeBounds.center.y, 1f)
+        assertTrue(removeBounds.left >= trailerBounds.right - 2f)
+        compose.onNodeWithContentDescription("Remove From Watchlist").performClick()
         compose.waitUntil(3_000) { !runBlocking { fixture.dao.isInWatchlist(21, item.id) } }
         assertTrue(fixture.dao.isInWatchlist(22, item.id))
         compose.runOnIdle { assertEquals(1, dismissed) }

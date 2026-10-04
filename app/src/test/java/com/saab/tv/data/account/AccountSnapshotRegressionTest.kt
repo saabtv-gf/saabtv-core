@@ -46,10 +46,27 @@ class AccountSnapshotRegressionTest {
             duration = 1_000_000, lastWatched = 9_007_199_254_740_993L, type = "series", watched = false)
         db.addonDao().insertProfile(profile); db.addonDao().insertHistory(history)
         val bytes = store.capture()
+        assertEquals(52, JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject["schema"].asInt)
         db.addonDao().updateProfile(profile.copy(name = "Changed")); db.addonDao().clearWatchHistory()
         store.restore(bytes)
         assertEquals(profile, db.addonDao().getProfileById(1))
         assertEquals(history, db.addonDao().getHistoryItem(history.id))
+    }
+
+    @Test fun legacySchema51SnapshotRestoresThePreviousSkipRecapDefault() = runBlocking {
+        val profile = ProfileEntity(id = 1, name = "Legacy", skipRecap = false)
+        db.addonDao().insertProfile(profile)
+        val legacySnapshot = snapshot().apply {
+            addProperty("schema", 51)
+            getAsJsonObject("tables").getAsJsonArray("profiles")[0].asJsonObject.remove("skipRecap")
+        }
+        db.addonDao().updateProfile(profile.copy(name = "Changed"))
+
+        restore(legacySnapshot)
+
+        val restored = db.addonDao().getProfileById(1)!!
+        assertEquals("Legacy", restored.name)
+        assertTrue(restored.skipRecap)
     }
 
     @Test fun everyPortablePreferenceTypeRoundTripsAndStaleValuesAreRemoved() {

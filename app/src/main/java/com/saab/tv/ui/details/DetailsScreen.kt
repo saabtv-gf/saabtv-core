@@ -239,12 +239,17 @@ fun DetailsScreen(
             !autoStartPlayback || autoStartRequested) return@LaunchedEffect
         val readyMovie = movie ?: return@LaunchedEffect
         if (type == "series") {
-            val resumeId = state.resumePlaybackId ?: resumePlaybackHint?.takeIf { candidate ->
-                playbackIdBelongsToSeries(id, candidate) &&
-                    parseSeasonEpisodeFromPlaybackId(candidate)?.let { (season, episode) ->
-                        state.episodeProgressMap["S${season}:E${episode}"]?.watched != true
-                    } == true
-            }
+            val hintIsWatched = resumePlaybackHint?.let { candidate ->
+                parseSeasonEpisodeFromPlaybackId(candidate)?.let { (season, episode) ->
+                    state.episodeProgressMap["S${season}:E${episode}"]?.watched == true
+                } ?: false
+            } ?: false
+            val resumeId = com.saab.tv.ui.home.ContinueResumePolicy.playbackId(
+                seriesId = id,
+                continueHint = resumePlaybackHint,
+                hintIsWatched = hintIsWatched,
+                calculatedResumeId = state.resumePlaybackId
+            )
             val episode = if (resumeId != null) {
                 resolveEpisodeForPlaybackId(readyMovie.id, readyMovie.videos, resumeId)
                     ?: run {
@@ -513,14 +518,18 @@ fun DetailsScreen(
                 val firstEpisode = remember(currentMovie.id, currentMovie.videos) {
                     findFirstEpisode(currentMovie.videos)
                 }
-                val hintedResumePlaybackId = remember(type, id, resumePlaybackHint, state.resumeIsNextEpisode, state.episodeProgressMap, state.isMovieWatched) {
+                val hintedResumePlaybackId = remember(type, id, resumePlaybackHint, state.episodeProgressMap, state.isMovieWatched) {
                     when (type) {
-                        "series" -> resumePlaybackHint?.takeIf { candidate ->
-                            playbackIdBelongsToSeries(id, candidate) && !state.resumeIsNextEpisode &&
+                        "series" -> com.saab.tv.ui.home.ContinueResumePolicy.playbackId(
+                            seriesId = id,
+                            continueHint = resumePlaybackHint,
+                            hintIsWatched = resumePlaybackHint?.let { candidate ->
                                 parseSeasonEpisodeFromPlaybackId(candidate)?.let { (season, episode) ->
-                                    state.episodeProgressMap["S${season}:E${episode}"]?.watched != true
-                                } != false
-                        }
+                                    state.episodeProgressMap["S${season}:E${episode}"]?.watched == true
+                                } ?: false
+                            } ?: false,
+                            calculatedResumeId = null
+                        )
                         else -> resumePlaybackHint?.takeIf { it == id && !state.isMovieWatched }
                     }
                 }
@@ -1454,15 +1463,6 @@ private fun parseSeasonEpisodeFromPlaybackId(playbackId: String?): Pair<Int, Int
     val episode = parts.last().toIntOrNull() ?: return null
     if (season <= 0 || episode <= 0) return null
     return season to episode
-}
-
-private fun playbackIdBelongsToSeries(seriesId: String, playbackId: String): Boolean {
-    val parts = playbackId.split(":")
-    if (parts.size < 3) return playbackId == seriesId
-    val season = parts[parts.lastIndex - 1].toIntOrNull()
-    val episode = parts.last().toIntOrNull()
-    if (season == null || episode == null) return playbackId == seriesId
-    return parts.dropLast(2).joinToString(":") == seriesId
 }
 
 private val TORRENT_TRACKERS = listOf(

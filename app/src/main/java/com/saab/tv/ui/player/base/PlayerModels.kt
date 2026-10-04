@@ -104,6 +104,8 @@ data class PlaybackSettings(
     val seekThumbnailsEnabled: Boolean = true,
     val seekThumbnailIntervalSeconds: Int = 30,
     val autoplayNextEpisode: Boolean = true,
+    val skipIntroEnabled: Boolean = true,
+    val skipRecapEnabled: Boolean = true,
     val autoSkipIntro: Boolean = true,
     val introSkipCountdownSeconds: Int = 5,
     val outroSkipCountdownSeconds: Int = 5,

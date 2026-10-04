@@ -82,6 +82,7 @@ class SettingsPersistenceRegressionTest {
         change(expected.copy(autoSelectSource = false)) { vm.updateAutoSelectSource(1, false) }
         change(expected.copy(rememberSourceSelection = false)) { vm.updateRememberSourceSelection(1, false) }
         change(expected.copy(skipIntro = false)) { vm.updateSkipIntro(1, false) }
+        change(expected.copy(skipRecap = false)) { vm.updateSkipRecap(1, false) }
         change(expected.copy(autoplayThresholdMode = "smart")) { vm.updateAutoplayThresholdMode(1, "smart") }
         change(expected.copy(autoplayThresholdPercent = 97)) { vm.updateAutoplayThresholdPercent(1, 97) }
         change(expected.copy(autoplayThresholdSeconds = 90)) { vm.updateAutoplayThresholdSeconds(1, 90) }

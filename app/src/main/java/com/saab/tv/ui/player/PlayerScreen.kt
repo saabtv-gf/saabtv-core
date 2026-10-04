@@ -616,6 +616,18 @@ fun PlayerScreen(
                 existingDurationMs = null,
                 watchedThreshold = playbackSettings.watchedThresholdPercent.coerceIn(50, 99) / 100.0
             ).isCompleted
+            val transitionComponent = if (playbackSettings.autoplayThresholdMode == "smart") "Smart Next Episode" else "Autoplay Next Episode"
+            val transitionStarted = "fromEpisodeKnown=${currentPlaybackId != null} " +
+                "target=${nextEpisodeInfo?.seasonNumber}x${nextEpisodeInfo?.episodeNumber} " +
+                "sourceProvided=${sourceUrl != null} positionMs=$positionMs durationMs=$duration completed=$isCompleted"
+            com.saab.tv.AppDiagnostics.event(transitionComponent, "Episode Transition Started", transitionStarted)
+            PlaybackDiagnostics.event(
+                context,
+                diagnosticsSessionId,
+                transitionComponent,
+                "Episode Transition Started",
+                transitionStarted
+            )
             val historySave = if (isCompleted) {
                 viewModel.markCompleted(movieId, mediaType, title, poster, positionMs, duration, profileId = playbackSettings.profileId)
             } else {
@@ -629,7 +641,46 @@ fun PlayerScreen(
             }
             coroutineScope.launch {
                 historySave.join()
-                onAutoplayNextEpisode?.invoke(sourceUrl, positionMs, durationMs)
+                val transitionDispatched = "target=${nextEpisodeInfo?.seasonNumber}x${nextEpisodeInfo?.episodeNumber} " +
+                    "historySaveCancelled=${historySave.isCancelled} sourceProvided=${sourceUrl != null}"
+                com.saab.tv.AppDiagnostics.event(transitionComponent, "Episode Transition Dispatched", transitionDispatched)
+                PlaybackDiagnostics.event(
+                    context,
+                    diagnosticsSessionId,
+                    transitionComponent,
+                    "Episode Transition Dispatched",
+                    transitionDispatched
+                )
+                try {
+                    onAutoplayNextEpisode?.invoke(sourceUrl, positionMs, durationMs)
+                    com.saab.tv.AppDiagnostics.event(
+                        transitionComponent,
+                        "Episode Transition Callback Returned",
+                        "target=${nextEpisodeInfo?.seasonNumber}x${nextEpisodeInfo?.episodeNumber}"
+                    )
+                    PlaybackDiagnostics.event(
+                        context,
+                        diagnosticsSessionId,
+                        transitionComponent,
+                        "Episode Transition Callback Returned",
+                        "target=${nextEpisodeInfo?.seasonNumber}x${nextEpisodeInfo?.episodeNumber}"
+                    )
+                } catch (error: Exception) {
+                    com.saab.tv.AppDiagnostics.failure(
+                        transitionComponent,
+                        "Episode Transition Callback Failed",
+                        error
+                    )
+                    PlaybackDiagnostics.event(
+                        context,
+                        diagnosticsSessionId,
+                        transitionComponent,
+                        "Episode Transition Callback Failed",
+                        "error=${error.javaClass.simpleName}",
+                        level = "ERROR"
+                    )
+                    throw error
+                }
             }
             Unit
         }
@@ -668,6 +719,8 @@ fun PlayerScreen(
             nextEpisodeInfo = nextEpisodeInfo,
             onAutoplayNextEpisode = if (onAutoplayNextEpisode != null) transitionToNextEpisode else null,
             autoplayEnabled = playbackSettings.autoplayNextEpisode,
+            skipIntroEnabled = playbackSettings.skipIntroEnabled,
+            skipRecapEnabled = playbackSettings.skipRecapEnabled,
             autoSkipIntro = playbackSettings.autoSkipIntro,
             introSkipCountdownSeconds = playbackSettings.introSkipCountdownSeconds,
             outroSkipCountdownSeconds = playbackSettings.outroSkipCountdownSeconds,
@@ -690,7 +743,8 @@ fun PlayerScreen(
             onEpisodeSwitchSourceSelected = onEpisodeSwitchSourceSelected,
             onEpisodeSwitchDismissed = onEpisodeSwitchDismissed,
             torrentProgress = torrentProgress,
-            isTrailer = movieId.startsWith("trailer_")
+            isTrailer = movieId.startsWith("trailer_"),
+            diagnosticsSessionId = diagnosticsSessionId
         )
     }
 }

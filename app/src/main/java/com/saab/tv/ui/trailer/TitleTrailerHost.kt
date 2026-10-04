@@ -32,16 +32,23 @@ fun TitleTrailerHost(onOpen: (MetaItem) -> Unit, defaultItem: MetaItem? = null,
     val contentRequester = remember { FocusRequester() }
     var active by remember { mutableStateOf(false) }
     var activityVersion by remember(defaultItem?.id) { mutableIntStateOf(0) }
+    var userActivityDetected by remember(defaultItem?.id) { mutableStateOf(false) }
     val observeDefaultActivity by rememberUpdatedState(defaultItem != null && !active)
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().focusRequester(contentRequester).onPreviewKeyEvent {
-            if (observeDefaultActivity && it.type == KeyEventType.KeyDown) activityVersion++
+            if (observeDefaultActivity && it.type == KeyEventType.KeyDown) {
+                activityVersion++
+                userActivityDetected = true
+            }
             false // Observe activity without consuming the page's input.
         }.pointerInput(defaultItem?.id) {
             awaitPointerEventScope {
                 while (true) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
-                    if (observeDefaultActivity && event.changes.any { it.pressed }) activityVersion++
+                    if (observeDefaultActivity && event.changes.any { it.pressed }) {
+                        activityVersion++
+                        userActivityDetected = true
+                    }
                 }
             }
         }) {
@@ -53,7 +60,8 @@ fun TitleTrailerHost(onOpen: (MetaItem) -> Unit, defaultItem: MetaItem? = null,
         val settings = rememberTrailerPreviewSettings(profileId ?: 0)
         BackdropTrailerPreview(focusedItem = item ?: defaultItem, catalog = emptyList(), profileId = profileId ?: 0,
             settings = if (defaultItem != null) settings.copy(presentation = "fullscreen") else settings,
-            enabled = !LocalManualTrailerActive.current && profileId != null && defaultEnabled,
+            enabled = !LocalManualTrailerActive.current && profileId != null && defaultEnabled &&
+                TrailerPreviewPolicy.allowsDetailsAutoplay(defaultItem != null, userActivityDetected),
             resolveTrailer = resolvedModel::trailerFor, onActiveChanged = { active = it }, onOpen = onOpen,
             onDismiss = { runCatching { requester?.requestFocus() ?: contentRequester.requestFocus() } },
             activityVersion = activityVersion,

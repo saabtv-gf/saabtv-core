@@ -68,4 +68,17 @@ class PlaybackSettingsComposeInteractionTest {
         compose.waitUntil(5_000) { runBlocking { app.dao.getProfileById(1)?.assRendererEnabled == true } }
         assertEquals(true, runBlocking { app.dao.getProfileById(1)?.assRendererEnabled })
     }
+
+    @Test fun skipRecapHasAnIndependentPlaybackSetting() {
+        compose.onNode(hasText("Episodes & Auto-Skip", substring = true) and hasClickAction())
+            .performScrollTo().performClick()
+        compose.onNodeWithText("Skip Recap").performScrollTo().performClick()
+
+        compose.waitUntil(5_000) {
+            runBlocking { app.dao.getProfileById(1)?.skipRecap == false }
+        }
+        val saved = runBlocking { app.dao.getProfileById(1)!! }
+        assertEquals(true, saved.skipIntro)
+        assertEquals(false, saved.skipRecap)
+    }
 }

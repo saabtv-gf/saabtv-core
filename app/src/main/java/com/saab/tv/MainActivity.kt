@@ -1830,12 +1830,13 @@ class MainActivity : ComponentActivity() {
 
                             // Fetch skip intro/outro segments from IntroDB
                             val skipIntroEnabled = currentProfile?.skipIntro == true
+                            val skipRecapEnabled = currentProfile?.skipRecap == true
                             val autoplayEnabled = currentProfile?.autoplayNextEpisode == true
                             val needIntroDB = isSeries && (
-                                skipIntroEnabled || (autoplayEnabled && nextEpisode != null)
+                                skipIntroEnabled || skipRecapEnabled || (autoplayEnabled && nextEpisode != null)
                             )
                             var skipSegmentInfo by remember { mutableStateOf<SkipSegmentInfo?>(null) }
-                            LaunchedEffect(selectedPlaybackId, needIntroDB, skipIntroEnabled, playbackStarted) {
+                            LaunchedEffect(selectedPlaybackId, needIntroDB, skipIntroEnabled, skipRecapEnabled, playbackStarted) {
                                 skipSegmentInfo = null
                                 if (!needIntroDB || !playbackStarted) return@LaunchedEffect
                                 if (!isSeries || selectedPlaybackId.isBlank()) return@LaunchedEffect
@@ -1849,8 +1850,8 @@ class MainActivity : ComponentActivity() {
                                     skipSegmentInfo = SkipSegmentInfo(
                                         introStartMs = if (skipIntroEnabled) response.intro?.start_ms else null,
                                         introEndMs = if (skipIntroEnabled) response.intro?.end_ms else null,
-                                        recapStartMs = if (skipIntroEnabled) response.recap?.start_ms else null,
-                                        recapEndMs = if (skipIntroEnabled) response.recap?.end_ms else null,
+                                        recapStartMs = if (skipRecapEnabled) response.recap?.start_ms else null,
+                                        recapEndMs = if (skipRecapEnabled) response.recap?.end_ms else null,
                                         outroStartMs = response.outro?.start_ms,
                                         outroEndMs = response.outro?.end_ms
                                     )
@@ -1908,6 +1909,8 @@ class MainActivity : ComponentActivity() {
                                     seekThumbnailsEnabled = currentProfile?.seekThumbnailsEnabled ?: true,
                                     seekThumbnailIntervalSeconds = currentProfile?.seekTimeIntervalSeconds ?: 10,
                                     autoplayNextEpisode = currentProfile?.autoplayNextEpisode ?: false,
+                                    skipIntroEnabled = currentProfile?.skipIntro ?: true,
+                                    skipRecapEnabled = currentProfile?.skipRecap ?: true,
                                     autoSkipIntro = currentProfile?.autoSkipIntro ?: true,
                                     introSkipCountdownSeconds = currentProfile?.autoSkipCountdownSeconds ?: 5,
                                     outroSkipCountdownSeconds = currentProfile?.autoSkipCountdownSeconds ?: 5,

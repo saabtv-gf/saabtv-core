@@ -228,8 +228,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 109
-        versionName = "0.1.105-beta"
+        versionCode = 110
+        versionName = "0.1.106-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")

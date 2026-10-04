@@ -416,13 +416,17 @@ fun HomeScreen(
               ) {
                 if (confirmClear) {
                     Text("Clear progress?", style = MaterialTheme.typography.bodySmall, color = Color.White)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         CardActionIcon(Icons.Default.Delete, "Clear Progress", {
                             viewModel.clearContinueProgress(profileId, item)
                             dismissQuickActions()
-                        }, Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester, destructive = true)
+                        }, Modifier, enabled = actionsArmed, focusRequester = firstActionRequester, destructive = true)
                         CardActionIcon(Icons.Default.Close, "Cancel", { confirmClear = false },
-                            Modifier.weight(1f), enabled = actionsArmed)
+                            Modifier, enabled = actionsArmed)
                     }
                 } else if (isContinue) {
                     if (item.type == "series") {
@@ -438,14 +442,22 @@ fun HomeScreen(
                     pausedFrame?.let { bitmap ->
                         Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Paused scene", modifier = Modifier.fillMaxWidth().height(70.dp), contentScale = ContentScale.Fit)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         CardActionIcon(Icons.Default.PlayArrow, "Resume", { longPressedItem = null; onContinueClick(item) },
-                            Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
+                            Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
                         CardActionIcon(Icons.Default.Delete, "Clear Progress", { confirmClear = true },
-                            Modifier.weight(1f), enabled = actionsArmed, destructive = true)
+                            Modifier, enabled = actionsArmed, destructive = true)
                     }
                 } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                     CardActionIcon(Icons.Default.Videocam, "Watch Trailer", onClick = {
                         if (manualTrailerLauncher != null) {
                             manualTrailerLauncher(item, null, null)
@@ -461,13 +473,13 @@ fun HomeScreen(
                             else android.widget.Toast.makeText(homeContext, "No trailer available", android.widget.Toast.LENGTH_SHORT).show()
                         }
                         longPressedItem = null
-                    }, modifier = Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
+                    }, modifier = Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
                     watchlisted?.let { saved ->
                         CardActionIcon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
                             viewModel.toggleWatchlist(profileId, item)
                             dismissQuickActions()
-                        }, modifier = Modifier.weight(1f), enabled = actionsArmed, destructive = saved)
+                        }, modifier = Modifier, enabled = actionsArmed, destructive = saved)
                     }
                     }
                 }

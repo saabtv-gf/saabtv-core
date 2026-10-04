@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.saab.tv.di.MIGRATION_47_48
 import com.saab.tv.di.MIGRATION_48_49
 import com.saab.tv.di.MIGRATION_49_50
+import com.saab.tv.di.MIGRATION_51_52
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -64,6 +65,25 @@ class DatabaseMigrationTest {
                 check(defaults["introSkipCountdownSeconds"] == "5")
                 check(defaults["outroSkipCountdownSeconds"] == "5")
             }
+        }
+    }
+
+    @Test
+    fun migrate51To52AddsSkipRecapWithCompatibleDefault() {
+        val database = helper.createDatabase(TEST_DATABASE, 51)
+        try {
+            MIGRATION_51_52.migrate(database)
+            database.query("PRAGMA table_info(profiles)").use { cursor ->
+                var defaultValue: String? = null
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "skipRecap") {
+                        defaultValue = cursor.getString(cursor.getColumnIndexOrThrow("dflt_value"))
+                    }
+                }
+                check(defaultValue == "1")
+            }
+        } finally {
+            database.close()
         }
     }
 }

@@ -156,6 +156,13 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun updateSkipRecap(profileId: Int, enabled: Boolean) {
+        viewModelScope.launch(mutationDispatcher + NonCancellable) {
+            val profile = dao.getProfileById(profileId)
+            if (profile != null) dao.insertProfile(profile.copy(skipRecap = enabled))
+        }
+    }
+
 
     fun updateSourceLanguagePriority(profileId: Int, priority: Int, language: String) {
         viewModelScope.launch(mutationDispatcher + NonCancellable) {

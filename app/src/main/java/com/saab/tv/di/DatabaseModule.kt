@@ -266,6 +266,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39, MIGRATION_39_40, MIGRATION_40_41, MIGRATION_41_42, MIGRATION_42_43, MIGRATION_43_44, MIGRATION_44_45, MIGRATION_45_46, MIGRATION_46_47, MIGRATION_47_48, MIGRATION_48_49)
             .addMigrations(MIGRATION_49_50)
             .addMigrations(MIGRATION_50_51)
+            .addMigrations(MIGRATION_51_52)
             .build()
     }
 
@@ -291,5 +292,12 @@ internal val MIGRATION_50_51 = object : Migration(50, 51) {
         // The seek step and preview cadence are now one setting. Preserve the
         // user's seek value as the authoritative value during migration.
         db.execSQL("UPDATE profiles SET seekThumbnailIntervalSeconds = seekTimeIntervalSeconds")
+    }
+}
+
+internal val MIGRATION_51_52 = object : Migration(51, 52) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Preserve the previous shared IntroDB behavior for upgraded profiles.
+        db.execSQL("ALTER TABLE profiles ADD COLUMN skipRecap INTEGER NOT NULL DEFAULT 1")
     }
 }

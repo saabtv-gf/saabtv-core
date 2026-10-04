@@ -82,6 +82,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
@@ -99,6 +100,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -190,6 +192,8 @@ fun BasePlayerScaffold(
     nextEpisodeInfo: NextEpisodeInfo? = null,
     onAutoplayNextEpisode: ((currentSourceUrl: String?, positionMs: Long, durationMs: Long?) -> Unit)? = null,
     autoplayEnabled: Boolean = true,
+    skipIntroEnabled: Boolean = true,
+    skipRecapEnabled: Boolean = true,
     autoSkipIntro: Boolean = true,
     introSkipCountdownSeconds: Int = 5,
     outroSkipCountdownSeconds: Int = 5,
@@ -208,8 +212,10 @@ fun BasePlayerScaffold(
     onEpisodeSwitchDismissed: (() -> Unit)? = null,
     torrentProgress: TorrentProgress? = null,
     isTrailer: Boolean = false,
+    diagnosticsSessionId: String = "",
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val uiState by playbackController.uiState.collectAsStateWithLifecycle()
     val seekTimeIntervalMs = SeekIntervalPolicy.intervalMs(seekTimeIntervalSeconds)
     val sources by playbackController.sourceOptions.collectAsStateWithLifecycle()
@@ -273,6 +279,17 @@ fun BasePlayerScaffold(
 
     val triggerNextEpisode = {
         if (!nextEpisodeTriggered && onAutoplayNextEpisode != null) {
+            val details = "positionMs=${uiState.positionMs} durationMs=${uiState.durationMs} " +
+                "sourceAvailable=${currentSourceUrl != null} ended=${uiState.isEnded}"
+            val component = if (autoplayThresholdMode == "smart") "Smart Next Episode" else "Autoplay Next Episode"
+            com.saab.tv.AppDiagnostics.event(component, "Play Next Activated", details)
+            com.saab.tv.data.player.PlaybackDiagnostics.event(
+                context = context,
+                sessionId = diagnosticsSessionId,
+                component = component,
+                event = "Play Next Activated",
+                details = details
+            )
             nextEpisodeTriggered = true
             countdownActive = false
             onAutoplayNextEpisode.invoke(
@@ -284,15 +301,49 @@ fun BasePlayerScaffold(
     }
 
     val validOutro = skipSegmentInfo?.outroStartMs?.let { it > 0L && it < uiState.durationMs } == true
+    val smartFallbackGateReason = SmartCreditsPolicy.scanGateReason(
+        autoplayEnabled = autoplayEnabled,
+        thresholdMode = autoplayThresholdMode,
+        hasValidOutro = validOutro,
+        hasNextEpisode = nextEpisodeInfo != null,
+        hasTransitionCallback = onAutoplayNextEpisode != null,
+        isTrailer = isTrailer,
+        hasPlaybackError = hasError,
+        hasFrameProvider = seekThumbnailProvider != null,
+        durationMs = uiState.durationMs
+    )
+    val smartFallbackEnabled = smartFallbackGateReason == "eligible"
     val smartPromptMs = rememberSmartCreditsPrompt(
-        enabled = autoplayEnabled && autoplayThresholdMode == "smart" && !validOutro &&
-            nextEpisodeInfo != null && !isTrailer && !hasError,
+        enabled = smartFallbackEnabled,
         cacheKey = seekThumbnailCacheKey,
         durationMs = uiState.durationMs,
         intervalSeconds = seekThumbnailIntervalSeconds,
         provider = seekThumbnailProvider,
-        requestMissingFrame = onSeekPreviewPosition
+        requestMissingFrame = onSeekPreviewPosition,
+        diagnosticsSessionId = diagnosticsSessionId
     )
+    LaunchedEffect(
+        diagnosticsSessionId,
+        smartFallbackEnabled,
+        smartFallbackGateReason,
+        seekThumbnailIntervalSeconds,
+        uiState.durationMs,
+        nextEpisodeInfo != null
+    ) {
+        if (autoplayThresholdMode != "smart") return@LaunchedEffect
+        val details = "eligible=$smartFallbackEnabled reason=$smartFallbackGateReason " +
+            "durationMs=${uiState.durationMs} intervalSeconds=$seekThumbnailIntervalSeconds " +
+            "frameProvider=${seekThumbnailProvider != null} nextEpisode=${nextEpisodeInfo != null} " +
+            "transitionCallback=${onAutoplayNextEpisode != null}"
+        com.saab.tv.AppDiagnostics.event("Smart Next Episode", "Fallback Gate", details)
+        com.saab.tv.data.player.PlaybackDiagnostics.event(
+            context = context,
+            sessionId = diagnosticsSessionId,
+            component = "Smart Next Episode",
+            event = "Fallback Gate",
+            details = details
+        )
+    }
     val isNearCompletion = remember(uiState.positionMs, uiState.durationMs, uiState.isEnded, skipSegmentInfo, autoplayThresholdMode, autoplayThresholdPercent, autoplayThresholdSeconds, hasError, smartPromptMs) {
         if (hasError) return@remember false
         val duration = uiState.durationMs
@@ -310,16 +361,16 @@ fun BasePlayerScaffold(
     }
 
     // Skip intro visibility — never show during error
-    val showSkipIntro = remember(uiState.positionMs, skipSegmentInfo, hasError, introSkipped) {
-        if (hasError) return@remember false
+    val showSkipIntro = remember(uiState.positionMs, skipSegmentInfo, hasError, introSkipped, skipIntroEnabled) {
+        if (hasError || !skipIntroEnabled) return@remember false
         val info = skipSegmentInfo ?: return@remember false
         val start = info.introStartMs ?: return@remember false
         val end = info.introEndMs ?: return@remember false
         !introSkipped && start >= 0 && end > start && uiState.positionMs >= start && uiState.positionMs < end
     }
 
-    val showSkipRecap = remember(uiState.positionMs, skipSegmentInfo, hasError, recapSkipped, showSkipIntro) {
-        if (hasError || showSkipIntro) return@remember false
+    val showSkipRecap = remember(uiState.positionMs, skipSegmentInfo, hasError, recapSkipped, showSkipIntro, skipRecapEnabled) {
+        if (hasError || !skipRecapEnabled || showSkipIntro) return@remember false
         val info = skipSegmentInfo ?: return@remember false
         val start = info.recapStartMs ?: return@remember false
         val end = info.recapEndMs ?: return@remember false
@@ -386,6 +437,30 @@ fun BasePlayerScaffold(
         onAutoplayNextEpisode != null &&
         uiState.errorMessage.isNullOrBlank() &&
         (uiState.isEnded || isInOutro || isNearCompletion)
+
+    LaunchedEffect(diagnosticsSessionId, smartPromptMs, isNearCompletion, showPlayNextButton, countdownActive) {
+        if (autoplayThresholdMode != "smart" && smartPromptMs == null) return@LaunchedEffect
+        val reason = when {
+            !smartFallbackEnabled -> smartFallbackGateReason
+            smartPromptMs == null -> "waiting_for_credit_frames_or_ocr"
+            uiState.positionMs < smartPromptMs -> "before_detected_credits_window"
+            !showPlayNextButton && !countdownActive -> "threshold_reached_but_action_not_visible"
+            countdownActive -> "countdown_active"
+            showPlayNextButton -> "manual_action_visible"
+            else -> "not_offered"
+        }
+        val details = "reason=$reason positionMs=${uiState.positionMs} durationMs=${uiState.durationMs} " +
+            "promptMs=$smartPromptMs nearCompletion=$isNearCompletion " +
+            "manualButton=$showPlayNextButton countdown=$countdownActive ended=${uiState.isEnded}"
+        com.saab.tv.AppDiagnostics.event("Smart Next Episode", "Play Next State", details)
+        com.saab.tv.data.player.PlaybackDiagnostics.event(
+            context = context,
+            sessionId = diagnosticsSessionId,
+            component = "Smart Next Episode",
+            event = "Play Next State",
+            details = details
+        )
+    }
 
     // Start countdown when near completion
     LaunchedEffect(shouldShowNextEpisode, outroSkipCountdownSeconds) {
@@ -1199,11 +1274,11 @@ fun BasePlayerScaffold(
                 .padding(bottom = buttonBottomPadding)
         ) {
             SkipIntroButton(
-                label = when {
-                    recapCountdownActive -> "Skip Recap In ${recapCountdown}s · Back To Cancel"
-                    showSkipRecap -> "Skip Recap"
-                    introCountdownActive -> "Skip Intro In ${introCountdown}s · Back To Cancel"
-                    else -> "Skip Intro"
+                label = if (showSkipRecap) "Skip Recap" else "Skip Intro",
+                progress = when {
+                    recapCountdownActive -> (1f - recapCountdown / introSkipCountdownSeconds.toFloat()).coerceIn(0f, 1f)
+                    introCountdownActive -> (1f - introCountdown / introSkipCountdownSeconds.toFloat()).coerceIn(0f, 1f)
+                    else -> null
                 },
                 onSkip = {
                     val endMs = if (showSkipRecap) skipSegmentInfo?.recapEndMs else skipSegmentInfo?.introEndMs
@@ -1226,10 +1301,9 @@ fun BasePlayerScaffold(
                 .align(Alignment.BottomEnd)
                 .padding(bottom = buttonBottomPadding)
         ) {
-            nextEpisodeInfo?.let { info ->
+            nextEpisodeInfo?.let {
                 NextEpisodeButton(
-                    info = info,
-                    countdownSeconds = countdownSeconds,
+                    progress = (1f - countdownSeconds / outroSkipCountdownSeconds.toFloat()).coerceIn(0f, 1f),
                     onPlayNow = triggerNextEpisode,
                     focusRequester = nextEpisodeFocusRequester
                 )
@@ -1256,63 +1330,11 @@ fun BasePlayerScaffold(
 
 @Composable
 private fun NextEpisodeButton(
-    info: NextEpisodeInfo,
-    countdownSeconds: Int,
+    progress: Float,
     onPlayNow: () -> Unit,
     focusRequester: FocusRequester = remember { FocusRequester() }
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f, label = "nextEpScale")
-    val accentColor = MaterialTheme.colorScheme.primary
-
-    LaunchedEffect(Unit) {
-        runCatching { focusRequester.requestFocus() }
-    }
-
-    Column(
-        modifier = Modifier.padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Row(
-            modifier = Modifier
-                .height(40.dp)
-                .scale(scale)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.White.copy(0.07f))
-                .border(
-                    if (isFocused) 2.dp else 1.dp,
-                    if (isFocused) accentColor else Color.White.copy(0.15f),
-                    RoundedCornerShape(8.dp)
-                )
-                .clickable(interactionSource = interactionSource, indication = null) { onPlayNow() }
-                .focusRequester(focusRequester)
-                .focusable(interactionSource = interactionSource)
-                .padding(horizontal = 14.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.SkipNext,
-                contentDescription = null,
-                tint = accentColor,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                "NEXT EPISODE IN $countdownSeconds...",
-                color = if (isFocused) accentColor else Color.White.copy(0.8f),
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                maxLines = 1
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = "Press back to cancel",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(0.5f)
-        )
-    }
+    PlayerActionButton("Play Next Episode", progress, onPlayNow, focusRequester)
 }
 
 @Composable
@@ -1321,81 +1343,59 @@ private fun PlayNextEpisodeButton(
     label: String,
     focusRequester: FocusRequester = remember { FocusRequester() }
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f, label = "playNextScale")
-    val accentColor = MaterialTheme.colorScheme.primary
-
-    LaunchedEffect(Unit) {
-        runCatching { focusRequester.requestFocus() }
-    }
-
-    Row(
-        modifier = Modifier
-            .padding(32.dp)
-            .height(40.dp)
-            .scale(scale)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.White.copy(0.07f))
-            .border(
-                if (isFocused) 2.dp else 1.dp,
-                if (isFocused) accentColor else Color.White.copy(0.15f),
-                RoundedCornerShape(8.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null) { onPlayNext() }
-            .focusRequester(focusRequester)
-            .focusable(interactionSource = interactionSource)
-            .padding(horizontal = 14.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            Icons.Default.SkipNext,
-            contentDescription = null,
-            tint = accentColor,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-            label,
-            color = if (isFocused) accentColor else Color.White.copy(0.8f),
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-            maxLines = 1
-        )
-    }
+    PlayerActionButton(label, null, onPlayNext, focusRequester)
 }
 
 @Composable
 private fun SkipIntroButton(
     onSkip: () -> Unit,
     label: String = "Skip Intro",
+    progress: Float? = null,
     focusRequester: FocusRequester = remember { FocusRequester() }
+) {
+    PlayerActionButton(label, progress, onSkip, focusRequester)
+}
+
+@Composable
+private fun PlayerActionButton(
+    label: String,
+    progress: Float?,
+    onClick: () -> Unit,
+    focusRequester: FocusRequester
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f, label = "skipIntroScale")
+    val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "playerActionScale")
     val accentColor = MaterialTheme.colorScheme.primary
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(focusRequester) {
         runCatching { focusRequester.requestFocus() }
     }
 
     Row(
         modifier = Modifier
-            .padding(32.dp)
-            .height(40.dp)
+            .padding(end = 24.dp)
+            .height(38.dp)
             .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(0.07f))
+            .drawBehind {
+                val fraction = progress?.coerceIn(0f, 1f) ?: 0f
+                if (fraction > 0f) drawRoundRect(
+                    color = accentColor.copy(alpha = if (isFocused) 0.32f else 0.24f),
+                    size = androidx.compose.ui.geometry.Size(size.width * fraction, size.height),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f)
+                )
+            }
             .border(
                 if (isFocused) 2.dp else 1.dp,
                 if (isFocused) accentColor else Color.White.copy(0.15f),
                 RoundedCornerShape(8.dp)
             )
-            .clickable(interactionSource = interactionSource, indication = null) { onSkip() }
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .focusRequester(focusRequester)
             .focusable(interactionSource = interactionSource)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1403,14 +1403,15 @@ private fun SkipIntroButton(
             Icons.Default.SkipNext,
             contentDescription = null,
             tint = accentColor,
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(17.dp)
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             label,
             color = if (isFocused) accentColor else Color.White.copy(0.8f),
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-            maxLines = 1
+            maxLines = 1,
+            softWrap = false
         )
     }
 }

@@ -4,6 +4,33 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SmartCreditsPolicyTest {
+    @Test fun reportsTheFirstReasonSmartFallbackCannotRun() {
+        fun reason(
+            autoplay: Boolean = true,
+            mode: String = "smart",
+            outro: Boolean = false,
+            nextEpisode: Boolean = true,
+            transitionCallback: Boolean = true,
+            trailer: Boolean = false,
+            error: Boolean = false,
+            frameProvider: Boolean = true,
+            durationMs: Long = 600_000L
+        ) = SmartCreditsPolicy.scanGateReason(
+            autoplay, mode, outro, nextEpisode, transitionCallback, trailer, error, frameProvider, durationMs
+        )
+
+        assertEquals("autoplay_disabled", reason(autoplay = false))
+        assertEquals("threshold_mode_introdb", reason(mode = "introdb"))
+        assertEquals("introdb_outro_available", reason(outro = true))
+        assertEquals("no_next_episode", reason(nextEpisode = false))
+        assertEquals("transition_callback_unavailable", reason(transitionCallback = false))
+        assertEquals("trailer_playback", reason(trailer = true))
+        assertEquals("playback_error", reason(error = true))
+        assertEquals("thumbnail_provider_unavailable_or_disabled", reason(frameProvider = false))
+        assertEquals("duration_under_5_minutes", reason(durationMs = 300_000L))
+        assertEquals("eligible", reason())
+    }
+
     @Test fun scansOnlyFinalFiveMinutesOnCacheGrid() {
         for (interval in listOf(10, 20, 30)) {
             val targets = SmartCreditsPolicy.targets(2_703_500L, interval)

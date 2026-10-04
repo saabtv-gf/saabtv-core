@@ -36,7 +36,8 @@ class RoomPersistenceRegressionTest {
     @Test fun profilesRoundTripAllPlaybackPreferencesAndOnlyOneIsActive() = runBlocking {
         val first = ProfileEntity(id = 1, name = "First", isActive = true, pinHash = "hash",
             seekTimeIntervalSeconds = 20, seekThumbnailIntervalSeconds = 20, sourceLanguagePriority1 = "ml",
-            preferredSubtitleLanguage = "kn", watchedThreshold = 95, subtitleOffset = -3)
+            preferredSubtitleLanguage = "kn", watchedThreshold = 95, subtitleOffset = -3,
+            skipIntro = true, skipRecap = false)
         dao.insertProfile(first); dao.insertProfile(ProfileEntity(id = 2, name = "Second"))
         assertEquals(first, dao.getProfileById(1)); assertEquals(first, dao.getProfileFlow(1).first())
         dao.activateProfile(2)
