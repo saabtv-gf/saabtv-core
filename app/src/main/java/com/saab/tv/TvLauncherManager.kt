@@ -16,7 +16,10 @@ internal object TvLauncherManager {
             unwanted to PackageManager.COMPONENT_ENABLED_STATE_DISABLED)) {
             // Activity aliases are qualified with the manifest namespace, while the
             // installed package can differ (for example, the debug `.test` suffix).
-            val component = ComponentName(context.packageName, BuildConfig::class.java.packageName + name)
+            val component = ComponentName(
+                context.packageName,
+                BuildConfig::class.java.getPackage().name + name
+            )
             if (pm.getComponentEnabledSetting(component) != state) {
                 pm.setComponentEnabledSetting(component, state, PackageManager.DONT_KILL_APP)
             }
