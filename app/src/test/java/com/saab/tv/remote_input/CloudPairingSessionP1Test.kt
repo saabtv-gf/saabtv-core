@@ -78,7 +78,9 @@ class CloudPairingSessionP1Test {
         val message=requireNotNull(received.get())
         assertEquals("Search",message["text"].asString)
         withTimeout(3000) { while(calls.none { it.url.encodedPath.endsWith("/saabtv_pair_read") && requestBody(it).contains("\"ack\":1") }) delay(5) }
-        assertEquals("Pairing closed. Reopen for a new QR code.",session.status.value)
+        withTimeout(3000) {
+            while (session.status.value != "Pairing closed. Reopen for a new QR code.") delay(5)
+        }
         val create=calls.first { it.url.encodedPath.endsWith("/saabtv_pair_create") }
         assertEquals("Bearer anon",create.header("Authorization"))
         val anon=calls.first { it.url.encodedPath.endsWith("/token/anonymous") }
