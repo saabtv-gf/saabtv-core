@@ -84,7 +84,7 @@ jobs:
           SAABTV_RELEASE_KEY_PASSWORD: ${{ secrets.SAABTV_RELEASE_KEY_PASSWORD }}
         with:
           api-level: 34
-          target: android-tv
+          target: google_apis
           arch: x86
           profile: tv_1080p
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
