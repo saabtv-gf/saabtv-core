@@ -76,19 +76,32 @@ jobs:
           fi
 
       - name: Test And Build Signed 32-Bit APK
+        uses: reactivecircus/android-emulator-runner@v2
         env:
           SAABTV_RELEASE_STORE_FILE: ${{ runner.temp }}/saabtv-release.jks
           SAABTV_RELEASE_STORE_PASSWORD: ${{ secrets.SAABTV_RELEASE_STORE_PASSWORD }}
           SAABTV_RELEASE_KEY_ALIAS: ${{ secrets.SAABTV_RELEASE_KEY_ALIAS }}
           SAABTV_RELEASE_KEY_PASSWORD: ${{ secrets.SAABTV_RELEASE_KEY_PASSWORD }}
-        run: |
-          ./gradlew --no-daemon \
-            :app:unitRegressionCoverage \
-            :app:verifyCorePolicyRegressionCoverage \
-            :app:lintRelease \
-            :app:assembleRelease \
-            -Psaab32BitOnly=true \
-            -Dorg.gradle.jvmargs=-Xmx4g
+        with:
+          api-level: 35
+          target: android-tv
+          arch: x86_64
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set -euo pipefail
+
+            ./gradlew --no-daemon \
+              :app:unitRegressionCoverage \
+              :app:verifyCorePolicyRegressionCoverage \
+              :app:lintRelease \
+              -PsaabEmulatorTest=true \
+              -Dorg.gradle.jvmargs=-Xmx4g
+
+            ./gradlew --no-daemon \
+              :app:assembleRelease \
+              -Psaab32BitOnly=true \
+              -Dorg.gradle.jvmargs=-Xmx4g
 
       - name: Retain Regression Reports
         if: always()

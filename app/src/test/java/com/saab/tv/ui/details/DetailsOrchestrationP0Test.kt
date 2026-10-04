@@ -138,7 +138,8 @@ class DetailsOrchestrationP0Test {
         awaitAppState {
             runBlocking { f.dao.getHistoryItem("movie-id") == null } &&
                 !f.sources.hasRememberedSelection("movie-id") &&
-                f.tracks.getSelection("movie-id") == null
+                f.tracks.getSelection("movie-id") == null &&
+                vm.state.value.resumePlaybackId == null
         }
         assertNull(vm.state.value.resumePlaybackId)
     }
@@ -155,7 +156,9 @@ class DetailsOrchestrationP0Test {
         awaitAppState {
             runBlocking { f.dao.getSeriesEpisodeHistory("tt1:%").isEmpty() } &&
                 !f.sources.hasRememberedSelection("tt1:1:2") &&
-                f.tracks.getSelection("tt1:1:2") == null
+                f.tracks.getSelection("tt1:1:2") == null &&
+                vm.state.value.episodeProgressMap.isEmpty() &&
+                vm.state.value.resumePlaybackId == null
         }
         assertTrue(vm.state.value.episodeProgressMap.isEmpty())
         assertNull(f.dao.getSeriesNextUp("tt1"))

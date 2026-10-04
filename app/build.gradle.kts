@@ -217,6 +217,8 @@ val hasReleaseSigning = listOf(
     releaseKeyAlias,
     releaseKeyPassword
 ).all { !it.isNullOrBlank() }
+val saab32BitOnly = providers.gradleProperty("saab32BitOnly").orNull == "true"
+val saabEmulatorTest = providers.gradleProperty("saabEmulatorTest").orNull == "true"
 
 android {
     namespace = "com.saab.tv"
@@ -226,8 +228,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 100
-        versionName = "0.1.96-beta"
+        versionCode = 101
+        versionName = "0.1.97-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -256,8 +258,10 @@ android {
         abi {
             isEnable = true
             reset()
-            if (providers.gradleProperty("saab32BitOnly").orNull == "true") {
+            if (saab32BitOnly) {
                 include("armeabi-v7a")
+            } else if (saabEmulatorTest) {
+                include("x86_64")
             } else {
                 include("arm64-v8a", "armeabi-v7a")
             }
