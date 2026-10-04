@@ -11,7 +11,10 @@ permissions:
 jobs:
   release:
     if: github.repository == 'saabtv-gf/saabtv-core'
-    runs-on: ubuntu-latest
+    # Standard Linux hosted runners do not expose KVM, so x86_64 emulation
+    # falls back to software translation and becomes unstable during boot.
+    # Intel macOS runners provide Hypervisor.framework acceleration instead.
+    runs-on: macos-15-intel
 
     steps:
       - name: Checkout
