@@ -90,7 +90,7 @@ jobs:
           target: android-tv
           arch: x86
           profile: tv_1080p
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu software -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: ./gradlew --no-daemon :app:unitRegressionCoverage :app:verifyCorePolicyRegressionCoverage :app:lintRelease -PsaabEmulatorTest=true -Dorg.gradle.jvmargs=-Xmx4g && ./gradlew --no-daemon :app:assembleRelease -Psaab32BitOnly=true -Dorg.gradle.jvmargs=-Xmx4g
 
