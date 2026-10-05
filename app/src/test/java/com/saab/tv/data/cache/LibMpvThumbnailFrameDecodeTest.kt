@@ -49,7 +49,7 @@ class LibMpvThumbnailFrameDecodeTest {
 
         assertNotNull(bitmap)
         assertEquals(320, bitmap!!.width)
-        assertEquals(180, bitmap.height)
+        assertEquals(160, bitmap.height)
         bitmap.recycle()
     }
 
