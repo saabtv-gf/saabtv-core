@@ -90,9 +90,20 @@ jobs:
           target: android-tv
           arch: x86
           profile: tv_1080p
-          emulator-options: -no-window -gpu software -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu software -memory 3072 -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: ./gradlew --no-daemon :app:unitRegressionCoverage :app:verifyCorePolicyRegressionCoverage :app:lintRelease -PsaabEmulatorTest=true -Dorg.gradle.jvmargs=-Xmx4g && ./gradlew --no-daemon :app:assembleRelease -Psaab32BitOnly=true -Dorg.gradle.jvmargs=-Xmx4g
+          emulator-boot-timeout: 900
+          script: |
+            set +e
+            ./gradlew --no-daemon :app:unitRegressionCoverage :app:verifyCorePolicyRegressionCoverage :app:lintRelease -PsaabEmulatorTest=true -Dorg.gradle.jvmargs=-Xmx4g
+            test_status=$?
+            set -e
+            if [ "$test_status" -ne 0 ]; then
+              mkdir -p app/build/ci-diagnostics
+              adb logcat -d -b all -v threadtime > app/build/ci-diagnostics/emulator-logcat.txt 2>&1 || true
+              exit "$test_status"
+            fi
+            ./gradlew --no-daemon :app:assembleRelease -Psaab32BitOnly=true -Dorg.gradle.jvmargs=-Xmx4g
 
       - name: Retain Regression Reports
         if: always()
@@ -105,6 +116,7 @@ jobs:
             app/build/reports/androidTests/connected/debug/
             app/build/outputs/androidTest-results/connected/debug/
             app/build/reports/lint-results-release.*
+            app/build/ci-diagnostics/
           if-no-files-found: warn
 
       - name: Prepare Release Files
