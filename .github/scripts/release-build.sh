@@ -17,8 +17,13 @@ if ./gradlew --no-daemon \
   device_test_count="$(
     {
       find app/build/outputs/androidTest-results/connected/debug \
-        -type f -name '*.xml' -exec rg -o 'tests="[0-9]+"' {} + 2>/dev/null || true
-    } | awk -F '"' '{ total += $2 } END { print total + 0 }'
+        -type f -name '*.xml' -exec awk '
+          match($0, /tests="[0-9]+"/) {
+            total += substr($0, RSTART + 7, RLENGTH - 8)
+          }
+          END { print total + 0 }
+        ' {} + 2>/dev/null || true
+    } | awk '{ total += $1 } END { print total + 0 }'
   )"
   if [ "$device_test_count" -eq 0 ]; then
     echo "Connected Android tests reported zero executed tests; refusing to publish."
