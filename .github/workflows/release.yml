@@ -86,9 +86,9 @@ jobs:
           SAABTV_RELEASE_KEY_ALIAS: ${{ secrets.SAABTV_RELEASE_KEY_ALIAS }}
           SAABTV_RELEASE_KEY_PASSWORD: ${{ secrets.SAABTV_RELEASE_KEY_PASSWORD }}
         with:
-          # API 36's current Android TV image stays ADB-offline on this Intel
-          # runner; API 35 is the stable TV image for connected instrumentation.
-          api-level: 35
+          # API 35 no longer publishes the 32-bit x86 Android TV image. API 34
+          # still provides that image and matches the x86 instrumentation APK.
+          api-level: 34
           target: android-tv
           arch: x86
           profile: tv_1080p
