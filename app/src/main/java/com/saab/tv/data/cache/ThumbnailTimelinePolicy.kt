@@ -7,6 +7,7 @@ import kotlin.math.abs
 /** Preview timestamps and file identity describe the chosen thumbnail timeline. */
 object ThumbnailTimelinePolicy {
     const val MAX_CAPTURE_ERROR_MS = 100L
+    const val SEEK_PREVIEW_WIDTH = 640
     private const val SOURCE_MARKER = "|timeline:"
     fun cacheId(contentId: String, mediaUrl: String, source: PlayerSourceOption?): String {
         val identity = if (!source?.infoHash.isNullOrBlank() &&

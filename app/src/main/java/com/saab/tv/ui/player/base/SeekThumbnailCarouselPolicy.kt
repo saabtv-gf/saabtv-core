@@ -22,4 +22,10 @@ internal object SeekThumbnailCarouselPolicy {
             }
         }
     }
+
+    /** Reuses visible cached frames that overlap the next seek window. */
+    fun retainedFrameIndices(previous: List<Long?>, requested: List<Long?>): List<Int?> {
+        val previousIndex = previous.withIndex().associate { it.value to it.index }
+        return requested.map { position -> position?.let(previousIndex::get) }
+    }
 }

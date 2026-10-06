@@ -24,4 +24,23 @@ class SeekThumbnailCarouselPolicyTest {
         assertEquals(listOf(1, 0, 2), SeekThumbnailCarouselPolicy.loadOrder(3))
         assertEquals(listOf(0), SeekThumbnailCarouselPolicy.loadOrder(1))
     }
+
+    @Test
+    fun overlappingCachedFramesAreRetainedWhenSeekingByOneInterval() {
+        assertEquals(
+            listOf(1, 2, 3, 4, null),
+            SeekThumbnailCarouselPolicy.retainedFrameIndices(
+                listOf(0L, 10L, 20L, 30L, 40L),
+                listOf(10L, 20L, 30L, 40L, 50L)
+            )
+        )
+    }
+
+    @Test
+    fun unknownAndRevisitedPositionsMapOnlyToExistingFrames() {
+        assertEquals(
+            listOf(null, 0, null),
+            SeekThumbnailCarouselPolicy.retainedFrameIndices(listOf(30L, 60L), listOf(null, 30L, 90L))
+        )
+    }
 }

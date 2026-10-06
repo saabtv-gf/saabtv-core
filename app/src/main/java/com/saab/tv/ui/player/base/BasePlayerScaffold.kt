@@ -9,6 +9,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -151,7 +152,8 @@ private data class PlayerHeaderInfo(
 
 private data class SeekPreviewFrame(
     val positionMs: Long?,
-    val bitmap: Bitmap?
+    val bitmap: Bitmap?,
+    val cacheKey: String = ""
 )
 
 private data class SubtitleLanguageGroup(
@@ -244,6 +246,7 @@ fun BasePlayerScaffold(
     var seekPreviewFrames by remember(playbackController) {
         mutableStateOf<List<SeekPreviewFrame>>(emptyList())
     }
+    val latestSeekPreviewFrames by rememberUpdatedState(seekPreviewFrames)
     var resumeAfterPreviewSeek by remember(playbackController) { mutableStateOf(false) }
     val latestSeekThumbnailProvider by rememberUpdatedState(seekThumbnailProvider)
     var hideControlsSignal by remember { mutableIntStateOf(0) }
@@ -270,11 +273,9 @@ fun BasePlayerScaffold(
     var recapSkipCancelled by remember(playbackController) { mutableStateOf(false) }
     var introSkipped by remember(playbackController) { mutableStateOf(false) }
     var recapSkipped by remember(playbackController) { mutableStateOf(false) }
-    var introCountdown by remember(playbackController) { mutableIntStateOf(5) }
-    var recapCountdown by remember(playbackController) { mutableIntStateOf(5) }
-    var countdownSeconds by remember(playbackController) {
-        mutableIntStateOf(AutoplayNextEpisodePolicy.COUNTDOWN_SECONDS)
-    }
+    val introSkipProgress = remember(playbackController) { Animatable(0f) }
+    val recapSkipProgress = remember(playbackController) { Animatable(0f) }
+    val nextEpisodeProgress = remember(playbackController) { Animatable(0f) }
     var countdownActive by remember(playbackController) { mutableStateOf(false) }
     var nextEpisodeTriggered by remember(playbackController) { mutableStateOf(false) }
 
@@ -383,14 +384,16 @@ fun BasePlayerScaffold(
     val introCountdownActive = showSkipIntro && autoSkipIntro && introSkipCountdownSeconds > 0 && !introSkipCancelled &&
         pendingPreviewSeekPosition == null
     LaunchedEffect(introCountdownActive, introSkipCountdownSeconds) {
-        if (introCountdownActive) introCountdown = if (introSkipCountdownSeconds == 10) 10 else 5
+        if (introCountdownActive) introSkipProgress.snapTo(0f)
     }
-    LaunchedEffect(introCountdownActive, uiState.isPlaying, uiState.isBuffering, uiState.isSeeking) {
+    LaunchedEffect(introCountdownActive, introSkipCountdownSeconds, uiState.isPlaying, uiState.isBuffering, uiState.isSeeking) {
         if (!introCountdownActive || !uiState.isPlaying || uiState.isBuffering || uiState.isSeeking) return@LaunchedEffect
-        while (introCountdown > 0) {
-            delay(1_000L)
-            introCountdown--
-        }
+        val remainingMs = PlayerActionProgressPolicy.remainingDurationMillis(
+            introSkipProgress.value, introSkipCountdownSeconds
+        )
+        if (remainingMs > 0) introSkipProgress.animateTo(
+            1f, animationSpec = tween(remainingMs, easing = LinearEasing)
+        )
         skipSegmentInfo?.introEndMs?.let {
             introSkipped = true
             playbackController.seekTo(it)
@@ -401,14 +404,16 @@ fun BasePlayerScaffold(
     val recapCountdownActive = showSkipRecap && autoSkipIntro && introSkipCountdownSeconds > 0 &&
         !recapSkipCancelled && pendingPreviewSeekPosition == null
     LaunchedEffect(recapCountdownActive, introSkipCountdownSeconds) {
-        if (recapCountdownActive) recapCountdown = if (introSkipCountdownSeconds == 10) 10 else 5
+        if (recapCountdownActive) recapSkipProgress.snapTo(0f)
     }
-    LaunchedEffect(recapCountdownActive, uiState.isPlaying, uiState.isBuffering, uiState.isSeeking) {
+    LaunchedEffect(recapCountdownActive, introSkipCountdownSeconds, uiState.isPlaying, uiState.isBuffering, uiState.isSeeking) {
         if (!recapCountdownActive || !uiState.isPlaying || uiState.isBuffering || uiState.isSeeking) return@LaunchedEffect
-        while (recapCountdown > 0) {
-            delay(1_000L)
-            recapCountdown--
-        }
+        val remainingMs = PlayerActionProgressPolicy.remainingDurationMillis(
+            recapSkipProgress.value, introSkipCountdownSeconds
+        )
+        if (remainingMs > 0) recapSkipProgress.animateTo(
+            1f, animationSpec = tween(remainingMs, easing = LinearEasing)
+        )
         skipSegmentInfo?.recapEndMs?.let {
             recapSkipped = true
             playbackController.seekTo(it)
@@ -468,10 +473,11 @@ fun BasePlayerScaffold(
     // Start countdown when near completion
     LaunchedEffect(shouldShowNextEpisode, outroSkipCountdownSeconds) {
         if (shouldShowNextEpisode) {
-            countdownSeconds = if (outroSkipCountdownSeconds == 10) 10 else 5
+            nextEpisodeProgress.snapTo(0f)
             countdownActive = true
         } else {
             countdownActive = false
+            nextEpisodeProgress.snapTo(0f)
         }
     }
 
@@ -479,11 +485,12 @@ fun BasePlayerScaffold(
     LaunchedEffect(countdownActive, uiState.isPlaying, uiState.isEnded, uiState.isBuffering, uiState.isSeeking, pendingPreviewSeekPosition) {
         if (!countdownActive || (!uiState.isPlaying && !uiState.isEnded) || uiState.isBuffering ||
             uiState.isSeeking || pendingPreviewSeekPosition != null) return@LaunchedEffect
-        while (countdownSeconds > 0) {
-            delay(1_000L)
-            if (!countdownActive) return@LaunchedEffect
-            countdownSeconds--
-        }
+        val remainingMs = PlayerActionProgressPolicy.remainingDurationMillis(
+            nextEpisodeProgress.value, outroSkipCountdownSeconds
+        )
+        if (remainingMs > 0) nextEpisodeProgress.animateTo(
+            1f, animationSpec = tween(remainingMs, easing = LinearEasing)
+        )
         // Countdown finished
         if (countdownActive && !autoplayCancelled) {
             triggerNextEpisode()
@@ -534,8 +541,9 @@ fun BasePlayerScaffold(
     LaunchedEffect(pendingPreviewSeekPosition, seekThumbnailCacheKey, seekThumbnailIntervalSeconds) {
         val targetPosition = pendingPreviewSeekPosition
         val provider = latestSeekThumbnailProvider
-        seekPreviewFrames = emptyList()
-        if (targetPosition == null || provider == null) {
+        if (targetPosition == null) return@LaunchedEffect
+        if (provider == null) {
+            seekPreviewFrames.forEach { frame -> frame.bitmap?.let { if (!it.isRecycled) it.recycle() } }
             seekPreviewFrames = emptyList()
             return@LaunchedEffect
         }
@@ -547,11 +555,38 @@ fun BasePlayerScaffold(
             (targetPosition + offset * intervalMs)
                 .takeIf { it >= 0L && (uiState.durationMs <= 0L || it <= uiState.durationMs) }
         }
-        var replacements = positions.map { SeekPreviewFrame(positionMs = it, bitmap = null) }
+        val retainedIndices = SeekThumbnailCarouselPolicy.retainedFrameIndices(
+            seekPreviewFrames.map { if (it.cacheKey == seekThumbnailCacheKey) it.positionMs else null }, positions
+        )
+        var replacements = positions.mapIndexed { index, position ->
+            val oldIndex = retainedIndices[index]
+            val bitmap = oldIndex?.let(seekPreviewFrames::getOrNull)?.bitmap
+                ?.takeUnless { it.isRecycled }
+            SeekPreviewFrame(positionMs = position, bitmap = bitmap, cacheKey = seekThumbnailCacheKey)
+        }
+        val centerIndex = positions.size / 2
+        val centerPosition = positions.getOrNull(centerIndex)
+        if (centerPosition != null && replacements[centerIndex].bitmap == null) {
+            val bitmap = try {
+                provider(centerPosition)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            replacements = replacements.toMutableList().also {
+                it[centerIndex] = SeekPreviewFrame(centerPosition, bitmap, seekThumbnailCacheKey)
+            }
+        }
+        val retainedBitmaps = replacements.mapNotNull { it.bitmap }.toSet()
+        seekPreviewFrames.filter { it.bitmap != null && it.bitmap !in retainedBitmaps }
+            .forEach { frame -> frame.bitmap?.let { if (!it.isRecycled) it.recycle() } }
+        // Keep the last carousel visible until the new center image is ready.
         seekPreviewFrames = replacements
 
         // Center first, followed by immediate and outer neighbours.
         for (index in SeekThumbnailCarouselPolicy.loadOrder(positions.size)) {
+            if (index == centerIndex || replacements[index].bitmap != null) continue
             val position = positions[index] ?: continue
             val bitmap = try {
                 provider(position)
@@ -561,7 +596,7 @@ fun BasePlayerScaffold(
                 null
             }
             replacements = replacements.toMutableList().also { frames ->
-                frames[index] = SeekPreviewFrame(positionMs = position, bitmap = bitmap)
+                frames[index] = SeekPreviewFrame(positionMs = position, bitmap = bitmap, cacheKey = seekThumbnailCacheKey)
             }
             seekPreviewFrames = replacements
         }
@@ -569,6 +604,7 @@ fun BasePlayerScaffold(
 
     DisposableEffect(playbackController) {
         onDispose {
+            latestSeekPreviewFrames.forEach { frame -> frame.bitmap?.let { if (!it.isRecycled) it.recycle() } }
             seekPreviewFrames = emptyList()
         }
     }
@@ -1279,8 +1315,8 @@ fun BasePlayerScaffold(
             SkipIntroButton(
                 label = if (showSkipRecap) "Skip Recap" else "Skip Intro",
                 progress = when {
-                    recapCountdownActive -> (1f - recapCountdown / introSkipCountdownSeconds.toFloat()).coerceIn(0f, 1f)
-                    introCountdownActive -> (1f - introCountdown / introSkipCountdownSeconds.toFloat()).coerceIn(0f, 1f)
+                    recapCountdownActive -> recapSkipProgress.value
+                    introCountdownActive -> introSkipProgress.value
                     else -> null
                 },
                 onSkip = {
@@ -1306,7 +1342,7 @@ fun BasePlayerScaffold(
         ) {
             nextEpisodeInfo?.let {
                 NextEpisodeButton(
-                    progress = (1f - countdownSeconds / outroSkipCountdownSeconds.toFloat()).coerceIn(0f, 1f),
+                    progress = nextEpisodeProgress.value,
                     onPlayNow = triggerNextEpisode,
                     focusRequester = nextEpisodeFocusRequester
                 )
@@ -1384,10 +1420,9 @@ private fun PlayerActionButton(
             .background(Color.White.copy(0.07f))
             .drawBehind {
                 val fraction = progress?.coerceIn(0f, 1f) ?: 0f
-                if (fraction > 0f) drawRoundRect(
+                if (fraction > 0f) drawRect(
                     color = accentColor.copy(alpha = if (isFocused) 0.32f else 0.24f),
-                    size = androidx.compose.ui.geometry.Size(size.width * fraction, size.height),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f)
+                    size = androidx.compose.ui.geometry.Size(size.width * fraction, size.height)
                 )
             }
             .border(

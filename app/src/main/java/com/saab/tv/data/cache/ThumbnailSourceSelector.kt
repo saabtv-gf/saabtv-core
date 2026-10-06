@@ -4,7 +4,7 @@ import com.saab.tv.ui.player.base.PlayerSourceOption
 
 /**
  * Chooses a lightweight secondary stream for seek-preview extraction. The selected
- * playback stream is never changed. A 320x180 preview gains no useful detail from
+ * playback stream is never changed. A 640x360 preview gains no useful detail from
  * decoding a 4K remux. TorBox-confirmed cached 720p and then 1080p sources are
  * preferred by smallest file size; otherwise use the availability-aware fallback.
  */

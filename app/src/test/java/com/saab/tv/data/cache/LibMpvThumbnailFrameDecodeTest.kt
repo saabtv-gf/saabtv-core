@@ -35,12 +35,12 @@ class LibMpvThumbnailFrameDecodeTest {
         assertNull(engine.decodeThumbnail(frame(100_000, 100_000, 400_000, ByteArray(0))))
     }
 
-    @Test fun acceptsNativeThumbnailDimensionsWithoutRescaling() {
+    @Test fun upgradesCachedFrameToHighQualitySeekPreviewSize() {
         val bitmap = engine.decodeThumbnail(frame(320, 180, 1_280, ByteArray(320 * 180 * 4)))
 
         assertNotNull(bitmap)
-        assertEquals(320, bitmap!!.width)
-        assertEquals(180, bitmap.height)
+        assertEquals(ThumbnailTimelinePolicy.SEEK_PREVIEW_WIDTH, bitmap!!.width)
+        assertEquals(360, bitmap.height)
         bitmap.recycle()
     }
 
@@ -48,8 +48,8 @@ class LibMpvThumbnailFrameDecodeTest {
         val bitmap = engine.decodeThumbnail(frame(2, 1, 8, ByteArray(8)))
 
         assertNotNull(bitmap)
-        assertEquals(320, bitmap!!.width)
-        assertEquals(160, bitmap.height)
+        assertEquals(ThumbnailTimelinePolicy.SEEK_PREVIEW_WIDTH, bitmap!!.width)
+        assertEquals(320, bitmap.height)
         bitmap.recycle()
     }
 

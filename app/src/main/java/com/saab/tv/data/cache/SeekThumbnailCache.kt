@@ -262,10 +262,10 @@ class SeekThumbnailCache @Inject constructor(
     }.getOrNull()
 
     companion object {
-        private const val CACHE_DIRECTORY = "seek_thumbnails_v4"
-        private val OBSOLETE_CACHE_DIRECTORIES = listOf("seek_thumbnails", "seek_thumbnails_v2", "seek_thumbnails_v3")
+        private const val CACHE_DIRECTORY = "seek_thumbnails_v5"
+        private val OBSOLETE_CACHE_DIRECTORIES = listOf("seek_thumbnails", "seek_thumbnails_v2", "seek_thumbnails_v3", "seek_thumbnails_v4")
         private const val MAX_CACHE_BYTES = 500L * 1_024L * 1_024L
-        private const val WEBP_QUALITY = 60
+        private const val WEBP_QUALITY = 75
         private const val TRIM_EVERY_WRITES = 50
         private const val DIRECTORY_RESCAN_INTERVAL_MS = 400L
         val SUPPORTED_INTERVALS = setOf(10, 20, 30)

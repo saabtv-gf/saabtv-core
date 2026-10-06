@@ -71,7 +71,7 @@ internal class PlatformThumbnailEngine : Closeable {
         "${error::class.java.simpleName}: ${error.message.orEmpty()}".take(240)
 
     private companion object {
-        const val THUMBNAIL_WIDTH = 320
+        const val THUMBNAIL_WIDTH = ThumbnailTimelinePolicy.SEEK_PREVIEW_WIDTH
         const val THUMBNAIL_HEIGHT = 180
         const val BROWSER_USER_AGENT =
             "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 " +

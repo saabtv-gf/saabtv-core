@@ -310,7 +310,7 @@ internal class LibMpvThumbnailEngine(
         .take(1_200)
 
     private companion object {
-        const val THUMBNAIL_WIDTH = 320
+        const val THUMBNAIL_WIDTH = ThumbnailTimelinePolicy.SEEK_PREVIEW_WIDTH
         const val THUMBNAIL_HEIGHT = 180
         const val RAW_FRAME_HEADER_BYTES = 12
         const val LOAD_TIMEOUT_MS = 30_000L
