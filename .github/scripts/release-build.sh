@@ -14,6 +14,19 @@ if ./gradlew --no-daemon \
   :app:lintRelease \
   -PsaabEmulatorTest=true \
   -Dorg.gradle.jvmargs=-Xmx4g; then
+  device_test_count="$(
+    {
+      find app/build/outputs/androidTest-results/connected/debug \
+        -type f -name '*.xml' -exec rg -o 'tests="[0-9]+"' {} + 2>/dev/null || true
+    } | awk -F '"' '{ total += $2 } END { print total + 0 }'
+  )"
+  if [ "$device_test_count" -eq 0 ]; then
+    echo "Connected Android tests reported zero executed tests; refusing to publish."
+    adb logcat -d -b all -v threadtime > app/build/ci-diagnostics/emulator-logcat.txt 2>&1 || true
+    adb shell dumpsys meminfo > app/build/ci-diagnostics/emulator-meminfo.txt 2>&1 || true
+    exit 1
+  fi
+  echo "Connected Android tests executed: $device_test_count"
   ./gradlew --no-daemon \
     :app:assembleRelease \
     -Psaab32BitOnly=true \

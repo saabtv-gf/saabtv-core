@@ -86,15 +86,16 @@ jobs:
           SAABTV_RELEASE_KEY_ALIAS: ${{ secrets.SAABTV_RELEASE_KEY_ALIAS }}
           SAABTV_RELEASE_KEY_PASSWORD: ${{ secrets.SAABTV_RELEASE_KEY_PASSWORD }}
         with:
-          # API 35 no longer publishes the 32-bit x86 Android TV image. API 34
-          # still provides that image and matches the x86 instrumentation APK.
+          # The macOS Intel runner clamps the emulator to one vCPU. Use a small
+          # AOSP image with the TV hardware profile so system services do not
+          # starve instrumentation during startup.
           api-level: 34
-          target: android-tv
-          arch: x86
+          target: default
+          arch: x86_64
           profile: tv_1080p
           cores: 2
           ram-size: 3072M
-          emulator-options: -no-window -gpu software -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           emulator-boot-timeout: 900
           # The runner executes script lines in separate shells; delegate to a
