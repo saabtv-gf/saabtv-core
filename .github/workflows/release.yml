@@ -32,7 +32,7 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Set Up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Restore Signing Key And Configuration
         shell: bash
