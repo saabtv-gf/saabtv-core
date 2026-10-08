@@ -56,7 +56,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
@@ -115,6 +117,7 @@ import com.saab.tv.data.tmdb.TmdbCastInfo
 import com.saab.tv.data.tmdb.TmdbCompanyInfo
 import com.saab.tv.data.tmdb.TmdbMetaPreview
 import com.saab.tv.data.tmdb.TmdbVideoInfo
+import kotlinx.coroutines.launch
 
 @Composable
 fun DetailsScreen(
@@ -139,11 +142,19 @@ fun DetailsScreen(
 ) {
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val quickActionViewModel = trailerHostViewModel ?: hiltViewModel<com.saab.tv.ui.home.HomeViewModel>()
+    val quickActionScope = rememberCoroutineScope()
+    var quickActionProfileId by remember { mutableStateOf(0) }
+    var quickActionTarget by remember { mutableStateOf<Pair<com.saab.tv.data.model.stremio.MetaItem, Rect>?>(null) }
+    var quickActionReturnFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    LaunchedEffect(quickActionViewModel) {
+        quickActionProfileId = quickActionViewModel.activeProfileId() ?: 0
+    }
     com.saab.tv.ui.trailer.TitleTrailerHost(onOpen = { onNavigateToDetails(it.type, it.id) },
         defaultItem = state.meta.takeIf { !state.isLoading && state.contentKey == "$type:$id" },
         onEpisodes = { viewModel.openEpisodes() },
-        defaultEnabled = !state.isLoadingStreams && state.sidebarState is SidebarState.Closed && !autoStartPlayback,
-        model = trailerHostViewModel) {
+        defaultEnabled = !state.isLoadingStreams && state.sidebarState is SidebarState.Closed && !autoStartPlayback && quickActionTarget == null,
+        model = quickActionViewModel) {
 
     LaunchedEffect(type, id, autoStartPlayback) { viewModel.loadDetails(type, id, addonBaseUrl, playbackOnly = autoStartPlayback) }
 
@@ -231,8 +242,9 @@ fun DetailsScreen(
     var restoreIndex by rememberSaveable { mutableStateOf(-1) }
     val listState = rememberLazyListState()
 
-    val tmdbPending = state.tmdbEnabled && state.tmdbLoading
-    val contentReady = showMovieContent && !tmdbPending
+    // TMDB enrichment is supplemental: render addon details immediately and patch
+    // localized metadata/recommendations into the screen as they arrive.
+    val contentReady = showMovieContent
     var autoStartRequested by remember(type, id) { mutableStateOf(false) }
     LaunchedEffect(showMovieContent, autoStartPlayback, state.resumeStateReady, state.resumePlaybackId, streamId, resumePlaybackHint) {
         if (!showMovieContent || !state.resumeStateReady || !viewModel.state.value.resumeStateReady ||
@@ -344,8 +356,24 @@ fun DetailsScreen(
         if (!contentReady || (autoStartPlayback && sidebarState is SidebarState.Closed)) {
             com.saab.tv.ui.components.DetailsLoadingSweep()
         }
-        if (showMovieContent && !tmdbPending && (!autoStartPlayback || sidebarState !is SidebarState.Closed)) {
+        if (showMovieContent && (!autoStartPlayback || sidebarState !is SidebarState.Closed)) {
             val currentMovie = requireNotNull(movie)
+            var seriesWatched by remember(type, id, quickActionProfileId) { mutableStateOf(false) }
+            var seriesMarkRequested by remember(type, id, quickActionProfileId) { mutableStateOf(false) }
+            LaunchedEffect(type, id, quickActionProfileId) {
+                if (type != "series" || quickActionProfileId <= 0) {
+                    seriesWatched = false
+                } else {
+                    try {
+                        val isWatched = quickActionViewModel.isTitleWatched(quickActionProfileId, currentMovie)
+                        if (!seriesMarkRequested) seriesWatched = isWatched
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        seriesWatched = false
+                    }
+                }
+            }
             val bgImage = currentMovie.background ?: currentMovie.poster
             Box(modifier = Modifier.alpha(contentAlpha)) {
             AsyncImage(
@@ -382,7 +410,10 @@ fun DetailsScreen(
             val hasEnrichment = enrichment != null
 
             @OptIn(ExperimentalFoundationApi::class)
-            CompositionLocalProvider(LocalBringIntoViewSpec provides verticalPivot) {
+            CompositionLocalProvider(
+                LocalBringIntoViewSpec provides verticalPivot,
+                com.saab.tv.ui.components.LocalPosterFocusReturn provides { quickActionReturnFocus = it }
+            ) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
@@ -616,6 +647,19 @@ fun DetailsScreen(
                         }
 
                         com.saab.tv.ui.components.DetailActionButton(
+                            label = if (seriesWatched) "Watched" else "Mark as watched",
+                            icon = if (seriesWatched) Icons.Default.Check else Icons.Default.Add,
+                            isActive = seriesWatched,
+                            onClick = {
+                                if (!seriesWatched && quickActionProfileId > 0) {
+                                    seriesMarkRequested = true
+                                    seriesWatched = true
+                                    quickActionViewModel.markTitleWatched(quickActionProfileId, currentMovie)
+                                }
+                            }
+                        )
+
+                        com.saab.tv.ui.components.DetailActionButton(
                             label = if (isInWatchlist) "Watchlisted" else "Add to watchlist",
                             icon = if (isInWatchlist) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             isActive = isInWatchlist,
@@ -702,12 +746,10 @@ fun DetailsScreen(
             } // hero item
 
             // ── TMDB Enrichment Sections ──
-            if (hasEnrichment) {
+            if (hasEnrichment || state.tmdbRecommendations.isNotEmpty() || state.tmdbCollection.isNotEmpty()) {
                 val castMembers = enrichment?.castMembers.orEmpty()
                 val directorMembers = enrichment?.directorMembers.orEmpty()
                 val writerMembers = enrichment?.writerMembers.orEmpty()
-                val companies = enrichment?.productionCompanies.orEmpty()
-                val networks = enrichment?.networks.orEmpty()
                 val tmdbRecommendations = state.tmdbRecommendations
                 val tmdbCollection = state.tmdbCollection
 
@@ -728,8 +770,8 @@ fun DetailsScreen(
 
                 if (castMembers.isNotEmpty() || leadingCrew.isNotEmpty()) {
                     item(key = "tmdb_cast") {
-                        val title = if (leadingCrew.isNotEmpty() && castMembers.isNotEmpty()) "Director & Cast"
-                            else if (leadingCrew.isNotEmpty()) "Director"
+                        val title = if (leadingCrew.isNotEmpty() && castMembers.isNotEmpty()) "Cast & Crew"
+                            else if (leadingCrew.isNotEmpty()) "Crew"
                             else "Cast"
                         Column(modifier = firstSectionModifier().padding(top = 28.dp)) {
                             SectionHeader(title, textColor, Modifier.padding(start = 48.dp))
@@ -750,57 +792,7 @@ fun DetailsScreen(
 
 
 
-                val networkCompanies = networks.map { TmdbCompanyInfo(name = it.name, logo = it.logo, tmdbId = it.tmdbId) }
-                val isTvShow = type == "series"
-
-                // TV shows: Networks first, then Production. Movies: Production first, then Networks.
-                val firstStudios = if (isTvShow) networkCompanies else companies
-                val firstLabel = if (isTvShow) "Network" else "Production"
-                val secondStudios = if (isTvShow) companies else networkCompanies
-                val secondLabel = if (isTvShow) "Production" else "Network"
-
-                val firstStudioKind = if (isTvShow) "network" else "company"
-                val secondStudioKind = if (isTvShow) "company" else "network"
-
-                if (firstStudios.isNotEmpty()) {
-                    item(key = "tmdb_studios_first") {
-                        Column(modifier = firstSectionModifier().padding(top = 28.dp)) {
-                            SectionHeader(firstLabel, textColor, Modifier.padding(start = 48.dp))
-                            Spacer(modifier = Modifier.height(10.dp))
-                            StudioRow(
-                                firstStudios, textColor, accentColor,
-                                onStudioClick = { studioId, studioName ->
-                                    restoreRowKey = "tmdb_studios_first"
-                                    restoreIndex = firstStudios.indexOfFirst { it.tmdbId == studioId }
-                                    onNavigateToStudioDetail(studioId, firstStudioKind, studioName, type)
-                                },
-                                restoreIndex = if (restoreRowKey == "tmdb_studios_first") restoreIndex else -1,
-                                restoreFocusRequester = if (restoreRowKey == "tmdb_studios_first") restoreFocusRequester else null
-                            )
-                        }
-                    }
-                }
-
-                if (secondStudios.isNotEmpty()) {
-                    item(key = "tmdb_studios_second") {
-                        Column(modifier = Modifier.padding(top = 28.dp)) {
-                            SectionHeader(secondLabel, textColor, Modifier.padding(start = 48.dp))
-                            Spacer(modifier = Modifier.height(10.dp))
-                            StudioRow(
-                                secondStudios, textColor, accentColor,
-                                onStudioClick = { studioId, studioName ->
-                                    restoreRowKey = "tmdb_studios_second"
-                                    restoreIndex = secondStudios.indexOfFirst { it.tmdbId == studioId }
-                                    onNavigateToStudioDetail(studioId, secondStudioKind, studioName, type)
-                                },
-                                restoreIndex = if (restoreRowKey == "tmdb_studios_second") restoreIndex else -1,
-                                restoreFocusRequester = if (restoreRowKey == "tmdb_studios_second") restoreFocusRequester else null
-                            )
-                        }
-                    }
-                }
-
-                if (tmdbRecommendations.isNotEmpty() && state.cinemetaRecommendations.isEmpty()) {
+                if (tmdbRecommendations.isNotEmpty()) {
                     item(key = "tmdb_recs") {
                         Column(modifier = Modifier.padding(top = 28.dp)) {
                             SectionHeader("More Like This", textColor, Modifier.padding(start = 48.dp))
@@ -808,12 +800,15 @@ fun DetailsScreen(
                             RecommendationRow(
                                         tmdbRecommendations, accentColor,
                                         rowKey = "tmdb_recs",
-                                        onItemClick = { navType, navId, rowKey, index ->
-                                            restoreRowKey = rowKey
-                                            restoreIndex = index
-                                            onNavigateToDetails(navType, navId)
-                                        },
-                                        restoreIndex = if (restoreRowKey == "tmdb_recs") restoreIndex else -1,
+                                        profileId = quickActionProfileId,
+                                        watchedViewModel = quickActionViewModel,
+                            onItemClick = { navType, navId, rowKey, index ->
+                                restoreRowKey = rowKey
+                                restoreIndex = index
+                                onNavigateToDetails(navType, navId)
+                            },
+                            onLongClick = { item, bounds -> quickActionTarget = item to bounds },
+                            restoreIndex = if (restoreRowKey == "tmdb_recs") restoreIndex else -1,
                                         restoreFocusRequester = if (restoreRowKey == "tmdb_recs") restoreFocusRequester else null
                                     )
                         }
@@ -829,11 +824,14 @@ fun DetailsScreen(
                             RecommendationRow(
                                             tmdbCollection, accentColor,
                                             rowKey = "tmdb_collection",
+                                            profileId = quickActionProfileId,
+                                            watchedViewModel = quickActionViewModel,
                                             onItemClick = { navType, navId, rowKey, index ->
                                                 restoreRowKey = rowKey
                                                 restoreIndex = index
                                                 onNavigateToDetails(navType, navId)
                                             },
+                                            onLongClick = { item, bounds -> quickActionTarget = item to bounds },
                                             restoreIndex = if (restoreRowKey == "tmdb_collection") restoreIndex else -1,
                                             restoreFocusRequester = if (restoreRowKey == "tmdb_collection") restoreFocusRequester else null
                                         )
@@ -844,42 +842,6 @@ fun DetailsScreen(
                 item(key = "tmdb_spacer") { Spacer(modifier = Modifier.height(48.dp)) }
             }
 
-            val cinemetaRecommendations = state.cinemetaRecommendations
-            if (cinemetaRecommendations.isNotEmpty()) {
-                item(key = "cinemeta_recommendations") {
-                    Column(
-                        modifier = Modifier
-                            .padding(top = 28.dp)
-                            .then(
-                                if (!hasEnrichment) Modifier.onPreviewKeyEvent { event ->
-                    if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
-                                    if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
-                                        firstButtonFocusRequester.requestFocus()
-                                        true
-                                    } else false
-                                } else Modifier
-                            )
-                    ) {
-                        SectionHeader("People Also Watched", textColor, Modifier.padding(start = 48.dp))
-                        Spacer(modifier = Modifier.height(10.dp))
-                        CinemetaRecommendationRow(
-                            items = cinemetaRecommendations,
-                            accentColor = accentColor,
-                            rowKey = "cinemeta_recommendations",
-                            onItemClick = { navType, navId, rowKey, index ->
-                                restoreRowKey = rowKey
-                                restoreIndex = index
-                                onNavigateToDetails(navType, navId)
-                            },
-                            restoreIndex = if (restoreRowKey == "cinemeta_recommendations") restoreIndex else -1,
-                            restoreFocusRequester = if (restoreRowKey == "cinemeta_recommendations") restoreFocusRequester else null
-                        )
-                    }
-                }
-                item(key = "cinemeta_recommendations_spacer") {
-                    Spacer(modifier = Modifier.height(48.dp))
-                }
-            }
             } // LazyColumn
             } // CompositionLocalProvider verticalPivot
             } // contentAlpha Box
@@ -929,6 +891,23 @@ fun DetailsScreen(
                 }
             }
         )
+
+        quickActionTarget?.let { (item, bounds) ->
+            com.saab.tv.ui.home.CatalogQuickActionsPopup(
+                item = item,
+                bounds = bounds,
+                profileId = quickActionProfileId,
+                viewModel = quickActionViewModel,
+                onTrailerClick = onTrailerClick,
+                onDismiss = {
+                    quickActionTarget = null
+                    quickActionScope.launch {
+                        delay(40)
+                        runCatching { quickActionReturnFocus?.requestFocus() }
+                    }
+                }
+            )
+        }
 
         // Centered loading spinner for auto-resolve paths (remembered source, auto-select)
         if ((state.isLoadingStreams && sidebarState is SidebarState.Closed) || isTrailerLoading) {
@@ -1167,6 +1146,12 @@ private fun CastCard(member: TmdbCastInfo, accentColor: Color, textColor: Color,
                         shape = CircleShape
                     )
             ) {
+                Text(
+                    text = com.saab.tv.ui.components.initialsForPerson(member.name),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = if (isFocused) Color.White else textColor.copy(alpha = 0.72f),
+                    modifier = Modifier.align(Alignment.Center)
+                )
                 if (member.photo != null) {
                     AsyncImage(
                         model = member.photo,
@@ -1296,7 +1281,10 @@ private fun RecommendationRow(
     items: List<TmdbMetaPreview>,
     accentColor: Color,
     rowKey: String = "",
+    profileId: Int,
+    watchedViewModel: com.saab.tv.ui.home.HomeViewModel,
     onItemClick: (type: String, id: String, rowKey: String, index: Int) -> Unit = { _, _, _, _ -> },
+    onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit = { _, _ -> },
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null
 ) {
@@ -1327,12 +1315,13 @@ private fun RecommendationRow(
                     if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) true else false
                 }) {
                     RecommendationCard(
-                        item, accentColor,
+                        item, accentColor, profileId, watchedViewModel,
                         modifier = if (restoreFocusRequester != null && index == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier,
                         onClick = {
                             val stremioType = if (item.type == "tv") "series" else item.type
                             onItemClick(stremioType, "tmdb:${item.tmdbId}", rowKey, index)
-                        }
+                        },
+                        onLongClick = onLongClick
                     )
                 }
             }
@@ -1341,71 +1330,44 @@ private fun RecommendationRow(
 }
 
 @Composable
-private fun RecommendationCard(item: TmdbMetaPreview, accentColor: Color, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
-    RecommendationPosterCard(
-        name = item.name,
-        previewItem = com.saab.tv.data.model.stremio.MetaItem(
-            id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
-            name = item.name, poster = item.poster),
-        poster = item.poster,
-        accentColor = accentColor,
-        modifier = modifier.titleTrailerFocus(com.saab.tv.data.model.stremio.MetaItem(
-            id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
-            name = item.name, poster = item.poster)),
-        onClick = onClick
-    )
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun CinemetaRecommendationRow(
-    items: List<com.saab.tv.data.model.stremio.MetaItem>,
+private fun RecommendationCard(
+    item: TmdbMetaPreview,
     accentColor: Color,
-    rowKey: String,
-    onItemClick: (type: String, id: String, rowKey: String, index: Int) -> Unit,
-    restoreIndex: Int = -1,
-    restoreFocusRequester: FocusRequester? = null
+    profileId: Int,
+    watchedViewModel: com.saab.tv.ui.home.HomeViewModel,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {},
+    onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit = { _, _ -> }
 ) {
-    val rowState = rememberLazyListState()
-    val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
-    val density = LocalDensity.current
-    val startPad = 48.dp
-    val paddingPx = remember(density) { with(density) { startPad.toPx() } }
-    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val endPadding = (screenWidth - startPad - 120.dp).coerceAtLeast(120.dp)
-    val pivotSpec = remember(paddingPx) {
-        FocusPivotSpec(customOffset = paddingPx, stiffnessProvider = { Spring.StiffnessLow })
+    val meta = remember(item) {
+        com.saab.tv.data.model.stremio.MetaItem(
+            id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
+            name = item.name, poster = item.poster, background = item.backdrop,
+            description = item.description, releaseInfo = item.releaseInfo
+        )
     }
-
-    CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-        LazyRow(
-            state = rowState,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(start = startPad, end = endPadding)
-        ) {
-            itemsIndexed(items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
-                Box(modifier = Modifier.onPreviewKeyEvent { event ->
-                    if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
-                    if (repeatGate.shouldConsume(event)) return@onPreviewKeyEvent true
-                    event.type == KeyEventType.KeyDown && event.key == Key.DirectionLeft && index == 0
-                }) {
-                    RecommendationPosterCard(
-                        name = item.name,
-                        previewItem = item,
-                        poster = item.poster,
-                        accentColor = accentColor,
-                        modifier = (if (restoreFocusRequester != null && index == restoreIndex) {
-                            Modifier.focusRequester(restoreFocusRequester)
-                        } else Modifier).titleTrailerFocus(item),
-                        onClick = {
-                            val navType = if (item.type.equals("tv", ignoreCase = true)) "series" else item.type
-                            onItemClick(navType, item.id, rowKey, index)
-                        }
-                    )
-                }
-            }
-        }
+    val watchedIds = com.saab.tv.ui.components.LocalWatchedIds.current
+    var isWatched by remember(meta.id, profileId) { mutableStateOf(meta.id in watchedIds) }
+    LaunchedEffect(meta.id, profileId, watchedIds) {
+        isWatched = meta.id in watchedIds || (profileId > 0 && try {
+            watchedViewModel.isTitleWatched(profileId, meta)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        })
     }
+    com.saab.tv.ui.components.SaabTvCard(
+        title = item.name,
+        posterUrl = item.poster,
+        previewItem = meta,
+        isWatched = isWatched,
+        normalWidth = 120.dp,
+        normalHeight = 180.dp,
+        modifier = modifier.titleTrailerFocus(meta),
+        onClick = onClick,
+        onLongClick = { bounds -> onLongClick(meta, bounds) }
+    )
 }
 
 @Composable

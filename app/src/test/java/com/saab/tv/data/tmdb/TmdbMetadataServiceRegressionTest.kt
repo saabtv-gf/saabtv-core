@@ -13,6 +13,8 @@ import org.robolectric.annotation.Config
 import retrofit2.Response
 import java.lang.reflect.Proxy
 import java.util.Collections
+import kotlinx.coroutines.CancellationException
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class)
@@ -50,6 +52,7 @@ class TmdbMetadataServiceRegressionTest {
 
         assertEquals("Localized Film", result.localizedTitle)
         assertEquals(listOf("Drama"), result.genres)
+        assertEquals(listOf(1, 2), result.genreIds)
         assertEquals("U/A 16+", result.ageRating)
         assertEquals("https://image.tmdb.org/t/p/w500/localized.png", result.logo)
         assertEquals("https://image.tmdb.org/t/p/w500/poster.jpg", result.poster)
@@ -78,6 +81,49 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals("Screenwriter", result.writerMembers.single().name)
     }
 
+    @Test fun homeCardEnrichmentUsesOneEndpointAndCachesTheLightweightResult() = runBlocking {
+        val stub = ApiStub(mapOf(
+            "getMovieDetails" to TmdbDetailsResponse(
+                33, title = "Home Title", overview = "Home synopsis",
+                genres = listOf(TmdbGenre(18, "Drama")), backdropPath = "/wide.jpg",
+                originalLanguage = "ml", runtime = 101
+            )
+        ))
+        val service = service(stub)
+
+        val first = service.fetchHomeEnrichment("33", "movie", "ml")
+        val cached = service.fetchHomeEnrichment("33", "movie", "ml")
+
+        assertEquals(first, cached)
+        assertEquals("Home Title", first?.localizedTitle)
+        assertEquals(listOf(18), first?.genreIds)
+        assertEquals("https://image.tmdb.org/t/p/w1280/wide.jpg", first?.backdrop)
+        assertEquals(listOf("getMovieDetails"), stub.calls.toList())
+    }
+
+    @Test fun metadataEnrichmentPropagatesCancellationInsteadOfConvertingItToEmptyData() = runBlocking {
+        val api = Proxy.newProxyInstance(
+            TmdbApiService::class.java.classLoader,
+            arrayOf(TmdbApiService::class.java)
+        ) { _, method, _ ->
+            when (method.name) {
+                "getMovieDetails" -> throw CancellationException("navigation cancelled")
+                "getMovieCredits" -> Response.success(200, TmdbCreditsResponse())
+                "getMovieImages" -> Response.success(200, TmdbImagesResponse())
+                "getMovieReleaseDates" -> Response.success(200, TmdbMovieReleaseDatesResponse(emptyList()))
+                else -> Response.success<TmdbFindResponse>(200, TmdbFindResponse())
+            }
+        } as TmdbApiService
+        val service = TmdbMetadataService(api, TmdbService(RuntimeEnvironment.getApplication(), api))
+
+        try {
+            service.fetchEnrichment("10", "movie")
+            fail("Cancellation must propagate to the caller")
+        } catch (_: CancellationException) {
+            // Expected: the caller can stop obsolete metadata work on navigation.
+        }
+    }
+
     @Test fun episodeEnrichmentDropsMalformedEntriesDeduplicatesSeasonsAndCachesResults() = runBlocking {
         val stub = ApiStub(mapOf(
             "getTvSeasonDetails" to TmdbSeasonResponse(episodes = listOf(
@@ -98,6 +144,37 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals(result, cached)
         assertEquals(2, stub.calls.count { it == "getTvSeasonDetails" })
         assertTrue(service.fetchEpisodeEnrichment("not-numeric", listOf(1)).isEmpty())
+    }
+
+    @Test fun seasonMetadataLoadsInParallelButNeverExceedsThreeRequests() = runBlocking {
+        val active = AtomicInteger()
+        val peak = AtomicInteger()
+        val api = Proxy.newProxyInstance(
+            TmdbApiService::class.java.classLoader,
+            arrayOf(TmdbApiService::class.java)
+        ) { _, method, _ ->
+            if (method.name == "getTvSeasonDetails") {
+                val now = active.incrementAndGet()
+                peak.updateAndGet { previous -> maxOf(previous, now) }
+                try {
+                    Thread.sleep(40)
+                    Response.success(200, TmdbSeasonResponse(episodes = listOf(
+                        TmdbEpisode(1, "Season episode")
+                    )))
+                } finally {
+                    active.decrementAndGet()
+                }
+            } else {
+                Response.success(200, TmdbSeasonResponse())
+            }
+        } as TmdbApiService
+        val service = TmdbMetadataService(api, TmdbService(RuntimeEnvironment.getApplication(), api))
+
+        val episodes = service.fetchEpisodeEnrichment("42", (1..10).toList())
+
+        assertEquals(10, episodes.size)
+        assertTrue("Season detail calls should overlap", peak.get() > 1)
+        assertTrue("TMDB season requests must stay bounded", peak.get() <= 3)
     }
 
     @Test fun recommendationsApplyRelevanceOrderingAndCacheWhileCollectionsSortByDate() = runBlocking {
@@ -168,6 +245,59 @@ class TmdbMetadataServiceRegressionTest {
         assertNull(service.fetchBestTrailerKey("bad-id", "movie"))
     }
 
+    @Test fun personalizedDiscoveryUsesMediaSpecificDateSortsAndDateWindows() = runBlocking {
+        val response = TmdbDiscoverResponse(results = listOf(
+            TmdbDiscoverResult(1, title = "Movie", name = "Show", posterPath = "/poster.jpg")
+        ))
+        val stub = ApiStub(mapOf("discoverMovies" to response, "discoverTv" to response))
+        val dateRange = TmdbNaturalQuery(
+            mediaType = null,
+            genreIds = "18",
+            originalLanguage = "en",
+            sortBy = "release_date.desc",
+            tvGenreIds = "18",
+            releaseDateGte = "2025-10-08",
+            releaseDateLte = "2026-10-08"
+        )
+
+        service(stub).discoverByIntent(dateRange, maxItems = 10)
+
+        val movieArgs = stub.arguments.getValue("discoverMovies")
+        assertEquals("primary_release_date.desc", movieArgs[3])
+        assertEquals("2026-10-08", movieArgs[5])
+        assertEquals("2025-10-08", movieArgs[6])
+        assertEquals("18", movieArgs[8])
+        val tvArgs = stub.arguments.getValue("discoverTv")
+        assertEquals("first_air_date.desc", tvArgs[3])
+        assertEquals("2026-10-08", tvArgs[6])
+        assertEquals("2025-10-08", tvArgs[7])
+        assertEquals("18", tvArgs[9])
+    }
+
+    @Test fun mixedDiscoveryBalancesMoviesAndSeriesWhenOneTypeHasMoreResults() = runBlocking {
+        val stub = ApiStub(mapOf(
+            "discoverMovies" to TmdbDiscoverResponse(results = (1..5).map { id ->
+                TmdbDiscoverResult(id, title = "Movie $id", posterPath = "/movie$id.jpg", popularity = 100.0 - id)
+            }),
+            "discoverTv" to TmdbDiscoverResponse(results = (11..12).map { id ->
+                TmdbDiscoverResult(id, name = "Series $id", posterPath = "/series$id.jpg", popularity = 90.0 - id)
+            })
+        ))
+
+        val mixed = service(stub).discoverByIntent(
+            TmdbNaturalQuery(null, null, null, "popularity.desc"),
+            maxItems = 4
+        )
+        val moviesOnly = service(stub).discoverByIntent(
+            TmdbNaturalQuery("movie", null, null, "popularity.desc"),
+            maxItems = 4
+        )
+
+        assertEquals(listOf("movie", "series", "movie", "series"), mixed.map { it.type })
+        assertEquals(listOf(1, 11, 2, 12), mixed.map { it.tmdbId })
+        assertTrue(moviesOnly.all { it.type == "movie" })
+    }
+
     @Test fun entityDetailsDistinguishCompaniesAndNetworksAndDiscoverTvRoutesToNetwork() = runBlocking {
         val stub = ApiStub(mapOf(
             "getCompanyDetails" to TmdbCompanyDetailsResponse(8, "Studio", "Company bio", "London", logoPath = "/co.png", originCountry = "GB"),
@@ -200,11 +330,13 @@ class TmdbMetadataServiceRegressionTest {
 
     private class ApiStub(responses: Map<String, Any?>) {
         val calls = Collections.synchronizedList(mutableListOf<String>())
+        val arguments = Collections.synchronizedMap(mutableMapOf<String, Array<out Any?>>())
         val api: TmdbApiService = Proxy.newProxyInstance(
             TmdbApiService::class.java.classLoader,
             arrayOf(TmdbApiService::class.java)
-        ) { _, method, _ ->
+        ) { _, method, args ->
             calls += method.name
+            if (args != null) arguments[method.name] = args
             @Suppress("UNCHECKED_CAST")
             Response.success(200, responses[method.name])
         } as TmdbApiService

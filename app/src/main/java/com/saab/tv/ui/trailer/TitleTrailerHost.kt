@@ -10,9 +10,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.data.profile.rememberTrailerPreviewSettings
+import com.saab.tv.ui.components.LocalWatchedIds
 import com.saab.tv.ui.home.HomeViewModel
 
 private val LocalTitleFocus = staticCompositionLocalOf<(MetaItem?, FocusRequester) -> Unit> { { _, _ -> } }
@@ -27,6 +29,9 @@ fun TitleTrailerHost(onOpen: (MetaItem) -> Unit, defaultItem: MetaItem? = null,
     val resolvedModel = model ?: hiltViewModel()
     var profileId by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(resolvedModel) { profileId = resolvedModel.activeProfileId() }
+    val watchedIds by remember(resolvedModel, profileId) {
+        resolvedModel.watchedIdsForProfile(profileId ?: 0)
+    }.collectAsStateWithLifecycle(initialValue = emptySet())
     var item by remember { mutableStateOf<MetaItem?>(null) }
     var requester by remember { mutableStateOf<FocusRequester?>(null) }
     val contentRequester = remember { FocusRequester() }
@@ -52,16 +57,22 @@ fun TitleTrailerHost(onOpen: (MetaItem) -> Unit, defaultItem: MetaItem? = null,
                 }
             }
         }) {
-        CompositionLocalProvider(LocalTitleFocus provides { next, focus ->
-            if (next != null) { item = next; requester = focus }
-            else if (!active && requester === focus) item = null
-        }) { content() }
+        CompositionLocalProvider(
+            LocalTitleFocus provides { next, focus ->
+                if (next != null) { item = next; requester = focus }
+                else if (!active && requester === focus) item = null
+            },
+            LocalWatchedIds provides watchedIds
+        ) { content() }
         }
         val settings = rememberTrailerPreviewSettings(profileId ?: 0)
+        val focusedItem = item
+        val isDetailsAutoplay = defaultItem != null && focusedItem == null
+        val previewSettings = TrailerPreviewPolicy.settingsForPreview(settings, isDetailsAutoplay)
         BackdropTrailerPreview(focusedItem = item ?: defaultItem, catalog = emptyList(), profileId = profileId ?: 0,
-            settings = if (defaultItem != null) settings.copy(presentation = "fullscreen") else settings,
+            settings = previewSettings,
             enabled = !LocalManualTrailerActive.current && profileId != null && defaultEnabled &&
-                TrailerPreviewPolicy.allowsDetailsAutoplay(defaultItem != null, userActivityDetected),
+                (!isDetailsAutoplay || TrailerPreviewPolicy.allowsDetailsAutoplay(true, userActivityDetected)),
             resolveTrailer = resolvedModel::trailerFor, onActiveChanged = { active = it }, onOpen = onOpen,
             onDismiss = { runCatching { requester?.requestFocus() ?: contentRequester.requestFocus() } },
             activityVersion = activityVersion,

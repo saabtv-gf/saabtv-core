@@ -444,6 +444,7 @@ private fun LinearContent(
                         } else false
                     }
             ) {
+                val watchedIds = LocalWatchedIds.current
                 if (isLandscapeCards) {
                     val enriched = enrichedItems["${item.type}:${item.id}"]
                     SaabTvLandscapeCard(
@@ -455,6 +456,8 @@ private fun LinearContent(
                         onClick = { onMovieClick(item) },
                         onLongClick = { bounds -> onMovieLongClick(item, rowIndex == -1, bounds) },
                         progress = item.progress,
+                        isWatched = rowIndex != -1 && item.id in watchedIds,
+                        enableWatchedBadge = rowIndex != -1,
                         hasNewEpisode = item.hasNewEpisode,
                         onFocused = {
                             ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index)
@@ -467,7 +470,6 @@ private fun LinearContent(
                         )
                     )
                 } else {
-                    val watchedIds = LocalWatchedIds.current
                     SaabTvCard(
                         previewItem = item,
                         title = item.name,
@@ -476,6 +478,7 @@ private fun LinearContent(
                         onLongClick = { bounds -> onMovieLongClick(item, rowIndex == -1, bounds) },
                         progress = item.progress,
                         isWatched = rowIndex != -1 && item.id in watchedIds,
+                        enableWatchedBadge = rowIndex != -1,
                         hasNewEpisode = item.hasNewEpisode,
                         onFocused = {
                             ImagePrefetcher.prefetchAround(context, imageUrls, index)

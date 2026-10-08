@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.runtime.Composable
@@ -28,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -74,6 +77,75 @@ import com.saab.tv.ui.theme.LocalRoundCorners
 @OptIn(ExperimentalTvMaterial3Api::class)
 val LocalWatchedIds = compositionLocalOf { emptySet<String>() }
 
+internal fun shouldShowWatchedBadge(
+    explicitWatched: Boolean,
+    itemId: String?,
+    watchedIds: Set<String>,
+    enabled: Boolean = true
+): Boolean = enabled && (explicitWatched || (itemId != null && itemId in watchedIds))
+
+internal data class SeriesCardStackLayer(
+    val widthFraction: Float,
+    val heightFraction: Float,
+    val xOffsetDp: Float,
+    val yOffsetDp: Float,
+    val alpha: Float
+)
+
+internal val seriesCardStackLayers = listOf(
+    SeriesCardStackLayer(.95f, .98f, 16f, 8f, .45f),
+    SeriesCardStackLayer(.96f, .97f, 8f, 4f, .70f)
+)
+
+internal fun usesSeriesPosterStack(type: String?): Boolean = type == "series" || type == "tv"
+
+/** Lightweight decorative stack shared by every series use of SaabTvCard. */
+@Composable
+internal fun BoxScope.SeriesTitleCardStack(
+    cardShape: androidx.compose.ui.graphics.Shape,
+    isFocused: Boolean
+) {
+    seriesCardStackLayers.forEach { layer ->
+        val alpha by animateFloatAsState(
+            targetValue = (layer.alpha + if (isFocused) .1f else 0f).coerceAtMost(.9f),
+            animationSpec = tween(180),
+            label = "series-stack-alpha"
+        )
+        Box(
+            modifier = Modifier.align(Alignment.Center)
+                .fillMaxWidth(layer.widthFraction)
+                .fillMaxHeight(layer.heightFraction)
+                .offset(x = layer.xOffsetDp.dp, y = layer.yOffsetDp.dp)
+                .graphicsLayer { this.alpha = alpha }
+                .clip(cardShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(1.dp, Color(0xFF8AA3C7).copy(alpha = .25f), cardShape)
+        )
+    }
+}
+
+@Composable
+internal fun WatchedBadge(modifier: Modifier = Modifier) {
+    val badgeColor = MaterialTheme.colorScheme.primary
+    Box(modifier.size(28.dp)) {
+        Canvas(Modifier.fillMaxSize()) {
+            val path = androidx.compose.ui.graphics.Path().apply {
+                moveTo(size.width, 0f)
+                lineTo(0f, 0f)
+                lineTo(size.width, size.height)
+                close()
+            }
+            drawPath(path, badgeColor)
+        }
+        Text(
+            "✓",
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 1.dp, end = 2.dp)
+        )
+    }
+}
+
 @Composable
 fun SaabTvCard(
     title: String,
@@ -87,20 +159,24 @@ fun SaabTvCard(
     isWatched: Boolean = false,
     hasNewEpisode: Boolean = false,
     onFocused: (() -> Unit)? = null,
-    onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null
+    onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
+    enableWatchedBadge: Boolean = true
 ) {
+    val showWatchedBadge = shouldShowWatchedBadge(
+        isWatched, previewItem?.id, LocalWatchedIds.current, enabled = enableWatchedBadge
+    )
+    val isSeriesCard = usesSeriesPosterStack(previewItem?.type)
     var isFocused by remember { mutableStateOf(false) }
     val ownRequester = remember { FocusRequester() }
     val rememberReturnFocus = LocalPosterFocusReturn.current
     var longPressHandled by remember { mutableStateOf(false) }
     val cardCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     val roundCorners = LocalRoundCorners.current
-    
+
     // Shape based on user preference
     val cardShape = if (roundCorners) RoundedCornerShape(12.dp) else RectangleShape
     val focusedCardShape = cardShape
     // Stable geometry on focus; the border is the selection indicator.
-
     Box(
         modifier = modifier.trailerAnchor(previewItem)
             .width(normalWidth)
@@ -109,9 +185,23 @@ fun SaabTvCard(
             .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
     ) {
+        if (isSeriesCard && isFocused) {
+            Box(
+                Modifier.align(Alignment.Center)
+                    .fillMaxWidth(.98f)
+                    .fillMaxHeight(.98f)
+                    .offset(x = 3.dp, y = 2.dp)
+                    .blur(6.dp)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = .2f), cardShape)
+            )
+        }
+        if (isSeriesCard) {
+            SeriesTitleCardStack(cardShape, isFocused)
+        }
         Surface(
             onClick = onClick,
             modifier = Modifier
+                .align(Alignment.Center)
                 .fillMaxSize()
                 .focusRequester(ownRequester)
                 .onPreviewKeyEvent { event ->
@@ -144,26 +234,26 @@ fun SaabTvCard(
             ),
             border = ClickableSurfaceDefaults.border(
                 focusedBorder = Border(
-                    border = BorderStroke(2.dp, Color.White),
+                    border = BorderStroke(
+                        2.dp,
+                        Color.White
+                    ),
                     shape = focusedCardShape
                 )
             )
         ) {
             val context = LocalContext.current
-            
-            // Remembered ImageRequest to prevent recreation during recomposition
             val imageRequest = remember(posterUrl) {
                 ImageRequest.Builder(context)
                     .data(posterUrl)
-                    .crossfade(false) // No crossfade - eliminates animation overhead during scroll
+                    .crossfade(false)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
                     .scale(Scale.FILL)
-                    .size(280, 420) // Fixed size for consistent cache hits
-                    .allowHardware(true) // GPU-accelerated bitmaps
+                    .size(280, 420)
+                    .allowHardware(true)
                     .build()
             }
-            
             Box(modifier = Modifier.fillMaxSize()) {
                 // AsyncImage is lighter than SubcomposeAsyncImage - no subcomposition overhead
                 AsyncImage(
@@ -177,30 +267,7 @@ fun SaabTvCard(
                 )
 
                 // Watched badge — corner triangle with checkmark
-                if (isWatched) {
-                    val badgeColor = MaterialTheme.colorScheme.primary
-                    Canvas(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(28.dp)
-                    ) {
-                        val path = androidx.compose.ui.graphics.Path().apply {
-                            moveTo(size.width, 0f)
-                            lineTo(0f, 0f)
-                            lineTo(size.width, size.height)
-                            close()
-                        }
-                        drawPath(path, badgeColor)
-                    }
-                    Text(
-                        "✓",
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 1.dp, end = 2.dp)
-                    )
-                }
+                if (showWatchedBadge) WatchedBadge(Modifier.align(Alignment.TopEnd))
 
                 // New episode badge for next-up items
                 if (hasNewEpisode) {

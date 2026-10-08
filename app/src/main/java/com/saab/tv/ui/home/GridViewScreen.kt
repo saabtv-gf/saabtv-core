@@ -57,6 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -111,6 +112,9 @@ fun GridViewScreen(
     allowTrailerAutoplay: Boolean = true,
     previewViewModel: HomeViewModel = hiltViewModel()
 ) {
+    val liveWatchedIds by remember(previewViewModel, profileId) {
+        previewViewModel.watchedIdsForProfile(profileId)
+    }.collectAsStateWithLifecycle(initialValue = emptySet())
     var actionItem by remember { mutableStateOf<MetaItem?>(null) }
     var previewItem by remember { mutableStateOf<MetaItem?>(null) }
     var previewActive by remember { mutableStateOf(false) }
@@ -244,6 +248,7 @@ fun GridViewScreen(
         // SCROLLABLE GRID - Positioned first so header overlays it
         // ══════════════════════════════════════════════════════════════
         CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec,
+            com.saab.tv.ui.components.LocalWatchedIds provides liveWatchedIds,
             com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(COLUMNS),
@@ -287,7 +292,7 @@ fun GridViewScreen(
                         posterUrl = item.poster,
                         onClick = { onMovieClick(item) },
                         onLongClick = { bounds -> actionBounds = bounds; actionItem = item },
-                        isWatched = item.id in watchedIds,
+                        isWatched = item.id in liveWatchedIds,
                         modifier = Modifier
                             .aspectRatio(2f / 3f)
                             .onPreviewKeyEvent { keyEvent ->
@@ -348,7 +353,7 @@ fun GridViewScreen(
                             .onFocusChanged {
                                 if (it.isFocused) {
                                     previewItem = item
-                                    ImagePrefetcher.prefetchAround(context, imageUrls, index, count = 12)
+                                    ImagePrefetcher.prefetchAround(context, imageUrls, index, count = 5)
                                     onFocusChange(index)
                                     lastFocusedPosterIndex = index
                                     val pendingTarget = pendingDirectionalTargetIndex
@@ -470,8 +475,10 @@ fun GridViewScreen(
         }
     }
     actionItem?.let { item ->
-        CatalogQuickActionsPopup(item, actionBounds, profileId,
-            onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick)
+        CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides liveWatchedIds) {
+            CatalogQuickActionsPopup(item, actionBounds, profileId,
+                onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick, viewModel = previewViewModel)
+        }
     }
     com.saab.tv.ui.trailer.BackdropTrailerPreview(
         profileId = profileId,

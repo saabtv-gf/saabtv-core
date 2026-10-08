@@ -1,5 +1,6 @@
 package com.saab.tv.ui.trailer
 
+import com.saab.tv.data.profile.TrailerPreviewSettings
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -19,6 +20,27 @@ class TrailerPreviewPolicyTest {
         assertTrue(TrailerPreviewPolicy.allowsDetailsAutoplay(false, true))
         assertTrue(TrailerPreviewPolicy.allowsDetailsAutoplay(true, false))
         assertFalse(TrailerPreviewPolicy.allowsDetailsAutoplay(true, true))
+    }
+    @Test fun detailsAutoplayForcesSoundAndIgnoresTheGlobalEnabledToggle() {
+        val effective = TrailerPreviewPolicy.detailsAutoplaySettings(
+            TrailerPreviewSettings(enabled = false, delaySeconds = 10, muted = true, presentation = "inline")
+        )
+        assertTrue(effective.enabled)
+        assertFalse(effective.muted)
+        assertEquals("fullscreen", effective.presentation)
+        assertEquals(10, effective.delaySeconds)
+    }
+    @Test fun recommendationCardsKeepGlobalTrailerPresentationAndMuteSettings() {
+        val global = TrailerPreviewSettings(enabled = true, delaySeconds = 8, muted = true, presentation = "inline")
+        assertEquals(global, TrailerPreviewPolicy.settingsForPreview(global, isDetailsTitle = false))
+    }
+    @Test fun onlyTheDetailsTitleTrailerIsForcedFullscreen() {
+        val global = TrailerPreviewSettings(enabled = false, delaySeconds = 10, muted = true, presentation = "inline")
+        val detailsTitle = TrailerPreviewPolicy.settingsForPreview(global, isDetailsTitle = true)
+        assertTrue(detailsTitle.enabled)
+        assertFalse(detailsTitle.muted)
+        assertEquals("fullscreen", detailsTitle.presentation)
+        assertEquals(10, detailsTitle.delaySeconds)
     }
     @Test fun disabledAndBackgroundedPreviewsNeverStart() {
         assertFalse(TrailerPreviewPolicy.canStart(false, true, "movie:a", "movie:a", null, null))

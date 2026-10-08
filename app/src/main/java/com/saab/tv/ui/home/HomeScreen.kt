@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material3.Button
@@ -128,6 +129,9 @@ fun HomeScreen(
 ) {
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val profileWatchedIds by remember(viewModel, currentProfile?.id) {
+        viewModel.watchedIdsForProfile(currentProfile?.id ?: 1)
+    }.collectAsStateWithLifecycle(initialValue = emptySet())
     val actionScope = rememberCoroutineScope()
     val homeContext = LocalContext.current
     var longPressedItem by remember { mutableStateOf<Pair<MetaItem, Boolean>?>(null) }
@@ -198,7 +202,7 @@ fun HomeScreen(
             .focusGroup()
     ) {
         SaabTvBackground {
-        CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides state.watchedIds,
+        CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides profileWatchedIds,
             com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
         // LOGIC: If we are just starting OR the ViewModel is loading, show the Loading Box.
         // This box accepts focus immediately, which forces the NavDrawer to collapse.
@@ -372,8 +376,16 @@ fun HomeScreen(
             }
             val nextUp = state.seriesNextUp.firstOrNull { it.seriesId == item.id }
             var watchlisted by remember(item.id, profileId) { mutableStateOf<Boolean?>(null) }
-            LaunchedEffect(item.id, profileId) {
+            var watched by remember(item.id, profileId) { mutableStateOf(item.id in profileWatchedIds) }
+            LaunchedEffect(item.id, profileId, profileWatchedIds) {
                 watchlisted = viewModel.isWatchlisted(profileId, item.id)
+                watched = item.id in profileWatchedIds || try {
+                    viewModel.isTitleWatched(profileId, item)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
             }
             var pausedFrame by remember(historyEntry?.id, historyEntry?.position) {
                 mutableStateOf<android.graphics.Bitmap?>(null)
@@ -385,7 +397,7 @@ fun HomeScreen(
             }
             val density = LocalDensity.current
             val screen = LocalConfiguration.current
-            val popupWidth = if (isContinue) 210.dp else 124.dp
+            val popupWidth = if (isContinue) 210.dp else 176.dp
             val popupWidthPx = with(density) { popupWidth.roundToPx() }
             val popupHeightPx = with(density) {
                 (if (confirmClear) 106.dp else if (isContinue && pausedFrame != null) 174.dp else if (isContinue) 100.dp else 60.dp).roundToPx()
@@ -449,6 +461,13 @@ fun HomeScreen(
                     ) {
                         CardActionIcon(Icons.Default.PlayArrow, "Resume", { longPressedItem = null; onContinueClick(item) },
                             Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
+                        CardActionIcon(Icons.Default.DoneAll, if (watched) "Watched" else "Mark As Watched", {
+                            if (!watched) {
+                                viewModel.markTitleWatched(profileId, item)
+                                watched = true
+                            }
+                            dismissQuickActions()
+                        }, Modifier, enabled = actionsArmed && !watched)
                         CardActionIcon(Icons.Default.Delete, "Clear Progress", { confirmClear = true },
                             Modifier, enabled = actionsArmed, destructive = true)
                     }
@@ -474,6 +493,13 @@ fun HomeScreen(
                         }
                         longPressedItem = null
                     }, modifier = Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
+                    CardActionIcon(Icons.Default.DoneAll, if (watched) "Watched" else "Mark As Watched", onClick = {
+                        if (!watched) {
+                            viewModel.markTitleWatched(profileId, item)
+                            watched = true
+                        }
+                        dismissQuickActions()
+                    }, modifier = Modifier, enabled = actionsArmed && !watched)
                     watchlisted?.let { saved ->
                         CardActionIcon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
@@ -616,7 +642,9 @@ fun CinematicLayout(
 
     // Proactive metadata fetch for continue watching cards (posters + landscape)
     LaunchedEffect(historyItems) {
-        historyItems.take(15).forEach { item -> onPreviewItemVisible(item) }
+        // Keep initial TMDB enrichment work bounded; focused navigation warms the
+        // next item on demand, so preferring the first few recent titles is enough.
+        historyItems.take(3).forEach { item -> onPreviewItemVisible(item) }
     }
 
     // Redirect stale continue-watching focus key after progress was cleared
@@ -659,9 +687,12 @@ fun CinematicLayout(
         // SMART FOCUS:
         // We are now safe to request focus because HomeScreen ensures we only reach here when data is ready.
         if (!hasRequestedFocus && (historyItems.isNotEmpty() || state.mixedRows.isNotEmpty())) {
-            delay(100)
-            entryRequester.requestFocus()
-            hasRequestedFocus = true
+            repeat(8) {
+                if (!hasRequestedFocus) {
+                    delay(100)
+                    hasRequestedFocus = requestFocusIfReady(entryRequester::requestFocus)
+                }
+            }
         }
     }
 
@@ -707,14 +738,22 @@ fun CinematicLayout(
 
     fun updatePreviewItem(item: MetaItem?) {
         if (item == null) return
-        onPreviewItemVisible(item)
         val now = System.currentTimeMillis()
         val isRapid = verticalFocusTiming.isRapid(RAPID_VERTICAL_NAV_WINDOW_MS)
-        val allowUpdate = !isRapid || now - previewUpdateGate.lastUpdateMs >= RAPID_PREVIEW_UPDATE_MIN_INTERVAL_MS
-        if (allowUpdate && (instantFocusItem?.id != item.id || instantFocusItem?.type != item.type)) {
+        val allowUpdate = HomePreviewMetadataPolicy.shouldWarmFocusedMetadata(
+            isRapid,
+            now - previewUpdateGate.lastUpdateMs,
+            RAPID_PREVIEW_UPDATE_MIN_INTERVAL_MS
+        )
+        if (!allowUpdate) return
+
+        // Only warm addon/TMDB metadata for a preview that can actually be shown.
+        // Rapid D-pad focus hops are intentionally ignored to avoid request fan-out.
+        onPreviewItemVisible(item)
+        if (instantFocusItem?.id != item.id || instantFocusItem?.type != item.type) {
             instantFocusItem = item
             previewUpdateGate.lastUpdateMs = now
-        } else if (allowUpdate) {
+        } else {
             previewUpdateGate.lastUpdateMs = now
         }
     }
@@ -1252,7 +1291,7 @@ fun SimpleLayout(
 
     // Proactive metadata fetch for continue watching cards (posters + landscape)
     LaunchedEffect(historyItems) {
-        historyItems.take(15).forEach { item -> onHeroItemVisible(item) }
+        historyItems.take(3).forEach { item -> onHeroItemVisible(item) }
     }
 
     // Redirect stale continue-watching focus key after progress was cleared

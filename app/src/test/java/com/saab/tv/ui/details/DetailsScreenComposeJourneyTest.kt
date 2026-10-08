@@ -11,6 +11,10 @@ import com.saab.tv.data.model.AddonEntity
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.data.model.stremio.MetaVideo
 import com.saab.tv.data.model.stremio.Stream
+import com.saab.tv.data.remote.TmdbApiService
+import com.saab.tv.data.model.tmdb.TmdbFindResponse
+import com.saab.tv.data.tmdb.TmdbMetadataService
+import com.saab.tv.data.tmdb.TmdbService
 import com.saab.tv.testing.FeatureFixture
 import com.saab.tv.testing.awaitAppState
 import kotlinx.coroutines.cancel
@@ -26,6 +30,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
+import retrofit2.Response
+import java.lang.reflect.Proxy
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class, qualifiers = "w1280dp-h720dp-land")
@@ -125,6 +131,46 @@ class DetailsScreenComposeJourneyTest {
         assertEquals(continueEpisode, detailsViewModel.state.value.resumePlaybackId)
         awaitAppState { fixture.api.calls.any { it.contains("/stream/series/$continueEpisode.json") } }
         assertTrue(fixture.api.calls.any { it.contains("/stream/series/$continueEpisode.json") })
+    }
+
+    @Test fun addonDetailsRenderWhileTmdbEnrichmentIsStillPending() {
+        val profile = runBlocking { fixture.dao.getProfileById(71)!! }
+        runBlocking { fixture.dao.updateProfile(profile.copy(tmdbEnabled = true)) }
+        fixture.api.metadata["tt-slow-tmdb"] = MetaItem("tt-slow-tmdb", "movie", "Immediate Addon Details")
+        detailsViewModel.viewModelScope.cancel()
+
+        val delayedTmdbApi = Proxy.newProxyInstance(
+            TmdbApiService::class.java.classLoader,
+            arrayOf(TmdbApiService::class.java)
+        ) { _, method, _ ->
+            if (method.name == "findByExternalId") Thread.sleep(1_000)
+            Response.success<TmdbFindResponse>(200, TmdbFindResponse())
+        } as TmdbApiService
+        val tmdb = TmdbService(RuntimeEnvironment.getApplication(), delayedTmdbApi)
+        val metadata = TmdbMetadataService(delayedTmdbApi, tmdb)
+        detailsViewModel = DetailsViewModel(
+            fixture.dao, fixture.sources, fixture.tracks, fixture.app.repository, fixture.subtitles,
+            fixture.app.configuration, fixture.sorting, tmdb, metadata, fixture.traktSync,
+            fixture.cache, fixture.app.display, fixture.sync
+        )
+        detailsViewModel.loadDetails("movie", "tt-slow-tmdb", addonBaseUrl = "https://fixture.invalid")
+        awaitAppState {
+            !detailsViewModel.state.value.isLoading && detailsViewModel.state.value.tmdbLoading
+        }
+
+        compose.setContent {
+            MaterialTheme {
+                DetailsScreen(
+                    type = "movie",
+                    id = "tt-slow-tmdb",
+                    onPlayClick = { _, _, _, _, _, _, _, _, _, _ -> },
+                    viewModel = detailsViewModel,
+                    trailerHostViewModel = homeViewModel
+                )
+            }
+        }
+
+        compose.onNodeWithText("Immediate Addon Details").assertExists()
     }
 
     private fun showDetails(type: String, id: String) {

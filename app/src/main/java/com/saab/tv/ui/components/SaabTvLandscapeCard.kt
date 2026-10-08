@@ -85,10 +85,15 @@ fun SaabTvLandscapeCard(
     modifier: Modifier = Modifier,
     previewItem: com.saab.tv.data.model.stremio.MetaItem? = null,
     progress: Float = 0f,
+    isWatched: Boolean = false,
     hasNewEpisode: Boolean = false,
     onFocused: (() -> Unit)? = null,
-    onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null
+    onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
+    enableWatchedBadge: Boolean = true
 ) {
+    val showWatchedBadge = shouldShowWatchedBadge(
+        isWatched, previewItem?.id, LocalWatchedIds.current, enabled = enableWatchedBadge
+    )
     var isFocused by remember { mutableStateOf(false) }
     val ownRequester = remember { FocusRequester() }
     val rememberReturnFocus = LocalPosterFocusReturn.current
@@ -173,6 +178,8 @@ fun SaabTvLandscapeCard(
                         .clip(cardShape)
                         .background(MaterialTheme.colorScheme.surface)
                 )
+
+                if (showWatchedBadge) WatchedBadge(Modifier.align(Alignment.TopEnd))
 
                 // Bottom gradient scrim for logo/text readability
                 Box(

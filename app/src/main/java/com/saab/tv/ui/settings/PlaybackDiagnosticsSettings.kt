@@ -44,6 +44,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,21 +80,38 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
     LaunchedEffect(refreshToken) {
         while (true) {
             report = withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.report(context) }
-            delay(2_000L)
+            delay(5_000L)
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        val currentReport = report
+    val currentReport = report
+    val eventKeys = remember(currentReport?.events) {
+        val occurrences = mutableMapOf<String, Int>()
+        currentReport?.events.orEmpty().map { item ->
+            val base = "${item.timestampMs}-${item.component}-${item.event}-${item.details.hashCode()}"
+            val occurrence = occurrences.getOrDefault(base, 0)
+            occurrences[base] = occurrence + 1
+            "$base-$occurrence"
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().testTag("app-diagnostics-list"),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 28.dp)
+    ) {
+        item(key = "diagnostics-header") {
+            Column(modifier = Modifier.fillMaxWidth()) {
         val canFocusEvents = currentReport?.events?.isNotEmpty() == true
         val focusFirstEvent: (() -> Unit)? = if (canFocusEvents) {
             {
                 scope.launch {
                     try {
                         // Lazy rows are detached when off-screen. Compose the target before focusing it.
-                        listState.scrollToItem(0)
+                        listState.scrollToItem(1)
                         withFrameNanos { }
-                        if (listState.layoutInfo.visibleItemsInfo.any { it.index == 0 }) {
+                        if (listState.layoutInfo.visibleItemsInfo.any { it.index == 1 }) {
                             firstEventRequester.requestFocus()
                         }
                     } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -105,16 +123,6 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
                 Unit
             }
         } else null
-        val eventKeys = remember(currentReport?.events) {
-            val occurrences = mutableMapOf<String, Int>()
-            currentReport?.events.orEmpty().map { item ->
-                val base = "${item.timestampMs}-${item.component}-${item.event}-${item.details.hashCode()}"
-                val occurrence = occurrences.getOrDefault(base, 0)
-                occurrences[base] = occurrence + 1
-                "$base-$occurrence"
-            }
-        }
-
         Text(
             "App Diagnostics",
             style = MaterialTheme.typography.titleMedium.copy(
@@ -258,30 +266,28 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
                 modifier = Modifier.padding(top = 3.dp, bottom = 10.dp)
             )
 
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 28.dp)
-            ) {
-                itemsIndexed(
-                    items = currentReport.events,
-                    key = { index, _ -> eventKeys[index] }
-                ) { index, item ->
-                    DiagnosticEventCard(
-                        item = item,
-                        index = index,
-                        modifier = if (index == 0) {
-                            Modifier.focusRequester(firstEventRequester).focusProperties { up = firstButtonRequester }
-                        } else {
-                            Modifier
-                        },
-                        onFocused = {
-                            scope.launch { listState.animateScrollToItem(index) }
-                        },
-                        onLeft = onGoBack
-                    )
-                }
+        }
+            }
+        }
+
+        if (currentReport != null) {
+            itemsIndexed(
+                items = currentReport.events,
+                key = { index, _ -> eventKeys[index] }
+            ) { index, item ->
+                DiagnosticEventCard(
+                    item = item,
+                    index = index,
+                    modifier = if (index == 0) {
+                        Modifier.focusRequester(firstEventRequester).focusProperties { up = firstButtonRequester }
+                    } else {
+                        Modifier
+                    },
+                    onFocused = {
+                        scope.launch { listState.animateScrollToItem(index + 1) }
+                    },
+                    onLeft = onGoBack
+                )
             }
         }
     }

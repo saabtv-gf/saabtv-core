@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.local.AddonDao
 import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.model.WatchlistEntity
+import com.saab.tv.data.model.SeriesNextUpEntity
 import com.saab.tv.data.cache.SeekThumbnailCache
 import com.saab.tv.data.account.AccountSyncManager
 import com.saab.tv.data.player.SourceSelectionStore
@@ -16,28 +17,65 @@ import com.saab.tv.data.ott.OttCatalogException
 import com.saab.tv.data.ott.OttCatalogRepository
 import com.saab.tv.data.repository.AddonRepository
 import com.saab.tv.data.tmdb.TmdbMetadataService
+import com.saab.tv.data.tmdb.TmdbNaturalQuery
 import com.saab.tv.data.tmdb.TmdbService
+import com.saab.tv.data.tmdb.mixTmdbMediaTypes
 import com.saab.tv.domain.HomeRow
 import com.saab.tv.domain.HubGroupRow
 import com.saab.tv.ui.utils.ImagePrefetcher
+import com.saab.tv.ui.components.mergeProfileWatchedIds
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 import com.saab.tv.domain.HomeRowItem
 import com.saab.tv.domain.CategoryRow
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.domain.DashboardTab
 import com.saab.tv.domain.heroFor
+
+internal fun rankWatchHistorySuggestions(
+    recommendationsByHistory: List<List<com.saab.tv.data.tmdb.TmdbMetaPreview>>,
+    limit: Int = 30
+): List<com.saab.tv.data.tmdb.TmdbMetaPreview> {
+    data class Candidate(val item: com.saab.tv.data.tmdb.TmdbMetaPreview, var matchScore: Double)
+
+    val candidates = linkedMapOf<Pair<String, Int>, Candidate>()
+    recommendationsByHistory.forEachIndexed { historyIndex, recommendations ->
+        val historyWeight = 1.0 / (historyIndex + 1)
+        recommendations.forEachIndexed { recommendationIndex, item ->
+            val type = if (item.type == "tv") "series" else item.type
+            val key = type to item.tmdbId
+            val candidate = candidates.getOrPut(key) {
+                Candidate(if (item.type == type) item else item.copy(type = type), 0.0)
+            }
+            candidate.matchScore += historyWeight / (recommendationIndex + 1)
+        }
+    }
+
+    return candidates.values
+        .sortedWith(
+            compareByDescending<Candidate> { it.matchScore }
+                .thenByDescending { it.item.popularity ?: 0.0 }
+                .thenByDescending { it.item.rating ?: 0.0 }
+        )
+        .take(limit.coerceAtLeast(0))
+        .map { it.item }
+}
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -54,8 +92,14 @@ class HomeViewModel @Inject constructor(
     private val traktSyncManager: TraktSyncManager
 ) : ViewModel() {
 
+    private val optimisticWatchedIds = MutableStateFlow<Map<Int, Set<String>>>(emptyMap())
+
     suspend fun isWatchlisted(profileId: Int, id: String): Boolean = dao.isInWatchlist(profileId, id)
     suspend fun activeProfileId(): Int? = dao.getActiveProfileId()
+    fun watchedIdsForProfile(profileId: Int): kotlinx.coroutines.flow.Flow<Set<String>> = combine(
+        dao.getWatchedIdsForProfile(profileId), optimisticWatchedIds
+    ) { persisted, optimistic -> mergeProfileWatchedIds(profileId, persisted, optimistic) }
+        .distinctUntilChanged()
 
     // Owned by the ViewModel, not the trailer composition: Start Watching may
     // dismiss the overlay while the same source lookup is still in flight.
@@ -108,6 +152,80 @@ class HomeViewModel @Inject constructor(
             accountSync.historyChanged(urgent = true)
         }
     }
+
+    suspend fun isTitleWatched(profileId: Int, item: MetaItem): Boolean {
+        val id = resolveTitleId(item) ?: item.id
+        if (dao.getHistoryItemForProfile(profileId, id)?.watched == true) return true
+        return item.isSeriesTitle() && dao.getSeriesNextUpForProfile(profileId)
+            .any { it.seriesId == id && it.isComplete }
+    }
+
+    fun markTitleWatched(profileId: Int, item: MetaItem) {
+        // Emit the card ID before the database write/resolution begins so every
+        // visible card can draw its watched badge without waiting for disk/network IO.
+        optimisticWatchedIds.update { current ->
+            current + (profileId to (current[profileId].orEmpty() + item.id))
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val id = resolveTitleId(item) ?: item.id
+            if (dao.getHistoryItemForProfile(profileId, id)?.watched == true) return@launch
+            val now = System.currentTimeMillis()
+            if (item.isSeriesTitle()) {
+                val meta = if (item.id == id) item else repository.resolveMetaDetails("series", id, item.addonBaseUrl)
+                val episodes = com.saab.tv.domain.normalizeEpisodeList(meta?.videos.orEmpty())
+                val prior = dao.getSeriesEpisodeHistoryForProfile(profileId, "$id:%")
+                if (episodes.isNotEmpty()) {
+                    val watchedEntries = episodes.map { episode ->
+                        val previous = prior.firstOrNull {
+                            com.saab.tv.domain.episodeMatchesPlaybackId(id, it.id, episode)
+                        }
+                        previous?.copy(watched = true, lastWatched = now)
+                            ?: WatchHistoryEntity(
+                                profileId = profileId,
+                                id = com.saab.tv.domain.episodePlaybackId(id, episode),
+                                title = episode.title.takeIf { it.isNotBlank() } ?: "${item.name} S${episode.season}E${episode.episode}",
+                                poster = item.poster,
+                                position = 0L,
+                                duration = 0L,
+                                lastWatched = now,
+                                type = "series",
+                                watched = true
+                            )
+                    }
+                    dao.insertHistoryItems(watchedEntries)
+                }
+                dao.insertHistory(
+                    WatchHistoryEntity(profileId, id, item.name, item.poster, item.background, item.logo,
+                        0L, 0L, now, "series", watched = true)
+                )
+                dao.insertSeriesNextUp(
+                    SeriesNextUpEntity(profileId, id, item.name, item.poster, 0, 0, null,
+                        isComplete = true, updatedAt = now)
+                )
+                seekThumbnailCache.clearContentPrefix(profileId, id)
+            } else {
+                val previous = dao.getHistoryItemForProfile(profileId, id)
+                dao.insertHistory(previous?.copy(watched = true, lastWatched = now) ?: WatchHistoryEntity(
+                    profileId = profileId, id = id, title = item.name, poster = item.poster,
+                    background = item.background, logo = item.logo, position = 0L, duration = 0L,
+                    lastWatched = now, type = "movie", watched = true
+                ))
+                seekThumbnailCache.clearContent(profileId, id)
+            }
+            dao.removeFromWatchlist(profileId, id)
+            if (id != item.id) dao.removeFromWatchlist(profileId, item.id)
+            accountSync.historyChanged(urgent = true)
+        }
+    }
+
+    private suspend fun resolveTitleId(item: MetaItem): String? {
+        if (!item.id.startsWith("tmdb:", ignoreCase = true)) return item.id
+        val tmdbId = item.id.substringAfter(':').substringBefore(':').toIntOrNull() ?: return null
+        return tmdbService.tmdbToImdb(tmdbId, tmdbService.normalizeMediaType(item.type))
+    }
+
+    private fun MetaItem.isSeriesTitle(): Boolean =
+        type.equals("series", ignoreCase = true) || type.equals("tv", ignoreCase = true)
 
     fun clearContinueProgress(profileId: Int, item: MetaItem) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -176,6 +294,7 @@ class HomeViewModel @Inject constructor(
         val mixedRows: List<HomeRowItem> = emptyList(),
         val rows: List<HomeRow> = emptyList(),
         val hubRows: List<HubGroupRow> = emptyList(),
+        val personalizedRows: List<CategoryRow> = emptyList(),
         val history: List<WatchHistoryEntity> = emptyList(),
         val seriesNextUp: List<com.saab.tv.data.model.SeriesNextUpEntity> = emptyList(),
         val isLoading: Boolean = true,
@@ -360,10 +479,11 @@ class HomeViewModel @Inject constructor(
      * Called after data loads to ensure images are in cache before scroll starts.
      */
     private fun prefetchFirstVisibleImages(rows: List<HomeRow>) {
-        // Prefetch first 10 images from first 3 rows (most likely to be visible on screen)
+        // Warm only the nearest two rows; a 30-poster startup burst competes with
+        // TMDB, video buffers, and the thumbnail worker for memory and bandwidth.
         val imagesToPrefetch = rows
-            .take(3)
-            .flatMap { row -> row.items.take(10) }
+            .take(2)
+            .flatMap { row -> row.items.take(6) }
             .mapNotNull { it.poster }
         
         imagesToPrefetch.forEach { url ->
@@ -460,6 +580,8 @@ class HomeViewModel @Inject constructor(
                         }
                     }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 metadataFallbackCache[key] = null
             } finally {
@@ -567,7 +689,8 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private val tmdbEnrichmentInFlight = mutableSetOf<String>()
+    private val tmdbEnrichmentInFlight = ConcurrentHashMap.newKeySet<String>()
+    @Volatile
     private var tmdbProfileCache: com.saab.tv.data.model.ProfileEntity? = null
 
     /**
@@ -580,6 +703,7 @@ class HomeViewModel @Inject constructor(
         if (!profile.tmdbEnabled) return
 
         val key = "tmdb:${item.type}:${item.id}"
+        if ("${item.type}:${item.id}" in _state.value.tmdbEnrichedIds) return
         if (!tmdbEnrichmentInFlight.add(key)) return
 
         val language = profile.tmdbLanguage.ifBlank { null } ?: "en"
@@ -593,7 +717,7 @@ class HomeViewModel @Inject constructor(
                     markTmdbEnriched(item.type, item.id)
                     return@launch
                 }
-                val enrichment = tmdbMetadataService.fetchEnrichment(tmdbId, mediaType, language)
+                val enrichment = tmdbMetadataService.fetchHomeEnrichment(tmdbId, mediaType, language)
                 if (enrichment == null) {
                     markTmdbEnriched(item.type, item.id)
                     return@launch
@@ -605,12 +729,14 @@ class HomeViewModel @Inject constructor(
                     logo = enrichment.logo,
                     description = enrichment.description,
                     releaseInfo = enrichment.releaseInfo,
-                    imdbRating = enrichment.rating?.let { String.format(Locale.ROOT, "%.1f", it) },
+                    imdbRating = null,
                     runtime = enrichment.runtimeMinutes?.let { "${it}m" },
                     genres = enrichment.genres.ifEmpty { null }
                 )
 
                 applyTmdbEnrichmentToState(item.type, item.id, fallback, item)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 Log.w("HomeViewModel", "TMDB enrichment failed for ${item.id}: ${e.message}")
                 markTmdbEnriched(item.type, item.id)
@@ -728,6 +854,7 @@ class HomeViewModel @Inject constructor(
                 mixedRows = emptyList(),
                 rows = emptyList(),
                 hubRows = emptyList(),
+                personalizedRows = emptyList(),
                 lastFocusedKey = null,  // Reset focus when loading new screen
                 rowScrollPositions = emptyMap(),  // Reset scroll positions for new screen
                 verticalScrollPosition = Pair(0, 0),  // Reset vertical scroll for new screen
@@ -844,6 +971,20 @@ class HomeViewModel @Inject constructor(
                     )
                 }
 
+                if (screenName == "home" && currentProfile?.tmdbEnabled == true && tmdbService.hasApiKey()) {
+                    launch {
+                        val personalized = loadPersonalizedRows(currentProfile, initialRows)
+                        if (generation != screenGeneration || personalized.isEmpty()) return@launch
+                        _state.update { current ->
+                            if (current.loadedScreen != "home" || current.loadedProfileId != currentProfileId) current
+                            else current.copy(
+                                personalizedRows = personalized,
+                                mixedRows = (current.mixedRows + personalized).distinctBy { it.id }.sortedBy { it.order }
+                            )
+                        }
+                    }
+                }
+
                 // Start a tiny metadata warmup pass for items likely to render first.
                 prefetchLikelyVisibleMetadata(rows = initialRows, heroRow = heroRow)
 
@@ -871,8 +1012,8 @@ class HomeViewModel @Inject constructor(
                             else -> null
                         }
 
-                        val mixedList = (hubRows + allRows.map { CategoryRow.fromHomeRow(it) })
-                            .sortedBy { it.order }
+                        val mixedList = (hubRows + allRows.map { CategoryRow.fromHomeRow(it) } + currentState.personalizedRows)
+                            .distinctBy { it.id }.sortedBy { it.order }
 
                         currentState.copy(
                             mixedRows = mixedList,
@@ -899,6 +1040,151 @@ class HomeViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    private suspend fun loadPersonalizedRows(
+        profile: com.saab.tv.data.model.ProfileEntity,
+        homeRows: List<HomeRow>
+    ): List<CategoryRow> {
+        return try {
+            val history = dao.getWatchHistoryForProfileOnce(profile.id)
+            val watchlist = dao.getWatchlistOnce(profile.id)
+            val watchedTitles = history.asSequence()
+                .filter { it.watched || it.position > 0L }
+                .groupBy { if (it.type == "series") com.saab.tv.domain.seriesIdFromPlaybackId(it.id) else it.id }
+                .mapNotNull { (id, entries) ->
+                    entries.maxByOrNull { it.lastWatched }?.let { latest -> id to latest }
+                }
+                .sortedByDescending { it.second.lastWatched }
+                .take(3)
+                .map { (id, latest) ->
+                    Triple(id, latest.type, latest.title)
+                }
+                .toList()
+            val interestSeeds = (watchedTitles + watchlist.take(2).map { Triple(it.id, it.type, it.title) })
+                .distinctBy { "${it.second}:${it.first}" }.take(3)
+            val language = profile.tmdbLanguage.ifBlank { "en" }
+            val visibleIds = homeRows.flatMap { row -> row.items.map { "${it.type}:${it.id}" } }.toSet()
+            val usedTmdbKeys = mutableSetOf<String>()
+            val output = mutableListOf<CategoryRow>()
+
+            fun previewsToItems(previews: List<com.saab.tv.data.tmdb.TmdbMetaPreview>, limit: Int = 10): List<MetaItem> =
+                previews.asSequence().mapNotNull { result ->
+                    val type = if (result.type == "tv") "series" else result.type
+                    val tmdbKey = "$type:tmdb:${result.tmdbId}"
+                    if (tmdbKey in usedTmdbKeys || "$type:tmdb:${result.tmdbId}" in visibleIds) return@mapNotNull null
+                    usedTmdbKeys += tmdbKey
+                    MetaItem(
+                        id = "tmdb:${result.tmdbId}", type = type, name = result.name, poster = result.poster,
+                        background = result.backdrop, description = result.description,
+                        releaseInfo = result.releaseInfo
+                    )
+                }.take(limit).toList()
+
+            fun addRow(id: String, title: String, order: Int, previews: List<com.saab.tv.data.tmdb.TmdbMetaPreview>) {
+                val items = previewsToItems(previews)
+                if (items.isNotEmpty()) output += CategoryRow(id, title, Int.MIN_VALUE + order, items)
+            }
+
+            // Aggregate every recent history seed into one rail, ranking titles by
+            // overlap and position across each seed's TMDB recommendations.
+            val historyRecommendations = kotlinx.coroutines.coroutineScope {
+                watchedTitles.map { (seedId, type, _) -> async(Dispatchers.IO) {
+                    val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async emptyList()
+                    tmdbMetadataService.fetchRecommendations(tmdbId, type, language, maxItems = 20)
+                } }.awaitAll()
+            }
+            val historyRankedSuggestions = rankWatchHistorySuggestions(historyRecommendations)
+
+            // A small, bounded enrichment sample gives genre rails and cross-type
+            // suggestions real signals without slowing the initial catalog load.
+            val interestDetails = kotlinx.coroutines.coroutineScope {
+                interestSeeds.map { (seedId, type, _) -> async(Dispatchers.IO) {
+                    val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async null
+                    val enrichment = tmdbMetadataService.fetchHomeEnrichment(tmdbId, type, language) ?: return@async null
+                    Triple(type, tmdbId, enrichment)
+                } }.awaitAll().filterNotNull()
+            }
+
+            val genreVotes = linkedMapOf<Pair<String, Int>, Int>()
+            interestDetails.forEach { (type, _, enrichment) ->
+                val normalizedType = if (type == "series" || type == "tv") "tv" else "movie"
+                enrichment.genreIds.forEach { genreId ->
+                    val key = normalizedType to genreId
+                    genreVotes[key] = (genreVotes[key] ?: 0) + 1
+                }
+            }
+            val favoriteMovieGenres = genreVotes.filterKeys { it.first == "movie" }
+                .entries.sortedByDescending { it.value }.take(2).map { it.key.second }
+            val favoriteTvGenres = genreVotes.filterKeys { it.first == "tv" }
+                .entries.sortedByDescending { it.value }.take(2).map { it.key.second }
+            val allFavoriteGenres = favoriteMovieGenres.isNotEmpty() || favoriteTvGenres.isNotEmpty()
+            val genreFilterMovie = favoriteMovieGenres.joinToString(",").ifBlank { null }
+            val genreFilterTv = favoriteTvGenres.joinToString(",").ifBlank { null }
+            val favoriteLanguage = interestDetails.mapNotNull { it.third.language?.takeIf(String::isNotBlank) }
+                .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+
+            if (historyRankedSuggestions.isNotEmpty()) {
+                val historyTypes = historyRankedSuggestions.map { if (it.type == "tv") "series" else it.type }.toSet()
+                val crossTypeSuggestions = listOf("movie", "tv").filterNot { requestedType ->
+                    val normalizedType = if (requestedType == "tv") "series" else requestedType
+                    normalizedType in historyTypes
+                }.flatMap { requestedType ->
+                    val isTv = requestedType == "tv"
+                    tmdbMetadataService.discoverByIntent(
+                        TmdbNaturalQuery(
+                            mediaType = requestedType,
+                            genreIds = if (isTv) genreFilterTv else genreFilterMovie,
+                            originalLanguage = favoriteLanguage,
+                            sortBy = "popularity.desc"
+                        ),
+                        language,
+                        10
+                    )
+                }
+                addRow(
+                    "tmdb-top-suggestions",
+                    "Top Suggestions",
+                    10,
+                    mixTmdbMediaTypes(historyRankedSuggestions + crossTypeSuggestions, 10)
+                )
+            }
+
+            if (allFavoriteGenres) {
+                val favoriteGenres = tmdbMetadataService.discoverByIntent(
+                    TmdbNaturalQuery(null, genreFilterMovie, null, "vote_average.desc", tvGenreIds = genreFilterTv),
+                    language, 30
+                )
+                addRow("tmdb-favorite-genres", "More in Your Favorite Genres", 13, favoriteGenres)
+            }
+
+            val recentDate = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(
+                java.util.Date(System.currentTimeMillis() - 365L * 24L * 60L * 60L * 1000L)
+            )
+            val today = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date())
+            val newForYou = tmdbMetadataService.discoverByIntent(
+                TmdbNaturalQuery(
+                    null, null, null, "release_date.desc",
+                    releaseDateGte = recentDate, releaseDateLte = today
+                ), language, 30
+            )
+            addRow("tmdb-new-for-you", "New for You", 15, newForYou)
+
+            val popularInTaste = tmdbMetadataService.discoverByIntent(
+                TmdbNaturalQuery(
+                    null, genreFilterMovie, favoriteLanguage ?: profile.tmdbLanguage.takeIf(String::isNotBlank),
+                    "popularity.desc", tvGenreIds = genreFilterTv
+                ), language, 30
+            )
+            addRow("tmdb-popular-in-taste", "Popular in Your Taste", 16, popularInTaste)
+
+            output
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            Log.w("HomeViewModel", "Personalized TMDB rows failed: ${failure.message}")
+            emptyList()
         }
     }
 

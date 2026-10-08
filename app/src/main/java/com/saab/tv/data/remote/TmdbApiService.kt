@@ -204,7 +204,10 @@ interface TmdbApiService {
         @Query("sort_by") sortBy: String? = null,
         @Query("with_companies") withCompanies: String? = null,
         @Query("release_date.lte") releaseDateLte: String? = null,
-        @Query("vote_count.gte") voteCountGte: Int? = null
+        @Query("release_date.gte") releaseDateGte: String? = null,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_genres") withGenres: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null
     ): Response<TmdbDiscoverResponse>
 
     @GET("discover/tv")
@@ -216,6 +219,9 @@ interface TmdbApiService {
         @Query("with_companies") withCompanies: String? = null,
         @Query("with_networks") withNetworks: String? = null,
         @Query("first_air_date.lte") firstAirDateLte: String? = null,
-        @Query("vote_count.gte") voteCountGte: Int? = null
+        @Query("first_air_date.gte") firstAirDateGte: String? = null,
+        @Query("vote_count.gte") voteCountGte: Int? = null,
+        @Query("with_genres") withGenres: String? = null,
+        @Query("with_original_language") withOriginalLanguage: String? = null
     ): Response<TmdbDiscoverResponse>
 }

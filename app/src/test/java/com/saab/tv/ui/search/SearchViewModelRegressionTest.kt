@@ -5,7 +5,13 @@ import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.model.stremio.*
 import com.saab.tv.data.remote.StremioApiService
 import com.saab.tv.testing.*
+import com.saab.tv.data.remote.TmdbApiService
+import com.saab.tv.data.model.tmdb.TmdbExternalIdsResponse
+import com.saab.tv.data.tmdb.TmdbMetaPreview
+import com.saab.tv.data.tmdb.TmdbMetadataService
+import com.saab.tv.data.tmdb.TmdbService
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -14,8 +20,11 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 import org.robolectric.shadows.ShadowLooper
+import retrofit2.Response
 import java.util.concurrent.TimeUnit
 import java.util.Collections
+import java.lang.reflect.Proxy
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class)
@@ -40,7 +49,9 @@ class SearchViewModelRegressionTest {
     private lateinit var vm: SearchViewModel
     @Before fun setup() {
         api = SearchApi(); app = OfflineAppFixture(RuntimeEnvironment.getApplication(), api)
-        vm = SearchViewModel(app.repository)
+        val tmdbApi = forbiddenApi<TmdbApiService>()
+        val tmdb = TmdbService(RuntimeEnvironment.getApplication(), tmdbApi)
+        vm = SearchViewModel(app.repository, TmdbMetadataService(tmdbApi, tmdb), tmdb)
     }
     @After fun cleanup() { vm.viewModelScope.cancel(); app.close() }
     private fun finishSearch() {
@@ -88,5 +99,39 @@ class SearchViewModelRegressionTest {
         vm.appendCharacter("a"); vm.appendCharacter("b"); assertEquals("ab", vm.state.value.query)
         vm.removeCharacter(); assertEquals("a", vm.state.value.query)
         vm.removeCharacter(); vm.removeCharacter(); assertEquals("", vm.state.value.query)
+    }
+
+    @Test fun tmdbSearchResolvesCandidateIdsWithBoundedConcurrency() {
+        val activeLookups = AtomicInteger()
+        val peakLookups = AtomicInteger()
+        val tmdbApi = Proxy.newProxyInstance(
+            TmdbApiService::class.java.classLoader,
+            arrayOf(TmdbApiService::class.java)
+        ) { _, method, args ->
+            when (method.name) {
+                "getMovieExternalIds" -> {
+                    val active = activeLookups.incrementAndGet()
+                    peakLookups.updateAndGet { maxOf(it, active) }
+                    try {
+                        Thread.sleep(30)
+                        Response.success(200, TmdbExternalIdsResponse(args!![0] as Int, "tt${args[0]}"))
+                    } finally {
+                        activeLookups.decrementAndGet()
+                    }
+                }
+                else -> error("Unexpected TMDB API call: ${method.name}")
+            }
+        } as TmdbApiService
+        val tmdb = TmdbService(RuntimeEnvironment.getApplication(), tmdbApi)
+        val tmdbMetadata = TmdbMetadataService(tmdbApi, tmdb)
+        vm = SearchViewModel(app.repository, tmdbMetadata, tmdb)
+        val candidates = (1..15).map { id ->
+            TmdbMetaPreview(id, "movie", "Thriller $id", "/$id.jpg", null, null, null, null)
+        }
+        val resolved = runBlocking { vm.resolveTmdbCandidates(candidates) }
+
+        assertEquals(15, resolved.size)
+        assertTrue(resolved.all { it.id.startsWith("tt") })
+        assertTrue("ID lookups should overlap but stay capped at three", peakLookups.get() in 2..3)
     }
 }

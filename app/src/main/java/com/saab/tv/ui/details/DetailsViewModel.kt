@@ -47,7 +47,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-import java.util.Locale
 
 @HiltViewModel
 class DetailsViewModel @Inject constructor(
@@ -95,8 +94,6 @@ class DetailsViewModel @Inject constructor(
         val tmdbLoading: Boolean = false,
         val tmdbEnrichment: TmdbEnrichment? = null,
         val tmdbRecommendations: List<TmdbMetaPreview> = emptyList(),
-        val cinemetaRecommendations: List<MetaItem> = emptyList(),
-        val cinemetaRecommendationsLoading: Boolean = false,
         val trailer: TmdbVideoInfo? = null,
         val tmdbCollection: List<TmdbMetaPreview> = emptyList(),
         val tmdbCollectionName: String? = null
@@ -120,7 +117,6 @@ class DetailsViewModel @Inject constructor(
     private var loadDetailsJob: Job? = null
     private var loadStreamsJob: Job? = null
     private var tmdbEnrichmentJob: Job? = null
-    private var cinemetaRecommendationsJob: Job? = null
     private var loadRequestVersion: Long = 0L
     private var loadedContentKey: String? = null
     private var resumeRefreshJob: Job? = null
@@ -233,8 +229,6 @@ class DetailsViewModel @Inject constructor(
                     availableStreams = emptyList(),
                     tmdbEnrichment = null,
                     tmdbRecommendations = emptyList(),
-                    cinemetaRecommendations = emptyList(),
-                    cinemetaRecommendationsLoading = !playbackOnly,
                     trailer = details.bestAvailableTrailer(),
                     tmdbCollection = emptyList(),
                     tmdbCollectionName = null,
@@ -245,7 +239,6 @@ class DetailsViewModel @Inject constructor(
                     warmTrailer(_state.value.trailer)
                     loadTmdbEnrichment(details.type, streamFetchId, requestKey)
                     loadCinemetaTrailer(details.type, streamFetchId, requestKey)
-                    loadCinemetaRecommendations(details, streamFetchId, requestKey)
                 }
 
                 // Prefetch streams so they're ready when the user hits Play
@@ -496,58 +489,47 @@ class DetailsViewModel @Inject constructor(
                 val trailerDeferred = async { tmdbMetadataService.fetchBestTrailerKey(tmdbId, mediaType, language) }
 
                 val enrichment = enrichmentDeferred.await()
-                val recommendations = recommendationsDeferred.await()
-                val trailer = trailerDeferred.await()
-
-                // Fetch collection if available (movies only)
-                val collection = if (enrichment?.collectionId != null) {
-                    tmdbMetadataService.fetchCollection(enrichment.collectionId, language)
-                } else emptyList()
-
-                // Only update if we're still showing the same content
                 if (_state.value.contentKey != contentKey) return@launch
 
-                // Apply enrichment — overlay TMDB data onto existing metadata where it adds value
+                // Publish the useful detail payload as soon as it is ready. A slow
+                // recommendations/trailer request must not hold back title/cast data.
                 val currentMeta = _state.value.meta
                 val enrichedMeta = if (currentMeta != null && enrichment != null) {
                     currentMeta.copy(
-                        // Localized title
                         name = enrichment.localizedTitle ?: currentMeta.name,
-                        // Localized description
                         description = enrichment.description ?: currentMeta.description,
-                        // Better images
                         logo = enrichment.logo ?: currentMeta.logo,
                         background = enrichment.backdrop ?: currentMeta.background,
                         poster = enrichment.poster ?: currentMeta.poster,
-                        // Localized genres
                         genres = enrichment.genres.ifEmpty { currentMeta.genres },
-                        // Release info
                         releaseInfo = enrichment.releaseInfo ?: currentMeta.releaseInfo,
-                        // Rating from TMDB
-                        imdbRating = enrichment.rating?.let {
-                            String.format(Locale.ROOT, "%.1f", it)
-                        } ?: currentMeta.imdbRating,
-                        // Runtime
                         runtime = enrichment.runtimeMinutes?.let { "${it}m" } ?: currentMeta.runtime
                     )
                 } else currentMeta
+                _state.value = _state.value.copy(meta = enrichedMeta, tmdbEnrichment = enrichment)
 
-                // Fetch per-episode enrichment for series (synopsis, runtime, thumbnails)
-                val episodeEnrichmentMap = if (mediaType == "tv" && tmdbId != null) {
+                val collectionDeferred = async {
+                    enrichment?.collectionId?.let { tmdbMetadataService.fetchCollection(it, language) }.orEmpty()
+                }
+                val episodeEnrichmentDeferred = async {
+                    if (mediaType != "tv") return@async emptyMap()
                     val seasons = enrichedMeta?.videos
                         ?.filter { it.season > 0 }
                         ?.map { it.season }
-                        ?.distinct() ?: emptyList()
-                    if (seasons.isNotEmpty()) {
-                        val raw = tmdbMetadataService.fetchEpisodeEnrichment(tmdbId, seasons, language)
-                        raw.mapKeys { (key, _) -> "S${key.first}:E${key.second}" }
-                    } else emptyMap()
-                } else emptyMap()
+                        ?.distinct().orEmpty()
+                    if (seasons.isEmpty()) emptyMap()
+                    else tmdbMetadataService.fetchEpisodeEnrichment(tmdbId, seasons, language)
+                        .mapKeys { (key, _) -> "S${key.first}:E${key.second}" }
+                }
+
+                val recommendations = recommendationsDeferred.await()
+                val trailer = trailerDeferred.await()
+                val collection = collectionDeferred.await()
+                val episodeEnrichmentMap = episodeEnrichmentDeferred.await()
+                if (_state.value.contentKey != contentKey) return@launch
 
                 _state.value = _state.value.copy(
-                    meta = enrichedMeta,
                     tmdbLoading = false,
-                    tmdbEnrichment = enrichment,
                     tmdbRecommendations = recommendations,
                     trailer = _state.value.trailer ?: trailer,
                     tmdbCollection = collection,
@@ -591,49 +573,6 @@ class DetailsViewModel @Inject constructor(
             if (_state.value.contentKey == contentKey) {
                 _state.value = _state.value.copy(trailer = trailer)
                 warmTrailer(trailer)
-            }
-        }
-    }
-
-    private fun loadCinemetaRecommendations(
-        details: MetaItem,
-        videoId: String,
-        contentKey: String
-    ) {
-        cinemetaRecommendationsJob?.cancel()
-        if (!videoId.startsWith("tt", ignoreCase = true)) {
-            _state.value = _state.value.copy(cinemetaRecommendationsLoading = false)
-            return
-        }
-
-        cinemetaRecommendationsJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val canonicalType = if (details.type.equals("series", ignoreCase = true) ||
-                    details.type.equals("tv", ignoreCase = true)) "series" else "movie"
-                val cinemetaMeta = runCatching {
-                    repository.getMetaDetails(
-                        "https://v3-cinemeta.strem.io/meta/$canonicalType/$videoId.json"
-                    )
-                }.getOrNull()
-                val genres = details.genres.orEmpty().ifEmpty { cinemetaMeta?.genres.orEmpty() }
-                val recommendations = repository.fetchCinemetaRecommendations(
-                    type = canonicalType,
-                    currentId = videoId,
-                    genres = genres
-                )
-                if (_state.value.contentKey == contentKey) {
-                    _state.value = _state.value.copy(
-                        cinemetaRecommendations = recommendations,
-                        cinemetaRecommendationsLoading = false
-                    )
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w("DetailsViewModel", "Cinemeta recommendations failed: ${e.message}")
-                if (_state.value.contentKey == contentKey) {
-                    _state.value = _state.value.copy(cinemetaRecommendationsLoading = false)
-                }
             }
         }
     }

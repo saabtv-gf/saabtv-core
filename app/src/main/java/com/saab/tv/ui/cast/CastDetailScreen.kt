@@ -45,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -68,6 +69,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import com.saab.tv.ui.home.DpadRepeatGate
 import com.saab.tv.ui.home.FocusPivotSpec
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun CastDetailScreen(
@@ -77,9 +80,20 @@ fun CastDetailScreen(
     onNavigateToDetails: (type: String, id: String) -> Unit = { _, _ -> },
     viewModel: CastDetailViewModel = hiltViewModel()
 ) {
-    com.saab.tv.ui.trailer.TitleTrailerHost(onOpen = { onNavigateToDetails(it.type, it.id) }) {
+    val quickActionViewModel: com.saab.tv.ui.home.HomeViewModel = hiltViewModel()
+    com.saab.tv.ui.trailer.TitleTrailerHost(
+        onOpen = { onNavigateToDetails(it.type, it.id) },
+        model = quickActionViewModel
+    ) {
 
     val uiState by viewModel.state.collectAsStateWithLifecycle()
+    val quickActionScope = androidx.compose.runtime.rememberCoroutineScope()
+    var quickActionProfileId by remember { mutableStateOf(0) }
+    var quickActionTarget by remember { mutableStateOf<Pair<com.saab.tv.data.model.stremio.MetaItem, Rect>?>(null) }
+    var quickActionReturnFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    androidx.compose.runtime.LaunchedEffect(quickActionViewModel) {
+        quickActionProfileId = quickActionViewModel.activeProfileId() ?: 0
+    }
     val bg = MaterialTheme.colorScheme.background
     val accentColor = MaterialTheme.colorScheme.primary
     val textColor = MaterialTheme.colorScheme.onBackground
@@ -87,6 +101,9 @@ fun CastDetailScreen(
     androidx.activity.compose.BackHandler { onBackPress() }
 
     Box(modifier = Modifier.fillMaxSize().background(bg)) {
+        CompositionLocalProvider(
+            com.saab.tv.ui.components.LocalPosterFocusReturn provides { quickActionReturnFocus = it }
+        ) {
         when (val state = uiState) {
             is CastDetailState.Loading -> {
                 CircularProgressIndicator(
@@ -122,11 +139,30 @@ fun CastDetailScreen(
                         restoreIndex = index
                         onNavigateToDetails(type, id)
                     },
+                    onQuickAction = { item, bounds -> quickActionTarget = item to bounds },
                     restoreIndex = restoreIndex,
                     restoreFocusRequester = restoreFocusRequester,
                     initialFocusRequester = initialFocusRequester
                 )
             }
+        }
+        }
+
+        quickActionTarget?.let { (item, bounds) ->
+            com.saab.tv.ui.home.CatalogQuickActionsPopup(
+                item = item,
+                bounds = bounds,
+                profileId = quickActionProfileId,
+                viewModel = quickActionViewModel,
+                onTrailerClick = { _, _ -> },
+                onDismiss = {
+                    quickActionTarget = null
+                    quickActionScope.launch {
+                        delay(40)
+                        runCatching { quickActionReturnFocus?.requestFocus() }
+                    }
+                }
+            )
         }
     }
     }
@@ -139,6 +175,7 @@ private fun CastDetailContent(
     accentColor: Color,
     textColor: Color,
     onNavigateToDetails: (String, String, Int) -> Unit,
+    onQuickAction: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit,
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null,
     initialFocusRequester: FocusRequester? = null
@@ -190,7 +227,8 @@ private fun CastDetailContent(
         }
 
         if (allCredits.isNotEmpty()) {
-            FilmographySection(allCredits, accentColor, textColor, onNavigateToDetails, restoreIndex, restoreFocusRequester, initialFocusRequester)
+            FilmographySection(allCredits, accentColor, textColor, onNavigateToDetails, onQuickAction,
+                restoreIndex, restoreFocusRequester, initialFocusRequester)
         }
     }
 }
@@ -212,19 +250,18 @@ private fun HeroSection(person: TmdbPersonDetail, accentColor: Color, textColor:
                 .background(Color.White.copy(0.08f))
                 .border(1.dp, Color.White.copy(0.1f), photoShape)
         ) {
-            if (person.profilePhoto != null) {
+            Text(
+                text = com.saab.tv.ui.components.initialsForPerson(person.name),
+                style = MaterialTheme.typography.displayMedium,
+                color = textColor.copy(alpha = 0.5f),
+                modifier = Modifier.align(Alignment.Center)
+            )
+            person.profilePhoto?.takeIf(String::isNotBlank)?.let { photo ->
                 AsyncImage(
-                    model = person.profilePhoto,
+                    model = photo,
                     contentDescription = person.name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize().clip(photoShape)
-                )
-            } else {
-                Text(
-                    text = person.name.firstOrNull()?.uppercase() ?: "?",
-                    style = MaterialTheme.typography.displayMedium,
-                    color = textColor.copy(alpha = 0.5f),
-                    modifier = Modifier.align(Alignment.Center)
                 )
             }
         }
@@ -280,6 +317,7 @@ private fun FilmographySection(
     accentColor: Color,
     textColor: Color,
     onNavigateToDetails: (String, String, Int) -> Unit,
+    onQuickAction: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit,
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null,
     initialFocusRequester: FocusRequester? = null
@@ -338,11 +376,13 @@ private fun FilmographySection(
                             restoreFocusRequester != null && index == restoreIndex -> Modifier.focusRequester(restoreFocusRequester)
                             initialFocusRequester != null && index == 0 -> Modifier.focusRequester(initialFocusRequester)
                             else -> Modifier
-                        }
-                    ) {
-                        val stremioType = if (item.type == "tv") "series" else item.type
-                        onNavigateToDetails(stremioType, "tmdb:${item.tmdbId}", index)
-                    }
+                        },
+                        onClick = {
+                            val stremioType = if (item.type == "tv") "series" else item.type
+                            onNavigateToDetails(stremioType, "tmdb:${item.tmdbId}", index)
+                        },
+                        onLongClick = onQuickAction
+                    )
                 }
             }
         }
@@ -355,15 +395,18 @@ private fun FilmographyCard(
     accentColor: Color,
     textColor: Color,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit
 ) {
     val meta = com.saab.tv.data.model.stremio.MetaItem(
         id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
-        name = item.name, poster = item.poster)
+        name = item.name, poster = item.poster, background = item.backdrop,
+        description = item.description, releaseInfo = item.releaseInfo)
     com.saab.tv.ui.components.SaabTvCard(
         title = item.name, posterUrl = item.poster, previewItem = meta,
         normalWidth = 120.dp, normalHeight = 180.dp,
-        modifier = modifier.titleTrailerFocus(meta), onClick = onClick)
+        modifier = modifier.titleTrailerFocus(meta), onClick = onClick,
+        onLongClick = { bounds -> onLongClick(meta, bounds) })
 
 }
 

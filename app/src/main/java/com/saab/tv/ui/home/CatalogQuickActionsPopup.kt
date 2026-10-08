@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,11 +54,12 @@ fun CatalogQuickActionsPopup(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
+    val locallyWatchedIds = com.saab.tv.ui.components.LocalWatchedIds.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val widthPx = with(density) { 124.dp.roundToPx() }
+    val widthPx = with(density) { 180.dp.roundToPx() }
     val heightPx = with(density) { 60.dp.roundToPx() }
     val marginPx = with(density) { 12.dp.roundToPx() }
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.roundToPx() }
@@ -67,12 +69,26 @@ fun CatalogQuickActionsPopup(
     val y = (bounds.center.y.toInt() - heightPx / 2)
         .coerceIn(marginPx, (screenHeightPx - heightPx - marginPx).coerceAtLeast(marginPx))
 
-    var watchlisted by remember(item.id, profileId) { mutableStateOf<Boolean?>(null) }
+    var watchlisted by remember(item.id, profileId) { mutableStateOf(false) }
+    var watched by remember(item.id, profileId) { mutableStateOf(item.id in locallyWatchedIds) }
     var actionsArmed by remember(item.id) { mutableStateOf(false) }
     var suppressOpeningKeyUp by remember(item.id) { mutableStateOf(true) }
     val firstActionRequester = remember(item.id) { FocusRequester() }
-    LaunchedEffect(item.id, profileId) {
-        watchlisted = viewModel.isWatchlisted(profileId, item.id)
+    LaunchedEffect(item.id, profileId, locallyWatchedIds) {
+        watchlisted = try {
+            viewModel.isWatchlisted(profileId, item.id)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+        watched = item.id in locallyWatchedIds || try {
+            viewModel.isTitleWatched(profileId, item)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
         delay(80)
         runCatching { firstActionRequester.requestFocus() }
         delay(420)
@@ -81,7 +97,7 @@ fun CatalogQuickActionsPopup(
 
     Popup(alignment = Alignment.TopStart, offset = IntOffset(x, y),
         onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
-        Row(Modifier.width(124.dp)
+        Row(Modifier.width(180.dp)
             .onPreviewKeyEvent { event ->
                 if (suppressOpeningKeyUp && event.type == KeyEventType.KeyUp &&
                     (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
@@ -107,14 +123,18 @@ fun CatalogQuickActionsPopup(
                     if (trailer != null) onTrailerClick(trailer.first, trailer.second)
                     else android.widget.Toast.makeText(context, "No trailer available", android.widget.Toast.LENGTH_SHORT).show()
                 }
-            }, modifier = Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
-            watchlisted?.let { saved ->
-                CardActionIcon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                    if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
-                        viewModel.toggleWatchlist(profileId, item)
-                        onDismiss()
-                    }, modifier = Modifier, enabled = actionsArmed, destructive = saved)
-            }
+            }, modifier = Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
+            CardActionIcon(Icons.Default.DoneAll,
+                if (watched) "Already Watched" else "Mark As Watched", onClick = {
+                    if (!watched) viewModel.markTitleWatched(profileId, item)
+                    onDismiss()
+                }, modifier = Modifier.weight(1f), enabled = actionsArmed && !watched,
+                destructive = watched)
+            CardActionIcon(if (watchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                if (watchlisted) "Remove From Watchlist" else "Add To Watchlist", onClick = {
+                    viewModel.toggleWatchlist(profileId, item)
+                    onDismiss()
+                }, modifier = Modifier.weight(1f), enabled = actionsArmed, destructive = watchlisted)
         }
     }
 }

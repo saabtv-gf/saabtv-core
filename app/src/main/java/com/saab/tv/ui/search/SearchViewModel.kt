@@ -4,17 +4,30 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.data.repository.AddonRepository
+import com.saab.tv.data.tmdb.TmdbMetadataService
+import com.saab.tv.data.tmdb.TmdbMetaPreview
+import com.saab.tv.data.tmdb.TmdbNaturalQuery
+import com.saab.tv.data.tmdb.TmdbService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import javax.inject.Inject
 
 @HiltViewModel
-class SearchViewModel @Inject constructor(private val repository: AddonRepository) : ViewModel() {
+class SearchViewModel @Inject constructor(
+    private val repository: AddonRepository,
+    private val tmdbMetadata: TmdbMetadataService,
+    private val tmdbService: TmdbService
+) : ViewModel() {
     data class SearchState(
         val query: String = "", val results: List<MetaItem> = emptyList(),
         val movies: List<MetaItem> = emptyList(), val series: List<MetaItem> = emptyList(),
@@ -24,6 +37,28 @@ class SearchViewModel @Inject constructor(private val repository: AddonRepositor
     val state: StateFlow<SearchState> = _state
     private var searchJob: Job? = null
     private var activeSearchSessionId: Long? = null
+    private var tmdbSearchEnabled = false
+    private var tmdbSearchLanguage = "en"
+
+    fun configureTmdbSearch(enabled: Boolean, language: String) {
+        tmdbSearchEnabled = enabled && tmdbService.hasApiKey()
+        tmdbSearchLanguage = language.ifBlank { "en" }
+    }
+
+    internal suspend fun resolveTmdbCandidates(candidates: List<TmdbMetaPreview>): List<MetaItem> =
+        coroutineScope {
+            val idLookupLimit = Semaphore(3)
+            candidates.map { candidate -> async {
+                val imdbId = idLookupLimit.withPermit {
+                    tmdbService.tmdbToImdb(candidate.tmdbId, candidate.type)
+                } ?: return@async null
+                MetaItem(
+                    id = imdbId, type = candidate.type, name = candidate.name,
+                    poster = candidate.poster, background = candidate.backdrop,
+                    description = candidate.description, releaseInfo = candidate.releaseInfo
+                )
+            } }.awaitAll().filterNotNull()
+        }
 
     fun beginSearchSession(sessionId: Long): Boolean {
         if (activeSearchSessionId == sessionId) return false
@@ -44,7 +79,16 @@ class SearchViewModel @Inject constructor(private val repository: AddonRepositor
             delay(350)
             try {
                 com.saab.tv.AppDiagnostics.event("Search", "Request Started")
-                val results = repository.searchMovies(newQuery.trim())
+                val intent = if (tmdbSearchEnabled) TmdbNaturalQuery.parse(newQuery.trim()) else null
+                val catalogRequest = async { repository.searchMovies(newQuery.trim()) }
+                val tmdbRequest = intent?.let { queryIntent ->
+                    async {
+                        resolveTmdbCandidates(
+                            tmdbMetadata.discoverByIntent(queryIntent, tmdbSearchLanguage, 15)
+                        )
+                    }
+                }
+                val results = (tmdbRequest?.await().orEmpty() + catalogRequest.await())
                     .filter { it.type == "movie" || it.type == "series" }
                     .distinctBy { it.type to it.id }
                 if (_state.value.query != newQuery) return@launch

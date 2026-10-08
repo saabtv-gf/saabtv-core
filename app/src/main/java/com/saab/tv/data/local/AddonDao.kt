@@ -79,6 +79,12 @@ interface AddonDao {
     @Query("SELECT * FROM watch_history WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1) ORDER BY lastWatched DESC")
     fun getWatchHistory(): Flow<List<WatchHistoryEntity>>
 
+    @Query("SELECT * FROM watch_history WHERE profileId = :profileId ORDER BY lastWatched DESC")
+    fun getWatchHistoryForProfile(profileId: Int): Flow<List<WatchHistoryEntity>>
+
+    @Query("SELECT * FROM watch_history WHERE profileId = :profileId ORDER BY lastWatched DESC")
+    suspend fun getWatchHistoryForProfileOnce(profileId: Int): List<WatchHistoryEntity>
+
     @Query("SELECT * FROM watch_history WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1)")
     suspend fun getAllWatchHistoryOnce(): List<WatchHistoryEntity>
 
@@ -106,6 +112,9 @@ interface AddonDao {
 
     @Query("SELECT * FROM watch_history WHERE profileId = :profileId AND id = :id")
     suspend fun getHistoryItemForProfile(profileId: Int, id: String): WatchHistoryEntity?
+
+    @Query("SELECT * FROM watch_history WHERE profileId = :profileId AND type = 'series' AND id LIKE :episodePrefix ORDER BY lastWatched DESC")
+    suspend fun getSeriesEpisodeHistoryForProfile(profileId: Int, episodePrefix: String): List<WatchHistoryEntity>
 
     @Query("SELECT * FROM watch_history WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1) AND id LIKE :prefix || '%'")
     suspend fun getHistoryItemsByPrefix(prefix: String): List<WatchHistoryEntity>
@@ -268,6 +277,9 @@ interface AddonDao {
     @Query("SELECT id FROM watch_history WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1) AND watched = 1")
     fun getWatchedIds(): Flow<List<String>>
 
+    @Query("SELECT id FROM watch_history WHERE profileId = :profileId AND watched = 1")
+    fun getWatchedIdsForProfile(profileId: Int): Flow<List<String>>
+
     @Query("UPDATE watch_history SET poster = :poster, background = :background, logo = :logo WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1) AND id = :id")
     suspend fun updateHistoryImages(id: String, poster: String?, background: String?, logo: String?)
 
@@ -287,6 +299,12 @@ interface AddonDao {
 
     @Query("SELECT * FROM series_next_up WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1) AND seriesId = :seriesId")
     suspend fun getSeriesNextUp(seriesId: String): SeriesNextUpEntity?
+
+    @Query("SELECT * FROM series_next_up WHERE profileId = :profileId")
+    suspend fun getSeriesNextUpForProfile(profileId: Int): List<SeriesNextUpEntity>
+
+    @Query("SELECT * FROM series_next_up WHERE profileId = :profileId")
+    fun getSeriesNextUpForProfileFlow(profileId: Int): Flow<List<SeriesNextUpEntity>>
 
     @Query("DELETE FROM series_next_up WHERE profileId = COALESCE((SELECT id FROM profiles WHERE isActive = 1 LIMIT 1), (SELECT MIN(id) FROM profiles), 1) AND seriesId = :seriesId")
     suspend fun deleteSeriesNextUp(seriesId: String)

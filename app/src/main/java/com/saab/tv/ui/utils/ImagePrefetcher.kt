@@ -20,7 +20,7 @@ object ImagePrefetcher {
     private const val LANDSCAPE_HEIGHT = 214
     
     // Number of items to prefetch ahead
-    private const val PREFETCH_COUNT = 8
+    private const val PREFETCH_COUNT = 5
     private const val PREFETCH_DEDUP_WINDOW_MS = 450L
     private const val AROUND_PREFETCH_SKIP_WINDOW_MS = 100L
     private const val AROUND_PREFETCH_REDUCED_WINDOW_MS = 220L

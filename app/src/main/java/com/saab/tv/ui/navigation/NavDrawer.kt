@@ -56,7 +56,7 @@ enum class NavDestination(
     Movies(R.drawable.movies_icon, "Movies"),
     Series(R.drawable.series_icon, "Series"),
     Ott(R.drawable.ott_icon, "OTT"),
-    Watchlist(R.drawable.watchlist_icon, "Watchlist"),
+    Watchlist(R.drawable.watchlist_icon, "My Library"),
     Search(R.drawable.search_icon, "Search"),
     Profile(R.drawable.profile_icon, "Profile", iconSize = 18.dp),
     Settings(R.drawable.settings_icon, "Settings"),

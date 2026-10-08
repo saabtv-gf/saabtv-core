@@ -161,44 +161,6 @@ class AddonRepository @Inject constructor(
         }
     }
 
-    /** Builds title recommendations from Cinemeta's genre-filtered popular catalogs. */
-    suspend fun fetchCinemetaRecommendations(
-        type: String,
-        currentId: String,
-        genres: List<String>,
-        maxItems: Int = 18
-    ): List<MetaItem> = withContext(Dispatchers.IO) {
-        val canonicalType = if (type.equals("series", ignoreCase = true) ||
-            type.equals("tv", ignoreCase = true)) "series" else "movie"
-        val selectedGenres = genres.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(3)
-        if (selectedGenres.isEmpty()) return@withContext emptyList()
-
-        val cinemeta = "https://v3-cinemeta.strem.io"
-        val catalogs = selectedGenres.map { genre ->
-            async {
-                val encodedGenre = URLEncoder.encode(genre, Charsets.UTF_8.name()).replace("+", "%20")
-                val url = "$cinemeta/catalog/$canonicalType/top/genre=$encodedGenre.json"
-                try {
-                    withTimeout(CATALOG_TIMEOUT_MS) { api.getCatalog(url) }
-                        .metas.orEmpty().sanitize()
-                        .filter { it.type.equals(canonicalType, ignoreCase = true) }
-                        .map { it.copy(addonBaseUrl = cinemeta) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    emptyList()
-                }
-            }
-        }.awaitAll()
-
-        CinemetaRecommendationRanker.merge(
-            catalogs = catalogs,
-            currentId = currentId,
-            targetGenres = selectedGenres,
-            maxItems = maxItems
-        )
-    }
-
     /**
      * Checks whether a specific catalog in an addon's manifest declares "skip" extra support.
      */

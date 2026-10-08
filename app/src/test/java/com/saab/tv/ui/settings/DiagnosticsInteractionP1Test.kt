@@ -70,4 +70,24 @@ class DiagnosticsInteractionP1Test {
         compose.onNodeWithText("Uncaught Exception").assertExists()
         crashRow.assertIsFocused()
     }
+
+    @Test fun diagnosticsHeaderAndOlderEventsRemainReachableByScrolling() {
+        val context = RuntimeEnvironment.getApplication()
+        AppDiagnostics.setBasicEnabled(context, true)
+        repeat(60) { index ->
+            AppDiagnostics.event(context, "Scroll Test", "scroll-event-${index.toString().padStart(2, '0')}")
+            Thread.sleep(5)
+        }
+        compose.waitUntil(10_000) {
+            AppDiagnostics.report(context).events.any { it.event == "scroll-event-00" }
+        }
+        show()
+        compose.onNodeWithText("Refresh").performClick()
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithText("scroll-event-59").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("app-diagnostics-list")
+            .performScrollToNode(hasText("scroll-event-00"))
+        compose.onNodeWithText("scroll-event-00").assertIsDisplayed()
+    }
 }

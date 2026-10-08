@@ -2,15 +2,16 @@ package com.saab.tv.data.tmdb
 
 import android.content.Context
 import android.util.Log
+import android.util.LruCache
 import com.saab.tv.data.security.SecurePreferences
 import com.saab.tv.BuildConfig
 import com.saab.tv.data.remote.TmdbApiService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,8 +31,8 @@ class TmdbService @Inject constructor(
     private val securePrefs by lazy { SecurePreferences.create(context, PREFS_NAME, KEY_ALIAS) }
     private val prefs get() = securePrefs.preferences
 
-    private val imdbToTmdbCache = ConcurrentHashMap<String, Int>()
-    private val tmdbToImdbCache = ConcurrentHashMap<Int, String>()
+    private val imdbToTmdbCache = LruCache<String, Int>(256)
+    private val tmdbToImdbCache = LruCache<Int, String>(256)
     private val cacheMutex = Mutex()
 
     /** Runtime configuration keeps self-built APKs usable without embedding a private key. */
@@ -44,15 +45,20 @@ class TmdbService @Inject constructor(
 
     fun saveApiKey(apiKey: String): Boolean {
         val cleanKey = apiKey.trim()
-        if (cleanKey.isEmpty() || !securePrefs.isPersistent) return false
+        if (cleanKey.isEmpty() || !securePrefs.isPersistent) {
+            com.saab.tv.AppDiagnostics.event("TMDB", "API Key Save Rejected", "empty=${cleanKey.isEmpty()} secureStorage=${securePrefs.isPersistent}")
+            return false
+        }
         prefs.edit().putString(KEY_API_KEY, cleanKey).apply()
         clearCache()
+        com.saab.tv.AppDiagnostics.event("TMDB", "API Key Saved")
         return true
     }
 
     fun clearApiKey() {
         prefs.edit().remove(KEY_API_KEY).apply()
         clearCache()
+        com.saab.tv.AppDiagnostics.event("TMDB", "API Key Removed")
     }
 
     /**
@@ -81,12 +87,15 @@ class TmdbService @Inject constructor(
 
             result?.let { found ->
                 cacheMutex.withLock {
-                    imdbToTmdbCache[imdbId] = found.id
-                    tmdbToImdbCache[found.id] = imdbId
+                    imdbToTmdbCache.put(imdbId, found.id)
+                    tmdbToImdbCache.put(found.id, imdbId)
                 }
                 found.id
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "IMDb Lookup Failed", e)
             Log.e(TAG, "Error looking up TMDB ID for $imdbId: ${e.message}")
             null
         }
@@ -109,12 +118,15 @@ class TmdbService @Inject constructor(
             val body = response.body() ?: return@withContext null
             body.imdbId?.let { imdbId ->
                 cacheMutex.withLock {
-                    tmdbToImdbCache[tmdbId] = imdbId
-                    imdbToTmdbCache[imdbId] = tmdbId
+                    tmdbToImdbCache.put(tmdbId, imdbId)
+                    imdbToTmdbCache.put(imdbId, tmdbId)
                 }
                 imdbId
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "IMDb ID Resolution Failed", e)
             Log.e(TAG, "Error looking up IMDB ID for $tmdbId: ${e.message}")
             null
         }
@@ -154,12 +166,12 @@ class TmdbService @Inject constructor(
     }
 
     fun clearCache() {
-        imdbToTmdbCache.clear()
-        tmdbToImdbCache.clear()
+        imdbToTmdbCache.evictAll()
+        tmdbToImdbCache.evictAll()
     }
 
     fun preCacheMapping(imdbId: String, tmdbId: Int) {
-        imdbToTmdbCache[imdbId] = tmdbId
-        tmdbToImdbCache[tmdbId] = imdbId
+        imdbToTmdbCache.put(imdbId, tmdbId)
+        tmdbToImdbCache.put(tmdbId, imdbId)
     }
 }

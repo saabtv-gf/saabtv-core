@@ -512,7 +512,7 @@ private fun ConnectStremioDialog(
                         Spacer(Modifier.height(12.dp))
 
                         Text(
-                            "Account credentials can only be entered directly on this device.",
+                            "Scan with your phone to securely paste into either field.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.Gray,
                             textAlign = TextAlign.Center
@@ -1155,6 +1155,7 @@ private fun IntegrationTextField(
     onDone: (() -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    var showRemotePaste by remember { mutableStateOf(false) }
 
     val borderBrush = if (isFocused) {
         Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primary))
@@ -1162,38 +1163,63 @@ private fun IntegrationTextField(
         SolidColor(Color.White.copy(0.1f))
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(50.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.Black.copy(0.5f))
-            .border(if (isFocused) 2.dp else 1.dp, borderBrush, RoundedCornerShape(8.dp))
-            .padding(horizontal = 16.dp),
-        contentAlignment = Alignment.CenterStart
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        if (value.isEmpty()) {
-            Text(placeholder, color = Color.Gray)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(50.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.Black.copy(0.5f))
+                .border(if (isFocused) 2.dp else 1.dp, borderBrush, RoundedCornerShape(8.dp))
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (value.isEmpty()) {
+                Text(placeholder, color = Color.Gray)
+            }
+
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                singleLine = true,
+                visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = keyboardType,
+                    imeAction = if (onDone != null) ImeAction.Done else ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = { onDone?.invoke() }
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                    .onFocusChanged { isFocused = it.isFocused }
+            )
         }
 
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            singleLine = true,
-            visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = keyboardType,
-                imeAction = if (onDone != null) ImeAction.Done else ImeAction.Next
-            ),
-            keyboardActions = KeyboardActions(
-                onDone = { onDone?.invoke() }
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
-                .onFocusChanged { isFocused = it.isFocused }
+        IntegrationButton(
+            text = "Paste From Phone",
+            onClick = { showRemotePaste = true },
+            modifier = Modifier.width(138.dp)
+        )
+    }
+
+    if (showRemotePaste) {
+        com.saab.tv.ui.addons.RemotePasteDialog(
+            onDismissRequest = { showRemotePaste = false },
+            onUrlReceived = { received ->
+                onValueChange(received)
+                showRemotePaste = false
+            },
+            mode = com.saab.tv.remote_input.RemoteInputMode.SECRET,
+            title = "Paste $placeholder From Phone",
+            description = "Encrypted pairing · Expires after 5 minutes"
         )
     }
 }

@@ -1,19 +1,39 @@
 package com.saab.tv.data.tmdb
 
 import android.util.Log
+import android.util.LruCache
 import com.saab.tv.data.model.tmdb.*
 import com.saab.tv.data.remote.TmdbApiService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "TmdbMetadataService"
+
+internal fun mixTmdbMediaTypes(items: List<TmdbMetaPreview>, limit: Int): List<TmdbMetaPreview> {
+    val distinct = items.map { if (it.type == "tv") it.copy(type = "series") else it }
+        .distinctBy { it.type to it.tmdbId }
+    val movies = distinct.filter { it.type == "movie" }
+    val series = distinct.filter { it.type == "series" || it.type == "tv" }
+    if (movies.isEmpty() || series.isEmpty()) return distinct.take(limit.coerceAtLeast(0))
+
+    return buildList {
+        var index = 0
+        while (size < limit && (index < movies.size || index < series.size)) {
+            movies.getOrNull(index)?.let(::add)
+            series.getOrNull(index)?.let(::add)
+            index++
+        }
+    }.take(limit.coerceAtLeast(0))
+}
 
 @Singleton
 class TmdbMetadataService @Inject constructor(
@@ -22,11 +42,14 @@ class TmdbMetadataService @Inject constructor(
 ) {
     private val apiKey get() = tmdbService.apiKey()
 
-    private val enrichmentCache = ConcurrentHashMap<String, TmdbEnrichment>()
-    private val episodeCache = ConcurrentHashMap<String, Map<Pair<Int, Int>, TmdbEpisodeEnrichment>>()
-    private val personCache = ConcurrentHashMap<String, TmdbPersonDetail>()
-    private val recommendationsCache = ConcurrentHashMap<String, List<TmdbMetaPreview>>()
-    private val collectionCache = ConcurrentHashMap<String, List<TmdbMetaPreview>>()
+    // Keep large cast/episode payloads from growing without bound on long-lived TV devices.
+    private val enrichmentCache = LruCache<String, TmdbEnrichment>(48)
+    private val homeEnrichmentCache = LruCache<String, TmdbEnrichment>(96)
+    private val episodeCache = LruCache<String, Map<Pair<Int, Int>, TmdbEpisodeEnrichment>>(24)
+    private val personCache = LruCache<String, TmdbPersonDetail>(64)
+    private val recommendationsCache = LruCache<String, List<TmdbMetaPreview>>(96)
+    private val collectionCache = LruCache<String, List<TmdbMetaPreview>>(24)
+    private val discoverCache = LruCache<String, List<TmdbMetaPreview>>(48)
 
     /**
      * Fetch full metadata enrichment for a title: details, credits, images, age ratings — all in parallel.
@@ -39,7 +62,7 @@ class TmdbMetadataService @Inject constructor(
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
         val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage"
-        enrichmentCache[cacheKey]?.let { return@withContext it }
+        enrichmentCache.get(cacheKey)?.let { return@withContext it }
 
         val numericId = tmdbId.toIntOrNull() ?: return@withContext null
 
@@ -185,6 +208,7 @@ class TmdbMetadataService @Inject constructor(
                 localizedTitle = localizedTitle,
                 description = description,
                 genres = genres,
+                genreIds = details?.genres.orEmpty().map { it.id },
                 backdrop = backdrop,
                 logo = logo,
                 poster = poster,
@@ -203,10 +227,71 @@ class TmdbMetadataService @Inject constructor(
                 collectionId = collectionId,
                 collectionName = collectionName
             )
-            enrichmentCache[cacheKey] = enrichment
+            enrichmentCache.put(cacheKey, enrichment)
             enrichment
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Metadata Enrichment Failed", e)
             Log.e(TAG, "Failed to fetch TMDB enrichment: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Card/Home enrichment deliberately uses only the details endpoint. Full credits,
+     * image-logo, and certification payloads are reserved for the title details page.
+     */
+    suspend fun fetchHomeEnrichment(
+        tmdbId: String,
+        mediaType: String,
+        language: String = "en"
+    ): TmdbEnrichment? = withContext(Dispatchers.IO) {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
+        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage"
+        enrichmentCache.get(cacheKey)?.let { return@withContext it }
+        homeEnrichmentCache.get(cacheKey)?.let { return@withContext it }
+
+        val numericId = tmdbId.toIntOrNull() ?: return@withContext null
+        try {
+            val details = when (tmdbType) {
+                "tv" -> tmdbApi.getTvDetails(numericId, apiKey, normalizedLanguage)
+                else -> tmdbApi.getMovieDetails(numericId, apiKey, normalizedLanguage)
+            }.body() ?: return@withContext null
+
+            val enrichment = TmdbEnrichment(
+                localizedTitle = (details.title ?: details.name)?.takeIf(String::isNotBlank),
+                description = details.overview?.takeIf(String::isNotBlank),
+                genres = details.genres.orEmpty().mapNotNull { it.name.trim().takeIf(String::isNotBlank) },
+                genreIds = details.genres.orEmpty().map { it.id },
+                backdrop = buildImageUrl(details.backdropPath, "w1280"),
+                logo = null,
+                poster = buildImageUrl(details.posterPath, "w500"),
+                directorMembers = emptyList(),
+                writerMembers = emptyList(),
+                castMembers = emptyList(),
+                releaseInfo = details.releaseDate ?: details.firstAirDate,
+                rating = details.voteAverage,
+                runtimeMinutes = details.runtime ?: details.episodeRunTime?.firstOrNull(),
+                productionCompanies = emptyList(),
+                networks = emptyList(),
+                ageRating = null,
+                status = details.status?.trim()?.takeIf(String::isNotBlank),
+                countries = details.productionCountries.orEmpty().mapNotNull { country ->
+                    country.iso31661?.trim()?.uppercase()?.takeIf(String::isNotBlank)
+                }.ifEmpty { details.originCountry.orEmpty() },
+                language = details.originalLanguage?.takeIf(String::isNotBlank),
+                collectionId = details.belongsToCollection?.id,
+                collectionName = details.belongsToCollection?.name
+            )
+            homeEnrichmentCache.put(cacheKey, enrichment)
+            enrichment
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Home Metadata Failed", failure)
+            Log.w(TAG, "Failed to fetch Home metadata for $tmdbId: ${failure.message}")
             null
         }
     }
@@ -221,15 +306,33 @@ class TmdbMetadataService @Inject constructor(
     ): Map<Pair<Int, Int>, TmdbEpisodeEnrichment> = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val cacheKey = "$tmdbId:${seasonNumbers.sorted().joinToString(",")}:$normalizedLanguage"
-        episodeCache[cacheKey]?.let { return@withContext it }
+        episodeCache.get(cacheKey)?.let { return@withContext it }
 
         val numericId = tmdbId.toIntOrNull() ?: return@withContext emptyMap()
         val result = mutableMapOf<Pair<Int, Int>, TmdbEpisodeEnrichment>()
 
-        seasonNumbers.distinct().forEach { season ->
-            try {
-                val response = tmdbApi.getTvSeasonDetails(numericId, season, apiKey, normalizedLanguage)
-                response.body()?.episodes.orEmpty().forEach { ep ->
+        val seasonResponses = coroutineScope {
+            val requestLimit = Semaphore(3)
+            seasonNumbers.distinct().map { season ->
+                async {
+                    try {
+                        season to requestLimit.withPermit {
+                            tmdbApi.getTvSeasonDetails(numericId, season, apiKey, normalizedLanguage)
+                                .body()?.episodes.orEmpty()
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        com.saab.tv.AppDiagnostics.failure("TMDB", "Season Enrichment Failed", failure)
+                        Log.w(TAG, "Failed to fetch TMDB season $season: ${failure.message}")
+                        season to emptyList()
+                    }
+                }
+            }.awaitAll()
+        }
+
+        seasonResponses.forEach { (season, episodes) ->
+            episodes.forEach { ep ->
                     val epNum = ep.episodeNumber ?: return@forEach
                     result[season to epNum] = TmdbEpisodeEnrichment(
                         title = ep.name?.takeIf { it.isNotBlank() },
@@ -238,13 +341,10 @@ class TmdbMetadataService @Inject constructor(
                         airDate = ep.airDate?.takeIf { it.isNotBlank() },
                         runtimeMinutes = ep.runtime
                     )
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to fetch TMDB season $season: ${e.message}")
             }
         }
 
-        if (result.isNotEmpty()) episodeCache[cacheKey] = result
+        if (result.isNotEmpty()) episodeCache.put(cacheKey, result)
         result
     }
 
@@ -259,8 +359,8 @@ class TmdbMetadataService @Inject constructor(
     ): List<TmdbMetaPreview> = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
-        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage:recs"
-        recommendationsCache[cacheKey]?.let { return@withContext it }
+        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage:recs:$maxItems"
+        recommendationsCache.get(cacheKey)?.let { return@withContext it }
 
         val numericId = tmdbId.toIntOrNull() ?: return@withContext emptyList()
 
@@ -309,9 +409,12 @@ class TmdbMetadataService @Inject constructor(
                 )
             }
 
-            recommendationsCache[cacheKey] = items
+            recommendationsCache.put(cacheKey, items)
             items
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Recommendations Failed", e)
             Log.w(TAG, "Failed to fetch recommendations for $tmdbId: ${e.message}")
             emptyList()
         }
@@ -326,7 +429,7 @@ class TmdbMetadataService @Inject constructor(
     ): List<TmdbMetaPreview> = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val cacheKey = "$collectionId:$normalizedLanguage:collection"
-        collectionCache[cacheKey]?.let { return@withContext it }
+        collectionCache.get(cacheKey)?.let { return@withContext it }
 
         try {
             val collection = tmdbApi.getCollectionDetails(collectionId, apiKey, normalizedLanguage).body()
@@ -346,9 +449,12 @@ class TmdbMetadataService @Inject constructor(
                 )
             }
 
-            collectionCache[cacheKey] = items
+            collectionCache.put(cacheKey, items)
             items
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Collection Failed", e)
             Log.w(TAG, "Failed to fetch collection $collectionId: ${e.message}")
             emptyList()
         }
@@ -363,7 +469,7 @@ class TmdbMetadataService @Inject constructor(
     ): TmdbPersonDetail? = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val cacheKey = "$personId:$normalizedLanguage"
-        personCache[cacheKey]?.let { return@withContext it }
+        personCache.get(cacheKey)?.let { return@withContext it }
 
         try {
             val (person, credits) = coroutineScope {
@@ -380,7 +486,13 @@ class TmdbMetadataService @Inject constructor(
 
             // English fallback for empty biography
             val biography = if (person.biography.isNullOrBlank() && normalizedLanguage != "en") {
-                runCatching { tmdbApi.getPersonDetails(personId, apiKey, "en").body()?.biography }.getOrNull()
+                try {
+                    tmdbApi.getPersonDetails(personId, apiKey, "en").body()?.biography
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
             } else {
                 person.biography
             }?.takeIf { it.isNotBlank() }
@@ -404,9 +516,12 @@ class TmdbMetadataService @Inject constructor(
                 movieCredits = movieCredits,
                 tvCredits = tvCredits
             )
-            personCache[cacheKey] = detail
+            personCache.put(cacheKey, detail)
             detail
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Person Details Failed", e)
             Log.e(TAG, "Failed to fetch person detail: ${e.message}", e)
             null
         }
@@ -449,7 +564,10 @@ class TmdbMetadataService @Inject constructor(
                         thumbnail = "https://img.youtube.com/vi/$key/hqdefault.jpg"
                     )
                 }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Videos Failed", e)
             Log.w(TAG, "Failed to fetch videos for $tmdbId: ${e.message}")
             emptyList()
         }
@@ -481,7 +599,10 @@ class TmdbMetadataService @Inject constructor(
             }
 
             null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Trailer Lookup Failed", e)
             Log.w(TAG, "Failed to fetch best trailer for $tmdbId: ${e.message}")
             null
         }
@@ -544,7 +665,10 @@ class TmdbMetadataService @Inject constructor(
                     description = resp.description?.takeIf { it.isNotBlank() }
                 )
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Entity Details Failed", e)
             Log.e(TAG, "Failed to fetch $kind detail $entityId: ${e.message}", e)
             null
         }
@@ -593,9 +717,84 @@ class TmdbMetadataService @Inject constructor(
                 )
             } ?: emptyList()
             Pair(items, resp?.totalPages ?: 1)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Entity Discovery Failed", e)
             Log.w(TAG, "Failed to discover $mediaType for $kind $entityId: ${e.message}")
             Pair(emptyList(), 1)
+        }
+    }
+
+    suspend fun discoverByIntent(
+        intent: TmdbNaturalQuery,
+        language: String = "en",
+        maxItems: Int = 30
+    ): List<TmdbMetaPreview> = withContext(Dispatchers.IO) {
+        val responseLanguage = normalizeTmdbLanguage(language)
+        val cacheKey = "$intent:$responseLanguage:$maxItems"
+        discoverCache.get(cacheKey)?.let { return@withContext it }
+        val types = intent.mediaType?.let(::listOf) ?: listOf("movie", "tv")
+        try {
+            val results = coroutineScope {
+                types.map { type -> async {
+                    val genreIds = if (type == "tv") intent.tvGenreIds ?: intent.genreIds else intent.genreIds
+                    val response = if (type == "tv") {
+                        tmdbApi.discoverTv(
+                            apiKey = apiKey, language = responseLanguage, page = 1,
+                            sortBy = if (intent.sortBy == "release_date.desc") "first_air_date.desc" else intent.sortBy,
+                            firstAirDateGte = intent.releaseDateGte,
+                            firstAirDateLte = intent.releaseDateLte,
+                            voteCountGte = 10,
+                            withGenres = genreIds,
+                            withOriginalLanguage = intent.originalLanguage
+                        )
+                    } else {
+                        tmdbApi.discoverMovies(
+                            apiKey = apiKey, language = responseLanguage, page = 1,
+                            sortBy = if (intent.sortBy == "release_date.desc") "primary_release_date.desc" else intent.sortBy,
+                            releaseDateGte = intent.releaseDateGte,
+                            releaseDateLte = intent.releaseDateLte,
+                            voteCountGte = 10,
+                            withGenres = genreIds,
+                            withOriginalLanguage = intent.originalLanguage
+                        )
+                    }
+                    type to response.body()?.results.orEmpty()
+                } }.awaitAll()
+            }
+            val previews = results.flatMap { (type, items) -> items.mapNotNull { result ->
+                val title = result.title?.takeIf(String::isNotBlank)
+                    ?: result.name?.takeIf(String::isNotBlank)
+                    ?: result.originalTitle?.takeIf(String::isNotBlank)
+                    ?: result.originalName?.takeIf(String::isNotBlank)
+                    ?: return@mapNotNull null
+                TmdbMetaPreview(
+                    tmdbId = result.id,
+                    type = if (type == "tv") "series" else "movie",
+                    name = title,
+                    poster = buildImageUrl(result.posterPath, "w500"),
+                    backdrop = buildImageUrl(result.backdropPath, "w1280"),
+                    description = result.overview?.takeIf(String::isNotBlank),
+                    releaseInfo = result.releaseDate?.take(4) ?: result.firstAirDate?.take(4),
+                    rating = result.voteAverage,
+                    popularity = result.popularity
+                )
+            } }
+            val sorted = when (intent.sortBy) {
+                "popularity.desc" -> previews.sortedByDescending { it.popularity ?: 0.0 }
+                "release_date.desc" -> previews.sortedByDescending { it.releaseInfo ?: "" }
+                else -> previews.sortedByDescending { it.rating ?: 0.0 }
+            }
+            val items = if (intent.mediaType == null) mixTmdbMediaTypes(sorted, maxItems) else sorted.take(maxItems)
+            discoverCache.put(cacheKey, items)
+            items
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "Intent Discovery Failed", failure)
+            Log.w(TAG, "TMDB discovery failed: ${failure.message}")
+            emptyList()
         }
     }
 

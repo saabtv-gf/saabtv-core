@@ -7,6 +7,7 @@ data class TmdbEnrichment(
     val localizedTitle: String?,
     val description: String?,
     val genres: List<String>,
+    val genreIds: List<Int> = emptyList(),
     val backdrop: String?,
     val logo: String?,
     val poster: String?,
@@ -67,7 +68,8 @@ data class TmdbMetaPreview(
     val backdrop: String?,
     val description: String?,
     val releaseInfo: String?,
-    val rating: Double?
+    val rating: Double?,
+    val popularity: Double? = null
 )
 
 /**

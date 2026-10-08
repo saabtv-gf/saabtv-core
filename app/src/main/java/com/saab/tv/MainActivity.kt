@@ -1231,6 +1231,33 @@ class MainActivity : ComponentActivity() {
                                                             YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
                                                         },
                                                         watchedIds = watchlistHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
+                                                        onContinueClick = { movie ->
+                                                            val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.mayReuseOpenStream(movie.type) && selectedMovieId == movie.id &&
+                                                                selectedMovieType == movie.type && selectedVideoUrl.startsWith("https://") &&
+                                                                playerState.currentStream != null && watchlistHomeVm.state.value.history.any { history ->
+                                                                    !history.watched && history.id == selectedPlaybackId &&
+                                                                        (movie.type != "series" || seriesIdFromPlaybackId(history.id) == movie.id)
+                                                                }
+                                                            selectedMovieId = movie.id
+                                                            selectedMovieType = movie.type
+                                                            selectedMovieTitle = movie.name
+                                                            selectedMoviePoster = movie.poster ?: ""
+                                                            selectedMovieBackground = movie.background ?: ""
+                                                            selectedMovieLogo = movie.logo ?: ""
+                                                            selectedAddonBaseUrl = movie.addonBaseUrl
+                                                            detailsResumePlaybackHint = movie.resumePlaybackId
+                                                            if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
+                                                            selectedPlaybackType = movie.type
+                                                            selectedPlaybackTitle = movie.name
+                                                            selectedPlaybackPoster = movie.poster ?: ""
+                                                            autoResumeFromContinue = !canResumeOpenStream
+                                                            previousView = "menu"
+                                                            if (!canResumeOpenStream) {
+                                                                selectedVideoUrl = ""
+                                                                torrentProgress = TorrentProgress("Finding your source...")
+                                                            }
+                                                            activeView = if (canResumeOpenStream) "player" else "resume"
+                                                        },
                                                         onMovieClick = { movie ->
                                                             selectedMovieId = movie.id
                                                             selectedMovieType = movie.type
@@ -1413,7 +1440,37 @@ class MainActivity : ComponentActivity() {
                                                         currentProfile = currentProfile,
                                                         entryRequester = watchlistEntryRequester,
                                                         drawerRequester = drawerRequesters[NavDestination.Watchlist]!!,
+                                                        onTrailerClick = { youtubeKey, trailerName ->
+                                                            YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
+                                                        },
                                                         watchedIds = watchlistHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
+                                                        onContinueClick = { movie ->
+                                                            val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.mayReuseOpenStream(movie.type) && selectedMovieId == movie.id &&
+                                                                selectedMovieType == movie.type && selectedVideoUrl.startsWith("https://") &&
+                                                                playerState.currentStream != null && watchlistHomeVm.state.value.history.any { history ->
+                                                                    !history.watched && history.id == selectedPlaybackId &&
+                                                                        (movie.type != "series" || seriesIdFromPlaybackId(history.id) == movie.id)
+                                                                }
+                                                            selectedMovieId = movie.id
+                                                            selectedMovieType = movie.type
+                                                            selectedMovieTitle = movie.name
+                                                            selectedMoviePoster = movie.poster ?: ""
+                                                            selectedMovieBackground = movie.background ?: ""
+                                                            selectedMovieLogo = movie.logo ?: ""
+                                                            selectedAddonBaseUrl = movie.addonBaseUrl
+                                                            detailsResumePlaybackHint = movie.resumePlaybackId
+                                                            if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
+                                                            selectedPlaybackType = movie.type
+                                                            selectedPlaybackTitle = movie.name
+                                                            selectedPlaybackPoster = movie.poster ?: ""
+                                                            autoResumeFromContinue = !canResumeOpenStream
+                                                            previousView = "menu"
+                                                            if (!canResumeOpenStream) {
+                                                                selectedVideoUrl = ""
+                                                                torrentProgress = TorrentProgress("Finding your source...")
+                                                            }
+                                                            activeView = if (canResumeOpenStream) "player" else "resume"
+                                                        },
                                                         onMovieClick = { movie ->
                                                             selectedMovieId = movie.id
                                                             selectedMovieType = movie.type

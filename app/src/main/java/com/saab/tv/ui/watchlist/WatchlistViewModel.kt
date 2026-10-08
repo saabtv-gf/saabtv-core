@@ -3,7 +3,6 @@ package com.saab.tv.ui.watchlist
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.local.AddonDao
-import com.saab.tv.data.model.WatchlistEntity
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.data.repository.AddonRepository
 import com.saab.tv.data.account.AccountSyncManager
@@ -12,9 +11,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
@@ -32,24 +31,17 @@ class WatchlistViewModel @Inject constructor(
 
     var lastFocusedKey: String? = null
 
-    val movieRowState = androidx.compose.foundation.lazy.LazyListState()
-    val seriesRowState = androidx.compose.foundation.lazy.LazyListState()
-
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val movieItems: StateFlow<List<MetaItem>> = profileId
+    val libraryItems: StateFlow<MyLibraryItems> = profileId
         .flatMapLatest { id ->
-            if (id == null) flowOf(emptyList()) else dao.getWatchlistByType(id, "movie")
+            if (id == null) flowOf(MyLibraryItems()) else combine(
+                dao.getWatchHistoryForProfile(id),
+                dao.getWatchlist(id),
+                dao.getSeriesNextUpForProfileFlow(id),
+                ::buildMyLibraryItems
+            )
         }
-        .map { list -> list.map { it.toMetaItem() } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val seriesItems: StateFlow<List<MetaItem>> = profileId
-        .flatMapLatest { id ->
-            if (id == null) flowOf(emptyList()) else dao.getWatchlistByType(id, "series")
-        }
-        .map { list -> list.map { it.toMetaItem() } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MyLibraryItems())
 
     fun setProfileId(value: Int?) {
         if (profileId.value == value) return
@@ -92,10 +84,3 @@ class WatchlistViewModel @Inject constructor(
         }
     }
 }
-
-private fun WatchlistEntity.toMetaItem() = MetaItem(
-    id = id,
-    type = type,
-    name = title,
-    poster = poster
-)

@@ -33,6 +33,34 @@ class HomeOrchestrationP1Test {
         vm.toggleWatchlist(1,movie); awaitAppState { runBlocking { !f.dao.isInWatchlist(1,"tt1") } }
         assertTrue(f.dao.isInWatchlist(2,"tt1"))
     }
+    @Test fun quickActionMarkMovieWatchedIsProfileScopedAndRemovesItsWatchlistEntry() = runBlocking {
+        f.dao.addToWatchlist(WatchlistEntity(1,"tt1","movie","Movie",null,1))
+        f.dao.addToWatchlist(WatchlistEntity(2,"tt1","movie","Other Profile Copy",null,1))
+
+        vm.markTitleWatched(1,movie)
+
+        awaitAppState { runBlocking {
+            f.dao.getHistoryItemForProfile(1,"tt1")?.watched == true && !f.dao.isInWatchlist(1,"tt1")
+        } }
+        assertFalse(f.dao.isInWatchlist(1,"tt1"))
+        assertTrue(f.dao.isInWatchlist(2,"tt1"))
+        assertTrue(vm.isTitleWatched(1,movie))
+    }
+    @Test fun quickActionMarkSeriesWatchedMarksEpisodesAndCompletesSeries() = runBlocking {
+        val series = movie.copy(type="series", videos=listOf(
+            MetaVideo(id="tt1:1:1",title="Pilot",season=1,episode=1),
+            MetaVideo(id="tt1:1:2",title="Second",season=1,episode=2)
+        ))
+        f.dao.addToWatchlist(WatchlistEntity(1,"tt1","series","Movie",null,1))
+
+        vm.markTitleWatched(1,series)
+
+        awaitAppState { runBlocking { f.dao.getSeriesNextUpForProfile(1).any { it.seriesId == "tt1" && it.isComplete } } }
+        assertTrue(f.dao.getHistoryItemForProfile(1,"tt1:1:1")?.watched == true)
+        assertTrue(f.dao.getHistoryItemForProfile(1,"tt1:1:2")?.watched == true)
+        assertFalse(f.dao.isInWatchlist(1,"tt1"))
+        assertTrue(vm.isTitleWatched(1,series))
+    }
     @Test fun clearMovieProgressDoesNotClearOtherProfileOrTitle() = runBlocking {
         listOf(1 to "tt1",2 to "tt1",1 to "tt2").forEach { (profile,id) ->
             f.dao.insertHistory(WatchHistoryEntity(profile,id,"Title",null,position=10000,duration=100000,lastWatched=1,type="movie"))

@@ -68,6 +68,9 @@ fun SearchScreen(
     var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
     var previewId by remember { mutableStateOf<String?>(null) }
     val previewViewModel = androidx.hilt.navigation.compose.hiltViewModel<com.saab.tv.ui.home.HomeViewModel>()
+    val liveWatchedIds by remember(previewViewModel, currentProfile?.id) {
+        previewViewModel.watchedIdsForProfile(currentProfile?.id ?: 1)
+    }.collectAsStateWithLifecycle(initialValue = emptySet())
     val focusedResult: (String?) -> Unit = { id -> previewId = id; onFocusedIdChange(id) }
     var hasFocus by remember { mutableStateOf(false) }
     var restoreResultFocus by remember { mutableStateOf(lastFocusedId != null) }
@@ -86,6 +89,9 @@ fun SearchScreen(
             entryRequester.requestFocusSafely()
         }
     }
+    LaunchedEffect(currentProfile?.tmdbEnabled, currentProfile?.tmdbLanguage) {
+        viewModel.configureTmdbSearch(currentProfile?.tmdbEnabled == true, currentProfile?.tmdbLanguage.orEmpty())
+    }
     LaunchedEffect(lastFocusedId, targetKey) {
         if (restoreResultFocus && lastFocusedId != null && focusTarget?.id == lastFocusedId) {
             repeat(20) {
@@ -101,6 +107,7 @@ fun SearchScreen(
     SaabTvBackground {
         // TV navigation needs compact visible keys, not phone-sized touch targets.
         CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp,
+            com.saab.tv.ui.components.LocalWatchedIds provides liveWatchedIds,
             com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
         BoxWithConstraints(Modifier.fillMaxSize().onFocusChanged {
             hasFocus = it.hasFocus
@@ -127,11 +134,11 @@ fun SearchScreen(
                 } else {
                     Column(Modifier.weight(1f).onFocusChanged { resultFocus = it.hasFocus }) {
                         SearchResultRow("Movies", state.movies, posterHeight, targetKey, resultsRequester,
-                            entryRequester, drawerRequester, moviesViewMoreRequester, lastFocusedId, watchedIds,
+                            entryRequester, drawerRequester, moviesViewMoreRequester, lastFocusedId, liveWatchedIds,
                             onMovieClick, onLongClick, onViewMore, focusedResult, Modifier.weight(1f), moviesEntry,
                             drawerRequester, if (state.series.isNotEmpty()) seriesEntry else entryRequester)
                         SearchResultRow("Series", state.series, posterHeight, targetKey, resultsRequester,
-                            entryRequester, drawerRequester, seriesViewMoreRequester, lastFocusedId, watchedIds,
+                            entryRequester, drawerRequester, seriesViewMoreRequester, lastFocusedId, liveWatchedIds,
                             onMovieClick, onLongClick, onViewMore, focusedResult, Modifier.weight(1f), seriesEntry,
                             if (state.movies.isNotEmpty()) moviesEntry else drawerRequester, entryRequester)
                     }
@@ -154,8 +161,10 @@ fun SearchScreen(
         title = "Remote Search", description = "Scan With Your Phone To Type A Search"
     )
     actionItem?.let { item ->
-        CatalogQuickActionsPopup(item, actionBounds, currentProfile?.id ?: 1,
-            onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick)
+        CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides liveWatchedIds) {
+            CatalogQuickActionsPopup(item, actionBounds, currentProfile?.id ?: 1,
+                onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick, viewModel = previewViewModel)
+        }
     }
     com.saab.tv.ui.trailer.BackdropTrailerPreview(
         profileId = currentProfile?.id ?: 0,

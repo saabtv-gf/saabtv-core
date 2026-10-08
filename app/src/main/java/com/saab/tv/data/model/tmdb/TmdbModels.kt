@@ -311,5 +311,6 @@ data class TmdbDiscoverResult(
     @SerializedName("first_air_date") val firstAirDate: String? = null,
     @SerializedName("vote_average") val voteAverage: Double? = null,
     @SerializedName("vote_count") val voteCount: Int? = null,
-    @SerializedName("popularity") val popularity: Double? = null
+    @SerializedName("popularity") val popularity: Double? = null,
+    @SerializedName("original_language") val originalLanguage: String? = null
 )

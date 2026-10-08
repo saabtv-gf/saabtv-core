@@ -26,8 +26,7 @@ class WatchlistOrchestrationP1Test {
         f.dao.insertProfile(ProfileEntity(id=2,name="Two"))
         vm = WatchlistViewModel(f.dao,f.app.repository,f.sync)
         collectors = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        collectors.launch { vm.movieItems.collect {} }
-        collectors.launch { vm.seriesItems.collect {} }
+        collectors.launch { vm.libraryItems.collect {} }
         Unit
     }
     @After fun cleanup() { collectors.cancel(); vm.viewModelScope.cancel(); f.close() }
@@ -36,10 +35,14 @@ class WatchlistOrchestrationP1Test {
     }
     @Test fun rowsFollowProfileAndTypeAndNullProfileClearsBoth() {
         add(1); add(2,"series"); vm.setProfileId(1)
-        awaitAppState { vm.movieItems.value.size == 1 }
-        assertEquals("Profile 1",vm.movieItems.value.single().name); assertTrue(vm.seriesItems.value.isEmpty())
-        vm.setProfileId(2); awaitAppState { vm.seriesItems.value.size == 1 && vm.movieItems.value.isEmpty() }
-        vm.setProfileId(null); awaitAppState { vm.seriesItems.value.isEmpty() }
+        awaitAppState { vm.libraryItems.value.watchlist.size == 1 }
+        assertEquals("Profile 1", vm.libraryItems.value.watchlist.single().name)
+        assertEquals("movie", vm.libraryItems.value.watchlist.single().type)
+        vm.setProfileId(2)
+        awaitAppState {
+            vm.libraryItems.value.watchlist.size == 1 && vm.libraryItems.value.watchlist.single().type == "series"
+        }
+        vm.setProfileId(null); awaitAppState { vm.libraryItems.value == MyLibraryItems() }
     }
     @Test fun duplicateRemovalIsIdempotentAndProfileScoped() = runBlocking {
         add(1); add(2); vm.setProfileId(1); vm.remove(item); vm.remove(item)
