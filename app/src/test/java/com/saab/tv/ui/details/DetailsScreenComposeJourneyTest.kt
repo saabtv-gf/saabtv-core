@@ -17,7 +17,9 @@ import com.saab.tv.data.tmdb.TmdbMetadataService
 import com.saab.tv.data.tmdb.TmdbService
 import com.saab.tv.testing.FeatureFixture
 import com.saab.tv.testing.awaitAppState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -32,6 +34,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 import retrofit2.Response
 import java.lang.reflect.Proxy
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class, qualifiers = "w1280dp-h720dp-land")
@@ -43,6 +47,8 @@ class DetailsScreenComposeJourneyTest {
     private lateinit var fixture: FeatureFixture
     private lateinit var detailsViewModel: DetailsViewModel
     private lateinit var homeViewModel: com.saab.tv.ui.home.HomeViewModel
+    private var tmdbLookupStarted: CountDownLatch? = null
+    private var releaseTmdbLookup: CountDownLatch? = null
 
     @Before fun setUp() = runBlocking {
         fixture = FeatureFixture(RuntimeEnvironment.getApplication())
@@ -56,9 +62,11 @@ class DetailsScreenComposeJourneyTest {
         homeViewModel = fixture.home()
     }
 
-    @After fun tearDown() {
-        detailsViewModel.viewModelScope.cancel()
-        homeViewModel.viewModelScope.cancel()
+    @After fun tearDown() = runBlocking {
+        releaseTmdbLookup?.countDown()
+        compose.waitForIdle()
+        detailsViewModel.viewModelScope.coroutineContext[Job]?.cancelAndJoin()
+        homeViewModel.viewModelScope.coroutineContext[Job]?.cancelAndJoin()
         fixture.close()
     }
 
@@ -140,12 +148,19 @@ class DetailsScreenComposeJourneyTest {
         runBlocking { fixture.dao.updateProfile(profile.copy(tmdbEnabled = true)) }
         fixture.api.metadata["tt-slow-tmdb"] = MetaItem("tt-slow-tmdb", "movie", "Immediate Addon Details")
         detailsViewModel.viewModelScope.cancel()
+        tmdbLookupStarted = CountDownLatch(1)
+        releaseTmdbLookup = CountDownLatch(1)
 
         val delayedTmdbApi = Proxy.newProxyInstance(
             TmdbApiService::class.java.classLoader,
             arrayOf(TmdbApiService::class.java)
         ) { _, method, _ ->
-            if (method.name == "findByExternalId") Thread.sleep(1_000)
+            if (method.name == "findByExternalId") {
+                tmdbLookupStarted?.countDown()
+                check(releaseTmdbLookup?.await(5, TimeUnit.SECONDS) == true) {
+                    "Test did not release the pending TMDB lookup"
+                }
+            }
             Response.success<TmdbFindResponse>(200, TmdbFindResponse())
         } as TmdbApiService
         val tmdb = TmdbService(RuntimeEnvironment.getApplication(), delayedTmdbApi)
@@ -157,7 +172,8 @@ class DetailsScreenComposeJourneyTest {
         )
         detailsViewModel.loadDetails("movie", "tt-slow-tmdb", addonBaseUrl = "https://fixture.invalid")
         awaitAppState {
-            !detailsViewModel.state.value.isLoading && detailsViewModel.state.value.tmdbLoading
+            !detailsViewModel.state.value.isLoading && detailsViewModel.state.value.tmdbLoading &&
+                tmdbLookupStarted?.count == 0L
         }
 
         compose.setContent {
@@ -173,6 +189,8 @@ class DetailsScreenComposeJourneyTest {
         }
 
         compose.onNodeWithText("Immediate Addon Details").assertExists()
+        releaseTmdbLookup?.countDown()
+        awaitAppState { !detailsViewModel.state.value.tmdbLoading }
     }
 
     private fun showDetails(type: String, id: String) {
