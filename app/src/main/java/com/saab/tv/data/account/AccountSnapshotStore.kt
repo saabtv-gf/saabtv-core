@@ -16,7 +16,7 @@ class AccountSnapshotStore(private val context: Context, private val database: S
     companion object {
         val TABLES = listOf("profiles", "themes", "addons", "catalog_configs", "hub_rows", "hub_row_items",
             "watchlist", "watch_history", "series_next_up")
-        private const val SNAPSHOT_SCHEMA = 52
+        private const val SNAPSHOT_SCHEMA = 54
         private const val MIN_SUPPORTED_SNAPSHOT_SCHEMA = 51
         const val MAX_BYTES = 14 * 1024 * 1024
         private val PREFERENCES = listOf("profile_configuration_prefs", "source_selection_prefs",
@@ -124,12 +124,19 @@ class AccountSnapshotStore(private val context: Context, private val database: S
             sql.query("PRAGMA table_info(`$table`)").use { while (it.moveToNext()) columns.add(it.getString(1)) }
             tables.getAsJsonArray(table).forEach {
                 val row = it.asJsonObject
-                if (table == "profiles" && snapshotSchema == 51 && !row.has("skipRecap")) {
+                if (table == "profiles" && snapshotSchema <= 51 && !row.has("skipRecap")) {
                     // Version 51 used Skip Intro as the shared IntroDB control;
                     // retain its previous recap behavior for upgraded profiles.
                     // The Room column is INTEGER. Store legacy booleans using
                     // SQLite's 1/0 representation so restore binds the right type.
                     row.addProperty("skipRecap", 1)
+                }
+                if (table == "profiles" && snapshotSchema <= 52 && !row.has("titleCardShape")) {
+                    row.addProperty("titleCardShape", row.get("continueWatchingShape")?.asString ?: "poster")
+                }
+                if (table == "watchlist" && snapshotSchema <= 53) {
+                    if (!row.has("background")) row.add("background", JsonNull.INSTANCE)
+                    if (!row.has("logo")) row.add("logo", JsonNull.INSTANCE)
                 }
                 require(row.keySet() == columns)
                 mapPaths(row, restoring = true)

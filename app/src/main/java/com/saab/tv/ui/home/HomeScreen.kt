@@ -154,7 +154,7 @@ fun HomeScreen(
     }
     val layoutMode = if (isOttScreen) "simple" else currentProfile?.layoutFor(tab) ?: "simple"
     val isTopNav = currentProfile?.navPosition == "top"
-    val isLandscapeContinueWatching = currentProfile?.continueWatchingShape == "landscape"
+    val isLandscapeContinueWatching = currentProfile?.titleCardShape == "landscape"
     val infoTopPadding = if (isTopNav) 60.dp else 30.dp
     val startPadding = if (isTopNav) 50.dp else 120.dp
 
@@ -166,6 +166,10 @@ fun HomeScreen(
         }
     }
     val screenName = screenNameOverride ?: defaultScreenName
+
+    LaunchedEffect(currentProfile?.id, currentProfile?.tmdbEnabled, currentProfile?.tmdbLanguage, currentProfile?.titleCardShape) {
+        viewModel.configureTmdbProfile(currentProfile)
+    }
 
     // During tab switch, ignore persisted focus/scroll until this tab is actually loaded.
     // This avoids one-frame carry-over from the previous tab.
@@ -306,7 +310,11 @@ fun HomeScreen(
                     onFocusChange = { viewModel.setLastFocusedKey(it) },
                     onScrollPositionChange = { key, pos -> viewModel.setRowScrollPosition(key, pos) },
                     onVerticalScrollChange = { viewModel.setVerticalScrollPosition(it, hasInProgressHistory) },
-                    onPreviewItemVisible = { viewModel.ensureMetadataFallback(it); viewModel.ensureTmdbEnrichment(it) },
+                    onPreviewItemVisible = {
+                        viewModel.ensureMetadataFallback(it)
+                        viewModel.ensureTmdbEnrichment(it)
+                    },
+                    onWatchedItemShown = { viewModel.ensureWatchedAlias(currentProfile?.id ?: 1, it) },
                     isLandscapeContinueWatching = isLandscapeContinueWatching
                 )
             } else {
@@ -344,7 +352,11 @@ fun HomeScreen(
                     onFocusChange = { viewModel.setLastFocusedKey(it) },
                     onScrollPositionChange = { key, pos -> viewModel.setRowScrollPosition(key, pos) },
                     onVerticalScrollChange = { viewModel.setVerticalScrollPosition(it, hasInProgressHistory) },
-                    onHeroItemVisible = { viewModel.ensureMetadataFallback(it); viewModel.ensureTmdbEnrichment(it) },
+                    onHeroItemVisible = {
+                        viewModel.ensureMetadataFallback(it)
+                        viewModel.ensureTmdbEnrichment(it)
+                    },
+                    onWatchedItemShown = { viewModel.ensureWatchedAlias(currentProfile?.id ?: 1, it) },
                     topActionRequester = entryRequester.takeIf { isOttScreen },
                     onRefreshOtt = if (isOttScreen) {
                         { viewModel.refreshOtt(currentProfile) }
@@ -461,13 +473,16 @@ fun HomeScreen(
                     ) {
                         CardActionIcon(Icons.Default.PlayArrow, "Resume", { longPressedItem = null; onContinueClick(item) },
                             Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
-                        CardActionIcon(Icons.Default.DoneAll, if (watched) "Watched" else "Mark As Watched", {
-                            if (!watched) {
+                        CardActionIcon(Icons.Default.DoneAll, if (watched) "Mark As Unwatched" else "Mark As Watched", {
+                            if (watched) {
+                                viewModel.unmarkTitleWatched(profileId, item)
+                                watched = false
+                            } else {
                                 viewModel.markTitleWatched(profileId, item)
                                 watched = true
                             }
                             dismissQuickActions()
-                        }, Modifier, enabled = actionsArmed && !watched)
+                        }, Modifier, enabled = actionsArmed)
                         CardActionIcon(Icons.Default.Delete, "Clear Progress", { confirmClear = true },
                             Modifier, enabled = actionsArmed, destructive = true)
                     }
@@ -493,13 +508,16 @@ fun HomeScreen(
                         }
                         longPressedItem = null
                     }, modifier = Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
-                    CardActionIcon(Icons.Default.DoneAll, if (watched) "Watched" else "Mark As Watched", onClick = {
-                        if (!watched) {
+                    CardActionIcon(Icons.Default.DoneAll, if (watched) "Mark As Unwatched" else "Mark As Watched", onClick = {
+                        if (watched) {
+                            viewModel.unmarkTitleWatched(profileId, item)
+                            watched = false
+                        } else {
                             viewModel.markTitleWatched(profileId, item)
                             watched = true
                         }
                         dismissQuickActions()
-                    }, modifier = Modifier, enabled = actionsArmed && !watched)
+                    }, modifier = Modifier, enabled = actionsArmed)
                     watchlisted?.let { saved ->
                         CardActionIcon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
@@ -621,6 +639,7 @@ fun CinematicLayout(
     onScrollPositionChange: (String, Pair<Int, Int>) -> Unit,
     onVerticalScrollChange: (Pair<Int, Int>) -> Unit,
     onPreviewItemVisible: (MetaItem) -> Unit,
+    onWatchedItemShown: (MetaItem) -> Unit = {},
     isLandscapeContinueWatching: Boolean = false
 ) {
     var instantFocusItem by remember { mutableStateOf<MetaItem?>(null) }
@@ -724,7 +743,7 @@ fun CinematicLayout(
         FocusPivotSpec(
             customOffset = titleHeadroomPx,
             skipScrollProvider = { skipVerticalScroll },
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
     
@@ -875,7 +894,15 @@ fun CinematicLayout(
                     LazyColumn(
                         state = verticalListState,
                         modifier = Modifier
-                            .fillMaxSize(), // Focus managed by items
+                            .fillMaxSize()
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown &&
+                                    (event.key == Key.DirectionUp || event.key == Key.DirectionDown)
+                                ) {
+                                    skipVerticalScroll = false
+                                }
+                                false
+                            }, // Keep restored focus still until the user navigates.
                         contentPadding = PaddingValues(top = 5.dp, bottom = 400.dp),
                         verticalArrangement = Arrangement.spacedBy((-12).dp)
                     ) {
@@ -924,6 +951,8 @@ fun CinematicLayout(
                                     repeatGate = dpadRepeatGate,
                                     isLandscapeCards = isLandscapeContinueWatching,
                                     enrichedItems = state.enrichedMeta,
+                                    onItemShown = onPreviewItemVisible,
+                                    onWatchedItemShown = onWatchedItemShown,
                                     rowHeight = if (isLandscapeContinueWatching) 140.dp else 210.dp
                                 )
                             }
@@ -1017,7 +1046,7 @@ fun CinematicLayout(
                                         snapshotFlow {
                                             rowListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
                                         }.collect { lastVisibleIndex ->
-                                            if (itemSize > 0 && lastVisibleIndex >= itemSize - 10) {
+                                            if (itemSize > 0 && lastVisibleIndex >= itemSize - 10 && !itemId.startsWith("tmdb-")) {
                                                 onLoadMore(itemId)
                                             }
                                         }
@@ -1050,7 +1079,9 @@ fun CinematicLayout(
                                         isInfiniteScrollingEnabled = item.isInfiniteScrollingEnabled,
                                         externalListState = rowListState,
                                         upKeyDebouncer = upKeyDebouncer,
-                                        repeatGate = dpadRepeatGate
+                                        repeatGate = dpadRepeatGate,
+                                        onItemShown = onPreviewItemVisible,
+                                        onWatchedItemShown = onWatchedItemShown
                                     )
                                 }
                             }
@@ -1273,6 +1304,7 @@ fun SimpleLayout(
     onScrollPositionChange: (String, Pair<Int, Int>) -> Unit,
     onVerticalScrollChange: (Pair<Int, Int>) -> Unit,
     onHeroItemVisible: (MetaItem) -> Unit,
+    onWatchedItemShown: (MetaItem) -> Unit = {},
     topActionRequester: FocusRequester? = null,
     onRefreshOtt: (() -> Unit)? = null,
     isLandscapeContinueWatching: Boolean = false
@@ -1345,7 +1377,7 @@ fun SimpleLayout(
         FocusPivotSpec(
             customOffset = verticalPivotPx,
             skipScrollProvider = { skipVerticalScroll },
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 
@@ -1374,7 +1406,16 @@ fun SimpleLayout(
 
         LazyColumn(
             state = verticalListState,
-            modifier = Modifier.fillMaxSize(), // Focus managed by items
+            modifier = Modifier
+                .fillMaxSize()
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown &&
+                        (event.key == Key.DirectionUp || event.key == Key.DirectionDown)
+                    ) {
+                        skipVerticalScroll = false
+                    }
+                    false
+                }, // Focus managed by items; user navigation resumes pivot motion.
             contentPadding = PaddingValues(top = if (heroItems.isNotEmpty()) 0.dp else if (isTopNav) 60.dp else 40.dp, bottom = 0.dp),
             verticalArrangement = Arrangement.spacedBy(15.dp)
         ) {
@@ -1461,6 +1502,8 @@ fun SimpleLayout(
                         pivotFocusRequester = if (heroItems.isNotEmpty()) firstRowPivotRequester else null,
                         isLandscapeCards = isLandscapeContinueWatching,
                         enrichedItems = state.enrichedMeta,
+                        onItemShown = onHeroItemVisible,
+                        onWatchedItemShown = onWatchedItemShown,
                         rowHeight = if (isLandscapeContinueWatching) 140.dp else 210.dp
                     )
                 }
@@ -1596,6 +1639,8 @@ fun SimpleLayout(
                             rowHeight = rowHeight,
                             upKeyDebouncer = upKeyDebouncer,
                             repeatGate = dpadRepeatGate,
+                            onItemShown = onHeroItemVisible,
+                            onWatchedItemShown = onWatchedItemShown,
                             pivotFocusRequester = if (heroItems.isNotEmpty() && historyItems.isEmpty() && rowIndex == 0) firstRowPivotRequester else null
                         )
                     }

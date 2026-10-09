@@ -25,7 +25,7 @@ import com.saab.tv.data.model.WatchlistEntity
         WatchlistEntity::class,
         SeriesNextUpEntity::class
     ],
-    version = 52
+    version = 54
 )
 abstract class SaabTvDatabase : RoomDatabase() {
     abstract fun addonDao(): AddonDao

@@ -5,7 +5,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,11 +52,14 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -69,28 +71,6 @@ import com.saab.tv.ui.utils.ImagePrefetcher
 private const val COLUMNS = 6
 private const val DPAD_REPEAT_INTERVAL_HORIZONTAL_MS = 150L
 private const val DPAD_REPEAT_INTERVAL_VERTICAL_MS = 200L
-
-@OptIn(ExperimentalFoundationApi::class)
-private class GridFocusPivotSpec(
-    private val pivotOffset: Float,
-    private val stiffnessProvider: (() -> Float)? = null
-) : BringIntoViewSpec {
-    
-    @Deprecated("", level = DeprecationLevel.HIDDEN)
-    override val scrollAnimationSpec: androidx.compose.animation.core.AnimationSpec<Float>
-        get() = androidx.compose.animation.core.spring(
-            stiffness = stiffnessProvider?.invoke() ?: androidx.compose.animation.core.Spring.StiffnessLow,
-            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-            visibilityThreshold = 0.1f
-        )
-    
-    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
-        // Calculate where we want the focused item to appear (at pivot point from top)
-        val targetPosition = pivotOffset
-        val currentPosition = offset
-        return currentPosition - targetPosition
-    }
-}
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -115,6 +95,9 @@ fun GridViewScreen(
     val liveWatchedIds by remember(previewViewModel, profileId) {
         previewViewModel.watchedIdsForProfile(profileId)
     }.collectAsStateWithLifecycle(initialValue = emptySet())
+    val enrichedItems by remember(previewViewModel) {
+        previewViewModel.state.map { it.enrichedMeta }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = emptyMap())
     var actionItem by remember { mutableStateOf<MetaItem?>(null) }
     var previewItem by remember { mutableStateOf<MetaItem?>(null) }
     var previewActive by remember { mutableStateOf(false) }
@@ -123,8 +106,12 @@ fun GridViewScreen(
     var actionBounds by remember { mutableStateOf(Rect.Zero) }
     val context = LocalContext.current
     val density = LocalDensity.current
+    val landscapeCards = com.saab.tv.ui.components.LocalTitleCardShape.current == "landscape"
+    val columnCount = if (landscapeCards) 4 else COLUMNS
     
     val startPadding = 50.dp
+    val gridCardWidth = ((LocalConfiguration.current.screenWidthDp.dp - startPadding - 50.dp -
+        20.dp * (columnCount - 1).toFloat()) / columnCount).coerceAtLeast(120.dp)
     
     // Header height for pivot calculation
     val headerHeight = 48.dp
@@ -138,10 +125,10 @@ fun GridViewScreen(
     }
     
     // Create pivot spec - items scroll to just below the fixed header
-    val pivotSpec = remember(headerHeightPx) { 
-        GridFocusPivotSpec(
-            pivotOffset = headerHeightPx + 16f,
-            stiffnessProvider = { androidx.compose.animation.core.Spring.StiffnessLow }
+    val pivotSpec = remember(headerHeightPx) {
+        FocusPivotSpec(
+            customOffset = headerHeightPx + 16f,
+            stiffnessProvider = { androidx.compose.animation.core.Spring.StiffnessMediumLow }
         )
     }
     
@@ -203,7 +190,33 @@ fun GridViewScreen(
     }
     
     // Prefetch image URLs list
-    val imageUrls = remember(items) { items.map { it.poster } }
+    val imageUrls = remember(items, enrichedItems, landscapeCards) {
+        items.map { item ->
+            if (landscapeCards) {
+                enrichedItems["${item.type}:${item.id}"]?.background ?: item.background
+            } else item.poster
+        }
+    }
+
+    LaunchedEffect(gridState, items, enrichedItems, landscapeCards) {
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.map { it.index } }
+            .distinctUntilChanged()
+            .collect { visibleIndices ->
+                val visibleItems = visibleIndices.mapNotNull(items::getOrNull)
+                visibleItems.forEach { item ->
+                    if (landscapeCards) {
+                        previewViewModel.ensureTmdbEnrichment(item)
+                        val index = items.indexOfFirst { it.type == item.type && it.id == item.id }
+                        ImagePrefetcher.prefetchLandscape(context, imageUrls.getOrNull(index))
+                        ImagePrefetcher.prefetchLogo(context, enrichedItems["${item.type}:${item.id}"]?.logo ?: item.logo)
+                    }
+                }
+                if (landscapeCards) visibleIndices.firstOrNull { it in items.indices }?.let { index ->
+                    val logos = items.map { enrichedItems["${it.type}:${it.id}"]?.logo ?: it.logo }
+                    ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index, count = 2, logos = logos)
+                }
+            }
+    }
     
     // Track if focus has been restored to prevent re-triggering
     var focusRestored by remember { mutableStateOf(false) }
@@ -251,7 +264,7 @@ fun GridViewScreen(
             com.saab.tv.ui.components.LocalWatchedIds provides liveWatchedIds,
             com.saab.tv.ui.components.LocalPosterFocusReturn provides { originalPosterFocus = it }) {
             LazyVerticalGrid(
-                columns = GridCells.Fixed(COLUMNS),
+                columns = GridCells.Fixed(columnCount),
                 state = gridState,
                 contentPadding = PaddingValues(
                     start = startPadding,
@@ -287,14 +300,15 @@ fun GridViewScreen(
                     }
                     
                     SaabTvCard(
-                        previewItem = item,
+                        previewItem = enrichedItems["${item.type}:${item.id}"] ?: item,
                         title = item.name,
                         posterUrl = item.poster,
+                        landscapeWidth = gridCardWidth,
                         onClick = { onMovieClick(item) },
                         onLongClick = { bounds -> actionBounds = bounds; actionItem = item },
                         isWatched = item.id in liveWatchedIds,
                         modifier = Modifier
-                            .aspectRatio(2f / 3f)
+                            .then(if (landscapeCards) Modifier else Modifier.aspectRatio(2f / 3f))
                             .onPreviewKeyEvent { keyEvent ->
                                 if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                                 if (dpadRepeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
@@ -302,12 +316,12 @@ fun GridViewScreen(
                                     when (keyEvent.key) {
                                         // Block UP navigation on first row
                                         Key.DirectionUp -> {
-                                            if (index < COLUMNS) {
+                                            if (index < columnCount) {
                                                 pendingDirectionalTargetIndex = null
                                                 backIconRequester.requestFocus()
                                                 return@onPreviewKeyEvent true
                                             }
-                                            val targetIndex = index - COLUMNS
+                                            val targetIndex = index - columnCount
                                             val targetRequester = cardRequesters[targetIndex]
                                             if (targetRequester != null) {
                                                 pendingDirectionalTargetIndex = null
@@ -320,7 +334,7 @@ fun GridViewScreen(
                                             }
                                         }
                                         Key.DirectionDown -> {
-                                            val targetIndex = index + COLUMNS
+                                            val targetIndex = index + columnCount
                                             if (targetIndex >= items.size) {
                                                 pendingDirectionalTargetIndex = null
                                                 return@onPreviewKeyEvent true
@@ -339,7 +353,7 @@ fun GridViewScreen(
                                         // Block LEFT navigation on first column (no exit on left key)
                                         Key.DirectionLeft -> {
                                             pendingDirectionalTargetIndex = null
-                                            if (index % COLUMNS == 0) {
+                                            if (index % columnCount == 0) {
                                                 return@onPreviewKeyEvent true
                                             }
                                         }
@@ -353,7 +367,12 @@ fun GridViewScreen(
                             .onFocusChanged {
                                 if (it.isFocused) {
                                     previewItem = item
-                                    ImagePrefetcher.prefetchAround(context, imageUrls, index, count = 5)
+                                    previewViewModel.ensureTmdbEnrichment(item)
+                                    if (landscapeCards) {
+                                        ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index, count = 5)
+                                    } else {
+                                        ImagePrefetcher.prefetchAround(context, imageUrls, index, count = 5)
+                                    }
                                     onFocusChange(index)
                                     lastFocusedPosterIndex = index
                                     val pendingTarget = pendingDirectionalTargetIndex

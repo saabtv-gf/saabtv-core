@@ -11,11 +11,17 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.model.ProfileEntity
+import com.saab.tv.data.model.SeriesNextUpEntity
+import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.model.WatchlistEntity
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.episodePlaybackId
+import com.saab.tv.data.model.stremio.MetaVideo
 import com.saab.tv.testing.FeatureFixture
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -106,5 +112,101 @@ class CatalogQuickActionsInteractionP1Test {
         assertFalse(fixture.dao.isInWatchlist(21, item.id))
         compose.onNodeWithContentDescription("Add To Watchlist").assertExists()
         compose.runOnIdle { assertEquals(0, trailerCalls); assertEquals(0, dismissed) }
+    }
+
+    @Test fun markWatchedRemovesTheSameTitleFromWatchlist() = runBlocking {
+        fixture.dao.addToWatchlist(WatchlistEntity(21, item.id, item.type, item.name, null, 1L))
+        show()
+        compose.mainClock.advanceTimeBy(600)
+
+        compose.onNodeWithContentDescription("Mark As Watched").performClick()
+        compose.waitUntil(3_000) {
+            runBlocking {
+                fixture.dao.getHistoryItemForProfile(21, item.id)?.watched == true &&
+                    !fixture.dao.isInWatchlist(21, item.id)
+            }
+        }
+    }
+
+    @Test fun watchedTitleCanBeUnmarkedFromQuickActions() = runBlocking {
+        fixture.dao.insertHistory(WatchHistoryEntity(
+            profileId = 21, id = item.id, title = item.name, poster = null,
+            position = 420_000L, duration = 1_200_000L, lastWatched = 10L, type = "movie", watched = true
+        ))
+        show()
+        compose.mainClock.advanceTimeBy(600)
+
+        compose.onNodeWithContentDescription("Mark As Unwatched").assertExists().performClick()
+        compose.waitUntil(3_000) {
+            runBlocking { fixture.dao.getHistoryItemForProfile(21, item.id)?.watched == false }
+        }
+        assertEquals(420_000L, fixture.dao.getHistoryItemForProfile(21, item.id)?.position)
+    }
+
+    @Test fun unmarkingWatchedSeriesPreservesEpisodeProgressAndReopensContinueWatching() = runBlocking {
+        val series = MetaItem("tt-quick-series", "series", "Quick Action Series")
+        val episodeId = episodePlaybackId(series.id, MetaVideo(
+            id = "addon-episode-1", season = 1, episode = 1, title = "Pilot"
+        ))
+        fixture.dao.insertHistory(WatchHistoryEntity(
+            profileId = 21, id = episodeId, title = "Pilot", poster = null,
+            position = 120_000L, duration = 1_800_000L, lastWatched = 10L,
+            type = "series", watched = true
+        ))
+        fixture.dao.insertHistory(WatchHistoryEntity(
+            profileId = 21, id = series.id, title = series.name, poster = null,
+            position = 0L, duration = 0L, lastWatched = 10L,
+            type = "series", watched = true
+        ))
+        fixture.dao.insertSeriesNextUp(SeriesNextUpEntity(
+            profileId = 21, seriesId = series.id, title = series.name, poster = null,
+            nextSeason = 0, nextEpisode = 0, nextEpisodeTitle = null,
+            isComplete = true, updatedAt = 10L
+        ))
+
+        viewModel.unmarkTitleWatched(21, series)
+
+        compose.waitUntil(3_000) {
+            runBlocking {
+                fixture.dao.getHistoryItemForProfile(21, episodeId)?.watched == false &&
+                    fixture.dao.getSeriesNextUpForProfile(21).any {
+                        it.seriesId == series.id && !it.isComplete
+                    }
+            }
+        }
+        assertEquals(120_000L, fixture.dao.getHistoryItemForProfile(21, episodeId)?.position)
+    }
+
+    @Test fun watchedTmdbRecommendationGetsAnAliasForItsImdbHistoryId() = runBlocking {
+        fixture.tmdb.preCacheMapping("tt-alias-target", 987)
+        fixture.dao.insertHistory(WatchHistoryEntity(
+            profileId = 21, id = "tt-alias-target", title = "Alias Target", poster = null,
+            position = 0L, duration = 0L, lastWatched = 10L, type = "movie", watched = true
+        ))
+        val recommendation = MetaItem("tmdb:987", "movie", "Alias Target")
+
+        viewModel.ensureWatchedAlias(21, recommendation)
+        val watchedIds = withTimeout(3_000) {
+            viewModel.watchedIdsForProfile(21).first { recommendation.id in it }
+        }
+
+        assertTrue(recommendation.id in watchedIds)
+    }
+
+    @Test fun completedSeriesRecommendationGetsBadgeEvenWithoutEpisodeHistoryRows() = runBlocking {
+        fixture.tmdb.preCacheMapping("tt-complete-series", 988)
+        fixture.dao.insertSeriesNextUp(SeriesNextUpEntity(
+            profileId = 21, seriesId = "tt-complete-series", title = "Completed Series", poster = null,
+            nextSeason = 0, nextEpisode = 0, nextEpisodeTitle = null,
+            isComplete = true, updatedAt = 10L
+        ))
+        val recommendation = MetaItem("tmdb:988", "series", "Completed Series")
+
+        viewModel.ensureWatchedAlias(21, recommendation)
+        val watchedIds = withTimeout(3_000) {
+            viewModel.watchedIdsForProfile(21).first { recommendation.id in it }
+        }
+
+        assertTrue(recommendation.id in watchedIds)
     }
 }

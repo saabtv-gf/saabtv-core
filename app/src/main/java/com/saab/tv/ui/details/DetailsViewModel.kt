@@ -187,6 +187,26 @@ class DetailsViewModel @Inject constructor(
                 loadedContentKey = requestKey
                 // Use resolved ID for streams — guarantees IMDb format for stream addons
                 val streamFetchId = if (details.id.startsWith("tt")) details.id else resolvedId
+
+                // Publish the Cinemeta/add-on payload immediately. Resume bookkeeping
+                // and TMDB enrichment continue independently, so neither delays the
+                // first usable details screen.
+                _state.value = _state.value.copy(
+                    meta = details,
+                    resolvedId = streamFetchId,
+                    contentKey = requestKey,
+                    isLoading = false,
+                    resumeStateReady = false,
+                    trailer = details.bestAvailableTrailer(),
+                    tmdbEnabled = isTmdbEnabled,
+                    tmdbLoading = isTmdbEnabled && !playbackOnly
+                )
+                if (!playbackOnly) {
+                    warmTrailer(_state.value.trailer)
+                    loadTmdbEnrichment(details.type, streamFetchId, requestKey)
+                    loadCinemetaTrailer(details.type, streamFetchId, requestKey)
+                }
+
                 if (details.type == "series") computeAndStoreNextUp(streamFetchId, details.name, details.poster, details.videos)
                 val episodeProgressMap = if (details.type == "series") buildEpisodeProgressMap(streamFetchId) else emptyMap()
                 val lastPlayedEpisodeId = if (details.type == "series")
@@ -214,10 +234,6 @@ class DetailsViewModel @Inject constructor(
                 } else false
 
                 _state.value = _state.value.copy(
-                    meta = details,
-                    resolvedId = streamFetchId,
-                    contentKey = requestKey,
-                    isLoading = false,
                     resumePlaybackId = resumePlaybackId,
                     resumeStateReady = true,
                     resumeIsNextEpisode = details.type == "series" && resumePlaybackId != null && dao.getHistoryItem(resumePlaybackId)?.let { !it.watched && it.position > 0 } != true,
@@ -226,20 +242,8 @@ class DetailsViewModel @Inject constructor(
                     episodeProgressMap = episodeProgressMap,
                     autoPlayStream = null,
                     addonSubtitles = emptyList(),
-                    availableStreams = emptyList(),
-                    tmdbEnrichment = null,
-                    tmdbRecommendations = emptyList(),
-                    trailer = details.bestAvailableTrailer(),
-                    tmdbCollection = emptyList(),
-                    tmdbCollectionName = null,
-                    tmdbEnabled = isTmdbEnabled,
-                    tmdbLoading = isTmdbEnabled && !playbackOnly
+                    availableStreams = emptyList()
                 )
-                if (!playbackOnly) {
-                    warmTrailer(_state.value.trailer)
-                    loadTmdbEnrichment(details.type, streamFetchId, requestKey)
-                    loadCinemetaTrailer(details.type, streamFetchId, requestKey)
-                }
 
                 // Prefetch streams so they're ready when the user hits Play
                 val prefetchId = if (resumePlaybackId != null) {
@@ -964,7 +968,9 @@ class DetailsViewModel @Inject constructor(
                     type = meta.type,
                     title = meta.name,
                     poster = meta.poster,
-                    addedAt = System.currentTimeMillis()
+                    addedAt = System.currentTimeMillis(),
+                    background = meta.background,
+                    logo = meta.logo
                 )
                 dao.addToWatchlist(entity)
                 traktSyncManager.pushAdd(entity)

@@ -56,16 +56,16 @@ class PersonalizationSettingsComposeInteractionTest {
         app.close()
     }
 
-    @Test fun posterAndContinueWatchingSegmentsPersistSelection() {
+    @Test fun titleCardLayoutAndPosterCornersPersistSelection() {
         compose.onAllNodesWithText("Sharp")[0].performClick()
         compose.waitUntil(5_000) { runBlocking { app.dao.getProfileById(1)?.roundCorners == false } }
 
         compose.onNodeWithText("Landscape").performClick()
-        compose.waitUntil(5_000) { runBlocking { app.dao.getProfileById(1)?.continueWatchingShape == "landscape" } }
+        compose.waitUntil(5_000) { runBlocking { app.dao.getProfileById(1)?.titleCardShape == "landscape" } }
         compose.runOnIdle {
             val profile = runBlocking { app.dao.getProfileById(1)!! }
             assertEquals(false, profile.roundCorners)
-            assertEquals("landscape", profile.continueWatchingShape)
+            assertEquals("landscape", profile.titleCardShape)
         }
     }
 

@@ -19,6 +19,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
@@ -31,6 +35,10 @@ class MainViewModel @Inject constructor(
 
     private val _activeProfile = MutableStateFlow<ProfileEntity?>(null)
     val activeProfile: StateFlow<ProfileEntity?> = _activeProfile
+
+    fun watchlistIdsForProfile(profileId: Int?): Flow<Set<String>> = profileId?.let { id ->
+        dao.getWatchlist(id).map { entries -> entries.mapTo(mutableSetOf()) { it.id } }.distinctUntilChanged()
+    } ?: flowOf(emptySet())
 
     private var profileJob: Job? = null
     private var loginJob: Job? = null

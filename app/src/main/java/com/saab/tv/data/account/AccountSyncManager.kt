@@ -54,10 +54,11 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
         check(metadata.edit().putLong("local_changed_at", System.currentTimeMillis()).commit())
     }
 
-    suspend fun initialize() {
+    suspend fun initialize(): Boolean {
         if (restoreJournal.baseFile.exists()) {
             val pending = JsonParser.parseString(restoreJournal.openRead().use { it.readBytes().toString(Charsets.UTF_8) }).asJsonObject
             restoreCloud(pending)
+            return true
         }
         val localRevision = metadata.getLong("revision", 0)
         val head = components.head()
@@ -72,23 +73,27 @@ class AccountCloudStore(private val context: Context, private val auth: AccountA
             val remoteBytes = contentBytes(remoteSnapshot)
             if (hash(current) == hash(remoteBytes)) {
                 saveMetadata(revision, hash(current))
-                return
+                return false
             }
             val dirty = hasLocalProfiles && metadata.getString("hash", null) != hash(current)
             if (dirty && localSnapshotIsNewer(metadata.getLong("local_changed_at", 0), cloudChangedAt(cloud, remoteSnapshot))) {
                 try { upload() } catch (_: AccountSyncConflict) {
                     restoreCloud(remote() ?: throw IOException("Cloud backup is unavailable. Please retry."))
+                    return true
                 }
-                return
+                return false
             }
             restoreCloud(cloud)
+            return true
         } else if (cloud == null && localRevision > 0) {
             throw IOException("Cloud account data is missing. Local data has been preserved.")
         } else if (cloud != null) {
             try { upload() } catch (_: AccountSyncConflict) {
                 restoreCloud(remote() ?: throw IOException("Cloud backup is unavailable. Please retry."))
+                return true
             }
         }
+        return false
     }
 
     suspend fun upload(): Boolean {
@@ -287,6 +292,40 @@ class AccountSyncManager @Inject constructor(
             if (!auth.hasSession || suspended) return@withLock false
             profiles.saveActiveRuntimeState()
             cloud.hasNewerCleanBackup()
+        }
+    }
+
+    /** Reconcile both directions; true means the local account database was replaced by cloud state. */
+    suspend fun syncAndReconcile(): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (!auth.hasSession) return@withLock false
+            suspended = true
+            try {
+                _status.value = "Checking cloud copy…"
+                com.saab.tv.AppDiagnostics.event(context, "Cloud Sync", "Manual Reconcile Started")
+                profiles.saveActiveRuntimeState()
+                if (cloud.initialize()) {
+                    conflictPending = false
+                    failures = 0
+                    _status.value = "Cloud copy restored; reopening…"
+                    com.saab.tv.AppDiagnostics.event(context, "Cloud Sync", "Cloud Copy Restored")
+                    return@withLock true
+                }
+                cloud.upload()
+                conflictPending = false
+                failures = 0
+                _status.value = "Synced"
+                com.saab.tv.AppDiagnostics.event(context, "Cloud Sync", "Manual Reconcile Completed")
+                false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                com.saab.tv.AppDiagnostics.failure("Cloud Sync", "Manual Reconcile Failed", failure)
+                _status.value = failure.message?.take(200) ?: "Sync failed. Local data is safe."
+                throw failure
+            } finally {
+                suspended = false
+            }
         }
     }
 

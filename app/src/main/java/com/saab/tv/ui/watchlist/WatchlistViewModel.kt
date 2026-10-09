@@ -27,6 +27,7 @@ class WatchlistViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val resolveInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val resolveAttempted = ConcurrentHashMap.newKeySet<String>()
     private val profileId = MutableStateFlow<Int?>(null)
 
     var lastFocusedKey: String? = null
@@ -47,6 +48,7 @@ class WatchlistViewModel @Inject constructor(
         if (profileId.value == value) return
         profileId.value = value
         resolveInFlight.clear()
+        resolveAttempted.clear()
         lastFocusedKey = null
     }
 
@@ -58,23 +60,23 @@ class WatchlistViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Resolve poster from addons for items missing one (e.g., pulled from Trakt).
-     * Updates the DB so the poster persists — the Flow will re-emit automatically.
-     */
+    /** Resolve missing poster/backdrop/logo metadata for imported library entries. */
     fun resolvePosterIfNeeded(item: MetaItem) {
         val activeProfileId = profileId.value ?: return
-        if (!item.poster.isNullOrBlank()) return
-        val resolveKey = "$activeProfileId:${item.id}"
-        if (!resolveInFlight.add(resolveKey)) return
+        if (!item.poster.isNullOrBlank() && !item.background.isNullOrBlank() && !item.logo.isNullOrBlank()) return
+        val resolveKey = "$activeProfileId:${item.type}:${item.id}"
+        if (!resolveAttempted.add(resolveKey) || !resolveInFlight.add(resolveKey)) return
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val meta = repository.resolveMetaDetails(item.type, item.id) ?: return@launch
-                if (!meta.poster.isNullOrBlank()) {
-                    val existing = dao.getWatchlistItem(activeProfileId, item.id) ?: return@launch
-                    dao.addToWatchlist(existing.copy(poster = meta.poster))
-                }
+                val existing = dao.getWatchlistItem(activeProfileId, item.id) ?: return@launch
+                val updated = existing.copy(
+                    poster = existing.poster?.takeIf(String::isNotBlank) ?: meta.poster,
+                    background = existing.background?.takeIf(String::isNotBlank) ?: meta.background,
+                    logo = existing.logo?.takeIf(String::isNotBlank) ?: meta.logo
+                )
+                if (updated != existing) dao.addToWatchlist(updated)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (_: Exception) {

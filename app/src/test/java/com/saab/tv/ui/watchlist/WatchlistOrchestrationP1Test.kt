@@ -53,20 +53,30 @@ class WatchlistOrchestrationP1Test {
         vm.setProfileId(1); vm.lastFocusedKey="tt1"; vm.setProfileId(1)
         assertEquals("tt1",vm.lastFocusedKey); vm.setProfileId(2); assertNull(vm.lastFocusedKey)
     }
-    @Test fun existingPosterAndNoProfileDoNotResolve() {
+    @Test fun noProfileAndCompleteExistingArtworkDoNotResolve() {
         vm.resolvePosterIfNeeded(item); vm.setProfileId(1)
-        vm.resolvePosterIfNeeded(item.copy(poster="https://fixture.invalid/poster"))
+        vm.resolvePosterIfNeeded(item.copy(
+            poster="https://fixture.invalid/poster",
+            background="https://fixture.invalid/backdrop",
+            logo="https://fixture.invalid/logo"
+        ))
         assertTrue(f.api.calls.isEmpty())
     }
     @Test fun inFlightPosterResolutionIsSingleFlightAndPersists() = runBlocking {
         add(1); vm.setProfileId(1)
-        f.api.metadata["tt1"]=item.copy(poster="https://fixture.invalid/poster")
+        f.api.metadata["tt1"]=item.copy(
+            poster="https://fixture.invalid/poster",
+            background="https://fixture.invalid/backdrop",
+            logo="https://fixture.invalid/logo"
+        )
         val gate=CompletableDeferred<Unit>(); f.api.metadataGate=gate
         repeat(10) { vm.resolvePosterIfNeeded(item) }
         awaitAppState { f.api.calls.isNotEmpty() }
         assertEquals(1,f.api.calls.size); gate.complete(Unit)
         awaitAppState { runBlocking { f.dao.getWatchlistItem(1,"tt1")?.poster != null } }
         assertEquals("https://fixture.invalid/poster",f.dao.getWatchlistItem(1,"tt1")?.poster)
+        assertEquals("https://fixture.invalid/backdrop",f.dao.getWatchlistItem(1,"tt1")?.background)
+        assertEquals("https://fixture.invalid/logo",f.dao.getWatchlistItem(1,"tt1")?.logo)
     }
     @Test fun deletionDuringResolutionCannotResurrectTitle() = runBlocking {
         add(1); vm.setProfileId(1); f.api.metadata["tt1"]=item.copy(poster="poster")

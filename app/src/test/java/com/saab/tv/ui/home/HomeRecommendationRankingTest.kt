@@ -3,6 +3,7 @@ package com.saab.tv.ui.home
 import com.saab.tv.data.tmdb.TmdbMetaPreview
 import com.saab.tv.data.tmdb.mixTmdbMediaTypes
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomeRecommendationRankingTest {
@@ -69,5 +70,13 @@ class HomeRecommendationRankingTest {
         val mixed = mixTmdbMediaTypes(historyMatches + listOf(item(3, "tv"), item(4, "tv")), limit = 4)
 
         assertEquals(listOf("movie", "series", "movie", "series"), mixed.map { it.type })
+    }
+
+    @Test fun asynchronouslyGeneratedTmdbRowsStayAfterCatalogRowsToPreserveFocusKeys() {
+        val catalogOrders = listOf(-10, 0, 4, 12)
+        val personalizedOrders = listOf(10, 13, 16, 19).map(::personalizedRailOrder)
+
+        assertTrue(personalizedOrders.all { it > catalogOrders.maxOrNull()!! })
+        assertEquals(personalizedOrders.sorted(), personalizedOrders)
     }
 }

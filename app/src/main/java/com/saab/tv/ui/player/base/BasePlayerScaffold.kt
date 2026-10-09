@@ -549,11 +549,13 @@ fun BasePlayerScaffold(
         }
         // Debounce remote-key repeats so disk decoding never competes with UI input.
         delay(70L)
-        val intervalMs = seekThumbnailIntervalSeconds.coerceAtLeast(1) * 1_000L
-        val offsets = SeekThumbnailCarouselPolicy.offsets(seekThumbnailIntervalSeconds)
-        val positions = offsets.map { offset ->
-            (targetPosition + offset * intervalMs)
-                .takeIf { it >= 0L && (uiState.durationMs <= 0L || it <= uiState.durationMs) }
+        val positions = SeekThumbnailCarouselPolicy.positions(
+            targetPosition, uiState.durationMs, seekThumbnailIntervalSeconds
+        )
+        if (positions.isEmpty()) {
+            seekPreviewFrames.forEach { it.bitmap?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() } }
+            seekPreviewFrames = emptyList()
+            return@LaunchedEffect
         }
         val retainedIndices = SeekThumbnailCarouselPolicy.retainedFrameIndices(
             seekPreviewFrames.map { if (it.cacheKey == seekThumbnailCacheKey) it.positionMs else null }, positions
@@ -564,7 +566,7 @@ fun BasePlayerScaffold(
                 ?.takeUnless { it.isRecycled }
             SeekPreviewFrame(positionMs = position, bitmap = bitmap, cacheKey = seekThumbnailCacheKey)
         }
-        val centerIndex = positions.size / 2
+        val centerIndex = SeekThumbnailCarouselPolicy.selectedIndex(positions, targetPosition)
         val centerPosition = positions.getOrNull(centerIndex)
         if (centerPosition != null && replacements[centerIndex].bitmap == null) {
             val bitmap = try {
@@ -587,7 +589,7 @@ fun BasePlayerScaffold(
         // Center first, followed by immediate and outer neighbours.
         for (index in SeekThumbnailCarouselPolicy.loadOrder(positions.size)) {
             if (index == centerIndex || replacements[index].bitmap != null) continue
-            val position = positions[index] ?: continue
+            val position = positions[index]
             val bitmap = try {
                 provider(position)
             } catch (cancelled: CancellationException) {
@@ -1069,6 +1071,7 @@ fun BasePlayerScaffold(
             SeekThumbnailCarousel(
                 frames = seekPreviewFrames,
                 selectedPositionMs = displayPositionMs,
+                durationMs = uiState.durationMs,
                 intervalSeconds = seekThumbnailIntervalSeconds
             )
         }
@@ -1712,16 +1715,13 @@ private fun FocusableSeekBar(
 private fun SeekThumbnailCarousel(
     frames: List<SeekPreviewFrame>,
     selectedPositionMs: Long,
+    durationMs: Long,
     intervalSeconds: Int
 ) {
-    val expectedCount = SeekThumbnailCarouselPolicy.cardCount(intervalSeconds)
-    val selectedIndex = expectedCount / 2
-    val visibleFrames = if (frames.size == expectedCount) frames else List(expectedCount) { index ->
-        SeekPreviewFrame(
-            positionMs = if (index == selectedIndex) selectedPositionMs else null,
-            bitmap = null
-        )
-    }
+    val positions = SeekThumbnailCarouselPolicy.positions(selectedPositionMs, durationMs, intervalSeconds)
+    val selectedIndex = SeekThumbnailCarouselPolicy.selectedIndex(positions, selectedPositionMs)
+    val visibleFrames = if (frames.size == positions.size && frames.map { it.positionMs } == positions) frames
+    else positions.map { position -> SeekPreviewFrame(positionMs = position, bitmap = null) }
     Row(
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalAlignment = Alignment.CenterVertically,

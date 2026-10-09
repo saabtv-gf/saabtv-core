@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.Border
@@ -41,7 +42,9 @@ import com.saab.tv.ui.theme.LocalRoundCorners
 fun ViewMoreCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    onFocused: (() -> Unit)? = null
+    onFocused: (() -> Unit)? = null,
+    cardWidth: Dp = 140.dp,
+    isLandscape: Boolean = false
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val roundCorners = LocalRoundCorners.current
@@ -52,8 +55,8 @@ fun ViewMoreCard(
 
     Box(
         modifier = modifier
-            .width(140.dp)
-            .aspectRatio(2f / 3f)
+            .width(cardWidth)
+            .aspectRatio(if (isLandscape) 16f / 9f else 2f / 3f)
             .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
     ) {

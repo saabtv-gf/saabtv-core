@@ -165,7 +165,7 @@ private fun StudioContent(
     val verticalPivot = remember(verticalPivotPx) {
         FocusPivotSpec(
             customOffset = verticalPivotPx,
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 
@@ -302,7 +302,7 @@ private fun DiscoverRailSection(
     val pivotSpec = remember(paddingPx) {
         FocusPivotSpec(
             customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 

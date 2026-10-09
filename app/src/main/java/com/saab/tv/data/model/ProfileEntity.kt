@@ -21,6 +21,7 @@ data class ProfileEntity(
     val roundCorners: Boolean = true,
     val hubRoundCorners: Boolean = true,
     val continueWatchingShape: String = "poster",  // "poster" or "landscape"
+    val titleCardShape: String = "poster",          // profile-wide: "poster" or "landscape"
     val navPosition: String = "left",
     val splashEnabled: Boolean = true,
 

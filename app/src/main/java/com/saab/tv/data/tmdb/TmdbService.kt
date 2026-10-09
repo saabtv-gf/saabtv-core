@@ -14,6 +14,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.io.IOException
 
 private const val TAG = "TmdbService"
 
@@ -95,8 +96,7 @@ class TmdbService @Inject constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
-            com.saab.tv.AppDiagnostics.failure("TMDB", "IMDb Lookup Failed", e)
-            Log.e(TAG, "Error looking up TMDB ID for $imdbId: ${e.message}")
+            recordLookupFailure("IMDb Lookup", imdbId, e)
             null
         }
     }
@@ -126,9 +126,22 @@ class TmdbService @Inject constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
-            com.saab.tv.AppDiagnostics.failure("TMDB", "IMDb ID Resolution Failed", e)
-            Log.e(TAG, "Error looking up IMDB ID for $tmdbId: ${e.message}")
+            recordLookupFailure("IMDb ID Resolution", tmdbId.toString(), e)
             null
+        }
+    }
+
+    private fun recordLookupFailure(operation: String, id: String, failure: Exception) {
+        if (failure is IOException) {
+            // DNS/TLS/socket failures are expected transient request failures, not app crashes.
+            com.saab.tv.AppDiagnostics.event(
+                "TMDB", "$operation Network Failure",
+                "id=$id exception=${failure.javaClass.simpleName}"
+            )
+            Log.w(TAG, "$operation unavailable for $id: ${failure.message}")
+        } else {
+            com.saab.tv.AppDiagnostics.failure("TMDB", "$operation Failed", failure)
+            Log.e(TAG, "$operation failed for $id", failure)
         }
     }
 

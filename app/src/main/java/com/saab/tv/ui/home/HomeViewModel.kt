@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -47,6 +48,11 @@ import com.saab.tv.domain.CategoryRow
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.domain.DashboardTab
 import com.saab.tv.domain.heroFor
+
+internal fun preferExistingArtwork(existing: String?, enriched: String?): String? =
+    existing?.takeIf(String::isNotBlank) ?: enriched?.takeIf(String::isNotBlank)
+
+internal fun personalizedRailOrder(offset: Int): Int = Int.MAX_VALUE / 2 + offset
 
 internal fun rankWatchHistorySuggestions(
     recommendationsByHistory: List<List<com.saab.tv.data.tmdb.TmdbMetaPreview>>,
@@ -93,9 +99,13 @@ class HomeViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val optimisticWatchedIds = MutableStateFlow<Map<Int, Set<String>>>(emptyMap())
+    private val watchedAliasChecks = ConcurrentHashMap.newKeySet<String>()
 
     suspend fun isWatchlisted(profileId: Int, id: String): Boolean = dao.isInWatchlist(profileId, id)
     suspend fun activeProfileId(): Int? = dao.getActiveProfileId()
+    fun configureTmdbProfile(profile: com.saab.tv.data.model.ProfileEntity?) {
+        tmdbProfileCache = profile
+    }
     fun watchedIdsForProfile(profileId: Int): kotlinx.coroutines.flow.Flow<Set<String>> = combine(
         dao.getWatchedIdsForProfile(profileId), optimisticWatchedIds
     ) { persisted, optimistic -> mergeProfileWatchedIds(profileId, persisted, optimistic) }
@@ -148,12 +158,24 @@ class HomeViewModel @Inject constructor(
     fun toggleWatchlist(profileId: Int, item: MetaItem) {
         viewModelScope.launch(Dispatchers.IO) {
             if (dao.isInWatchlist(profileId, item.id)) dao.removeFromWatchlist(profileId, item.id)
-            else dao.addToWatchlist(WatchlistEntity(profileId, item.id, item.type, item.name, item.poster, System.currentTimeMillis()))
+            else dao.addToWatchlist(
+                WatchlistEntity(
+                    profileId = profileId,
+                    id = item.id,
+                    type = item.type,
+                    title = item.name,
+                    poster = item.poster,
+                    addedAt = System.currentTimeMillis(),
+                    background = item.background,
+                    logo = item.logo
+                )
+            )
             accountSync.historyChanged(urgent = true)
         }
     }
 
     suspend fun isTitleWatched(profileId: Int, item: MetaItem): Boolean {
+        if (item.id in optimisticWatchedIds.value[profileId].orEmpty()) return true
         val id = resolveTitleId(item) ?: item.id
         if (dao.getHistoryItemForProfile(profileId, id)?.watched == true) return true
         return item.isSeriesTitle() && dao.getSeriesNextUpForProfile(profileId)
@@ -215,6 +237,100 @@ class HomeViewModel @Inject constructor(
             dao.removeFromWatchlist(profileId, id)
             if (id != item.id) dao.removeFromWatchlist(profileId, item.id)
             accountSync.historyChanged(urgent = true)
+        }
+    }
+
+    fun unmarkTitleWatched(profileId: Int, item: MetaItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val id = if (item.id.startsWith("tmdb:", ignoreCase = true)) {
+                    resolveTitleId(item) ?: run {
+                        Log.w("HomeViewModel", "Could not unmark ${item.id}: TMDB identity is unavailable")
+                        return@launch
+                    }
+                } else item.id
+                val now = System.currentTimeMillis()
+                val watchedItems = if (item.isSeriesTitle()) {
+                    dao.getSeriesEpisodeHistoryForProfile(profileId, "$id:%")
+                        .filter { it.watched }
+                } else {
+                    listOfNotNull(dao.getHistoryItemForProfile(profileId, id)?.takeIf { it.watched })
+                }
+
+                if (item.isSeriesTitle()) {
+                    dao.insertHistoryItems(watchedItems.map { it.copy(watched = false, lastWatched = now) })
+                    dao.getHistoryItemForProfile(profileId, id)?.takeIf { it.watched }?.let {
+                        dao.insertHistory(it.copy(watched = false, lastWatched = now))
+                    }
+                    dao.getSeriesNextUpForProfile(profileId).firstOrNull { it.seriesId == id }?.let {
+                        dao.insertSeriesNextUp(it.copy(isComplete = false, updatedAt = now))
+                    }
+                } else {
+                    watchedItems.firstOrNull()?.let {
+                        dao.insertHistory(it.copy(watched = false, lastWatched = now))
+                    }
+                }
+
+                // Keep the local unwatch authoritative even if Trakt is offline.
+                watchedItems.filter { it.scrobbled }.forEach { entry ->
+                    try {
+                        if (item.isSeriesTitle()) {
+                            val parts = entry.id.split(':')
+                            val offset = if (parts.size >= 4 && parts.lastOrNull()?.toIntOrNull() != null) 3 else 2
+                            val season = parts.getOrNull(parts.size - offset)?.toIntOrNull()
+                            val episode = parts.getOrNull(parts.size - offset + 1)?.toIntOrNull()
+                            if (season != null && episode != null) {
+                                traktSyncManager.pushEpisodeUnwatched(id, season, episode)
+                            }
+                        } else {
+                            traktSyncManager.pushMovieUnwatched(id)
+                        }
+                    } catch (failure: Exception) {
+                        Log.w("HomeViewModel", "Could not sync unwatch for ${entry.id}: ${failure.message}")
+                    }
+                }
+
+                optimisticWatchedIds.update { current ->
+                    current + (profileId to (current[profileId].orEmpty() - id - item.id))
+                }
+                accountSync.historyChanged(urgent = true)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Log.w("HomeViewModel", "Could not unmark ${item.id}: ${failure.message}")
+            }
+        }
+    }
+
+    /** Resolve watched aliases for visible TMDB recommendations so badges match IMDb-keyed history. */
+    fun ensureWatchedAlias(profileId: Int, item: MetaItem) {
+        if (!item.id.startsWith("tmdb:", ignoreCase = true)) return
+        if (item.id in optimisticWatchedIds.value[profileId].orEmpty()) return
+        val key = "$profileId:${item.type}:${item.id}"
+        if (!watchedAliasChecks.add(key)) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val hasWatchedHistory = dao.getWatchedIdsForProfile(profileId).first().isNotEmpty()
+                val hasCompletedSeries = item.isSeriesTitle() && dao.getSeriesNextUpForProfile(profileId)
+                    .any { it.isComplete }
+                if (!hasWatchedHistory && !hasCompletedSeries) return@launch
+                val id = resolveTitleId(item) ?: return@launch
+                val watched = dao.getHistoryItemForProfile(profileId, id)?.watched == true ||
+                    (item.isSeriesTitle() && dao.getSeriesNextUpForProfile(profileId)
+                        .any { it.seriesId == id && it.isComplete })
+                if (watched) {
+                    optimisticWatchedIds.update { current ->
+                        current + (profileId to (current[profileId].orEmpty() + item.id))
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Log.w("HomeViewModel", "Could not resolve watched badge for ${item.id}: ${failure.message}")
+            } finally {
+                watchedAliasChecks.remove(key)
+            }
         }
     }
 
@@ -505,6 +621,9 @@ class HomeViewModel @Inject constructor(
             .take(6)
 
         candidates.forEach { ensureMetadataFallback(it) }
+        if (tmdbProfileCache?.titleCardShape == "landscape") {
+            candidates.forEach(::ensureTmdbEnrichment)
+        }
     }
 
     private fun needsMetadataFallback(item: MetaItem): Boolean {
@@ -700,10 +819,14 @@ class HomeViewModel @Inject constructor(
     fun ensureTmdbEnrichment(item: MetaItem?) {
         if (item == null) return
         val profile = tmdbProfileCache ?: return
+        ensureWatchedAlias(profile.id, item)
         if (!profile.tmdbEnabled) return
 
-        val key = "tmdb:${item.type}:${item.id}"
-        if ("${item.type}:${item.id}" in _state.value.tmdbEnrichedIds) return
+        val marker = "${item.type}:${item.id}"
+        val includeLogo = profile.titleCardShape == "landscape"
+        val logoMarker = "$marker:logo"
+        if (if (includeLogo) logoMarker in _state.value.tmdbEnrichedIds else marker in _state.value.tmdbEnrichedIds) return
+        val key = "tmdb:$marker${if (includeLogo) ":logo" else ""}"
         if (!tmdbEnrichmentInFlight.add(key)) return
 
         val language = profile.tmdbLanguage.ifBlank { null } ?: "en"
@@ -714,13 +837,20 @@ class HomeViewModel @Inject constructor(
                 val tmdbId = tmdbService.ensureTmdbId(item.id, mediaType)
                 if (tmdbId == null) {
                     // Can't resolve (e.g. Kitsu IDs) — mark as done so UI doesn't stay hidden
-                    markTmdbEnriched(item.type, item.id)
+                    markTmdbEnriched(item.type, item.id, includeLogo)
                     return@launch
                 }
-                val enrichment = tmdbMetadataService.fetchHomeEnrichment(tmdbId, mediaType, language)
+                val enrichment = tmdbMetadataService.fetchHomeEnrichment(
+                    tmdbId, mediaType, language, includeLogo = includeLogo
+                )
                 if (enrichment == null) {
-                    markTmdbEnriched(item.type, item.id)
+                    markTmdbEnriched(item.type, item.id, includeLogo)
                     return@launch
+                }
+
+                if (includeLogo) {
+                    ImagePrefetcher.prefetchLandscape(context, enrichment.backdrop ?: item.background)
+                    ImagePrefetcher.prefetchLogo(context, enrichment.logo ?: item.logo)
                 }
 
                 val fallback = MetadataFallback(
@@ -734,35 +864,47 @@ class HomeViewModel @Inject constructor(
                     genres = enrichment.genres.ifEmpty { null }
                 )
 
-                applyTmdbEnrichmentToState(item.type, item.id, fallback, item)
+                applyTmdbEnrichmentToState(item.type, item.id, fallback, item, includeLogo)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
                 Log.w("HomeViewModel", "TMDB enrichment failed for ${item.id}: ${e.message}")
-                markTmdbEnriched(item.type, item.id)
+                markTmdbEnriched(item.type, item.id, includeLogo)
             } finally {
                 tmdbEnrichmentInFlight.remove(key)
             }
         }
     }
 
-    private fun markTmdbEnriched(type: String, id: String) {
-        _state.update { it.copy(tmdbEnrichedIds = it.tmdbEnrichedIds + "$type:$id") }
+    private fun markTmdbEnriched(type: String, id: String, includeLogo: Boolean = false) {
+        val marker = "$type:$id"
+        val markers = if (includeLogo) setOf(marker, "$marker:logo") else setOf(marker)
+        _state.update {
+            it.copy(tmdbEnrichedIds = it.tmdbEnrichedIds + markers)
+        }
     }
 
     /**
      * Applies TMDB enrichment to state — overwrites fields (unlike addon fallback which only fills blanks).
      * This ensures localized content from TMDB takes priority.
      */
-    private fun applyTmdbEnrichmentToState(type: String, id: String, fallback: MetadataFallback, sourceItem: MetaItem) {
+    private fun applyTmdbEnrichmentToState(
+        type: String,
+        id: String,
+        fallback: MetadataFallback,
+        sourceItem: MetaItem,
+        includeLogo: Boolean = false
+    ) {
+        val marker = "$type:$id"
+        val markers = if (includeLogo) setOf(marker, "$marker:logo") else setOf(marker)
         _state.update { current ->
             var rowsChanged = false
 
             fun overwriteMeta(meta: MetaItem): MetaItem {
                 if (meta.type != type || meta.id != id) return meta
                 val updated = meta.copy(
-                    background = fallback.background ?: meta.background,
-                    logo = fallback.logo ?: meta.logo,
+                    background = preferExistingArtwork(meta.background, fallback.background),
+                    logo = preferExistingArtwork(meta.logo, fallback.logo),
                     description = fallback.description ?: meta.description,
                     releaseInfo = fallback.releaseInfo ?: meta.releaseInfo,
                     imdbRating = fallback.imdbRating ?: meta.imdbRating,
@@ -795,8 +937,8 @@ class HomeViewModel @Inject constructor(
             val enrichedKey = "$type:$id"
             val base = current.enrichedMeta[enrichedKey] ?: sourceItem
             val enriched = base.copy(
-                background = fallback.background ?: base.background,
-                logo = fallback.logo ?: base.logo,
+                background = preferExistingArtwork(base.background, fallback.background),
+                logo = preferExistingArtwork(base.logo, fallback.logo),
                 description = fallback.description ?: base.description,
                 releaseInfo = fallback.releaseInfo ?: base.releaseInfo,
                 imdbRating = fallback.imdbRating ?: base.imdbRating,
@@ -812,7 +954,7 @@ class HomeViewModel @Inject constructor(
                 mixedRows = if (rowsChanged) updatedMixedRows else current.mixedRows,
                 heroRow = if (rowsChanged) updatedHeroRow else current.heroRow,
                 enrichedMeta = updatedEnrichedMeta,
-                tmdbEnrichedIds = current.tmdbEnrichedIds + "$type:$id"
+                tmdbEnrichedIds = current.tmdbEnrichedIds + markers
             )
         }
     }
@@ -826,6 +968,7 @@ class HomeViewModel @Inject constructor(
         currentProfile: com.saab.tv.data.model.ProfileEntity?,
         forceReload: Boolean = false
     ) {
+        tmdbProfileCache = currentProfile
         val currentProfileId = currentProfile?.id
         // ... (existing code)
         // Skip reload if this screen is already loaded with data
@@ -1069,7 +1212,7 @@ class HomeViewModel @Inject constructor(
             val usedTmdbKeys = mutableSetOf<String>()
             val output = mutableListOf<CategoryRow>()
 
-            fun previewsToItems(previews: List<com.saab.tv.data.tmdb.TmdbMetaPreview>, limit: Int = 10): List<MetaItem> =
+            fun previewsToItems(previews: List<com.saab.tv.data.tmdb.TmdbMetaPreview>, limit: Int = 30): List<MetaItem> =
                 previews.asSequence().mapNotNull { result ->
                     val type = if (result.type == "tv") "series" else result.type
                     val tmdbKey = "$type:tmdb:${result.tmdbId}"
@@ -1084,7 +1227,17 @@ class HomeViewModel @Inject constructor(
 
             fun addRow(id: String, title: String, order: Int, previews: List<com.saab.tv.data.tmdb.TmdbMetaPreview>) {
                 val items = previewsToItems(previews)
-                if (items.isNotEmpty()) output += CategoryRow(id, title, Int.MIN_VALUE + order, items)
+                if (items.isNotEmpty()) output += CategoryRow(
+                    id = id,
+                    title = title,
+                    // Keep asynchronous recommendations after existing catalog rows. Inserting
+                    // ahead of the current row changed index-based focus keys and dropped focus.
+                    order = personalizedRailOrder(order),
+                    items = items,
+                    isInfiniteLoopEnabled = true,
+                    visibleItemCount = 15,
+                    isInfiniteScrollingEnabled = false
+                )
             }
 
             // Aggregate every recent history seed into one rail, ranking titles by
@@ -1147,7 +1300,7 @@ class HomeViewModel @Inject constructor(
                     "tmdb-top-suggestions",
                     "Top Suggestions",
                     10,
-                    mixTmdbMediaTypes(historyRankedSuggestions + crossTypeSuggestions, 10)
+                    mixTmdbMediaTypes(historyRankedSuggestions + crossTypeSuggestions, 30)
                 )
             }
 

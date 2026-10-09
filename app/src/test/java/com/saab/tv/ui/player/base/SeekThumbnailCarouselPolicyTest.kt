@@ -19,6 +19,24 @@ class SeekThumbnailCarouselPolicyTest {
     }
 
     @Test
+    fun outOfRangeEdgeSlotsAreRemovedWithoutLosingValidSceneTimes() {
+        assertEquals(listOf(0L, 30_000L, 60_000L),
+            SeekThumbnailCarouselPolicy.positions(0L, 180_000L, 30))
+        assertEquals(listOf(120_000L, 150_000L, 180_000L),
+            SeekThumbnailCarouselPolicy.positions(180_000L, 180_000L, 30))
+        assertEquals(listOf(60_000L, 90_000L, 120_000L, 150_000L, 180_000L),
+            SeekThumbnailCarouselPolicy.positions(120_000L, 180_000L, 30))
+    }
+
+    @Test
+    fun selectedThumbnailRemainsAtTargetEvenWhenEdgeCardsAreRemoved() {
+        val start = SeekThumbnailCarouselPolicy.positions(0L, 180_000L, 30)
+        val end = SeekThumbnailCarouselPolicy.positions(180_000L, 180_000L, 30)
+        assertEquals(0, SeekThumbnailCarouselPolicy.selectedIndex(start, 0L))
+        assertEquals(2, SeekThumbnailCarouselPolicy.selectedIndex(end, 180_000L))
+    }
+
+    @Test
     fun centerThumbnailLoadsBeforeNeighbours() {
         assertEquals(listOf(2, 1, 3, 0, 4), SeekThumbnailCarouselPolicy.loadOrder(5))
         assertEquals(listOf(1, 0, 2), SeekThumbnailCarouselPolicy.loadOrder(3))

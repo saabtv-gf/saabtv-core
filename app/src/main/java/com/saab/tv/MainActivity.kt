@@ -67,6 +67,8 @@ import com.saab.tv.data.torrent.TorrentFallbackPolicy
 import com.saab.tv.data.player.SourceSelectionStore
 import com.saab.tv.ui.MainViewModel
 import com.saab.tv.ui.components.SaabTvBackground
+import com.saab.tv.ui.components.LocalTitleCardShape
+import com.saab.tv.ui.components.LocalWatchlistIds
 import com.saab.tv.ui.details.DetailsScreen
 import com.saab.tv.ui.home.GridViewScreen
 import com.saab.tv.ui.home.HomeScreen
@@ -696,7 +698,7 @@ class MainActivity : ComponentActivity() {
         backgroundedAt = 0L
         if (checkCloud && accountAuth.hasSession) lifecycleScope.launch {
             try {
-                if (accountSync.newerCloudBackupAvailable() && allowAccountRefresh &&
+                if (allowAccountRefresh && accountSync.syncAndReconcile() &&
                     lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
                     accountSync.stop()
                     com.saab.tv.ui.account.AccountRestart.restart(this@MainActivity)
@@ -822,6 +824,10 @@ class MainActivity : ComponentActivity() {
             val mainViewModel = hiltViewModel<MainViewModel>()
             val themeManager = hiltViewModel<ThemeManager>()
             val currentProfile by mainViewModel.activeProfile.collectAsStateWithLifecycle()
+            val watchlistIdsFlow = remember(currentProfile?.id) {
+                mainViewModel.watchlistIdsForProfile(currentProfile?.id)
+            }
+            val watchlistIds by watchlistIdsFlow.collectAsStateWithLifecycle(emptySet())
             var sessionProfileId by rememberSaveable { mutableStateOf<Int?>(null) }
             var sessionRestoreAttemptedProfileId by rememberSaveable { mutableStateOf<Int?>(null) }
             var activeView by rememberSaveable { mutableStateOf("menu") }
@@ -890,7 +896,9 @@ class MainActivity : ComponentActivity() {
             SaabTvTheme(theme = currentTheme) {
                 CompositionLocalProvider(
                     LocalRoundCorners provides roundCorners,
-                    LocalHubRoundCorners provides hubRoundCorners
+                    LocalHubRoundCorners provides hubRoundCorners,
+                    LocalTitleCardShape provides (currentProfile?.titleCardShape ?: "poster"),
+                    LocalWatchlistIds provides watchlistIds
                 ) {
                 SaabTvBackground {
                     // Last-resort guard for every route. Screen/dialog handlers
@@ -989,7 +997,7 @@ class MainActivity : ComponentActivity() {
                         val navPosition = currentProfile?.navPosition ?: "left"
                         LaunchedEffect(navPosition) {
                             if (activeView == "menu" && currentNav == NavDestination.Settings) {
-                                delay(450) // Wait for Crossfade (400ms) + buffer
+                                delay(220) // Allow the short navigation transition to settle.
                                 settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused }
                             }
                         }
@@ -1072,7 +1080,7 @@ class MainActivity : ComponentActivity() {
                                             } else false
                                         }
                                 ) {
-                                Crossfade(targetState = navPosition, animationSpec = tween(400), label = "NavSwitcher") { position ->
+                                Crossfade(targetState = navPosition, animationSpec = tween(180), label = "NavSwitcher") { position ->
                                 if (position == "top") {
                                     TopNavigationBar(
                                         hideNavigation = backdropTrailerActive,
@@ -1164,7 +1172,7 @@ class MainActivity : ComponentActivity() {
                                                             onViewMore = { title, items, configId ->
                                                                 gridViewTitle = title
                                                                 gridViewItems = items
-                                                                gridViewConfigId = configId
+                                                                gridViewConfigId = configId.takeUnless { it.startsWith("tmdb-") }.orEmpty()
                                                                 activeView = "grid"
                                                             }
                                                         )
@@ -1377,7 +1385,7 @@ class MainActivity : ComponentActivity() {
                                                             onViewMore = { title, items, configId ->
                                                                 gridViewTitle = title
                                                                 gridViewItems = items
-                                                                gridViewConfigId = configId
+                                                                gridViewConfigId = configId.takeUnless { it.startsWith("tmdb-") }.orEmpty()
                                                                 activeView = "grid"
                                                             }
                                                         )
@@ -1745,6 +1753,7 @@ class MainActivity : ComponentActivity() {
                                         },
                                         trailerReturnToken = trailerReturnToken,
                                         isTrailerLoading = false,
+                                        currentProfile = currentProfile,
                                         onTrailerClick = { youtubeKey, trailerName ->
                                             val trailerIntent = YouTubeTrailerActivity.createIntent(
                                                 this@MainActivity,
@@ -1772,6 +1781,7 @@ class MainActivity : ComponentActivity() {
                                     com.saab.tv.ui.cast.CastDetailScreen(
                                         personId = castPersonId,
                                         personName = castPersonName,
+                                        currentProfile = currentProfile,
                                         onBackPress = { detailsNavController.popBackStack() },
                                         onNavigateToDetails = { navType, navId ->
                                             val route = "detail/${java.net.URLEncoder.encode(navType, "UTF-8")}/${java.net.URLEncoder.encode(navId, "UTF-8")}"

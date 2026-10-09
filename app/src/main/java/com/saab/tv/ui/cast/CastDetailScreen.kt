@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -71,6 +73,8 @@ import com.saab.tv.ui.home.DpadRepeatGate
 import com.saab.tv.ui.home.FocusPivotSpec
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 @Composable
 fun CastDetailScreen(
@@ -78,6 +82,7 @@ fun CastDetailScreen(
     personName: String,
     onBackPress: () -> Unit = {},
     onNavigateToDetails: (type: String, id: String) -> Unit = { _, _ -> },
+    currentProfile: com.saab.tv.data.model.ProfileEntity? = null,
     viewModel: CastDetailViewModel = hiltViewModel()
 ) {
     val quickActionViewModel: com.saab.tv.ui.home.HomeViewModel = hiltViewModel()
@@ -93,6 +98,9 @@ fun CastDetailScreen(
     var quickActionReturnFocus by remember { mutableStateOf<FocusRequester?>(null) }
     androidx.compose.runtime.LaunchedEffect(quickActionViewModel) {
         quickActionProfileId = quickActionViewModel.activeProfileId() ?: 0
+    }
+    androidx.compose.runtime.LaunchedEffect(quickActionViewModel, currentProfile) {
+        quickActionViewModel.configureTmdbProfile(currentProfile)
     }
     val bg = MaterialTheme.colorScheme.background
     val accentColor = MaterialTheme.colorScheme.primary
@@ -140,6 +148,7 @@ fun CastDetailScreen(
                         onNavigateToDetails(type, id)
                     },
                     onQuickAction = { item, bounds -> quickActionTarget = item to bounds },
+                    enrichmentViewModel = quickActionViewModel,
                     restoreIndex = restoreIndex,
                     restoreFocusRequester = restoreFocusRequester,
                     initialFocusRequester = initialFocusRequester
@@ -176,6 +185,7 @@ private fun CastDetailContent(
     textColor: Color,
     onNavigateToDetails: (String, String, Int) -> Unit,
     onQuickAction: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit,
+    enrichmentViewModel: com.saab.tv.ui.home.HomeViewModel,
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null,
     initialFocusRequester: FocusRequester? = null
@@ -228,6 +238,7 @@ private fun CastDetailContent(
 
         if (allCredits.isNotEmpty()) {
             FilmographySection(allCredits, accentColor, textColor, onNavigateToDetails, onQuickAction,
+                enrichmentViewModel,
                 restoreIndex, restoreFocusRequester, initialFocusRequester)
         }
     }
@@ -318,10 +329,14 @@ private fun FilmographySection(
     textColor: Color,
     onNavigateToDetails: (String, String, Int) -> Unit,
     onQuickAction: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit,
+    enrichmentViewModel: com.saab.tv.ui.home.HomeViewModel,
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null,
     initialFocusRequester: FocusRequester? = null
 ) {
+    val enrichedItems by remember(enrichmentViewModel) {
+        enrichmentViewModel.state.map { it.enrichedMeta }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = emptyMap())
     val density = LocalDensity.current
     val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
     val startPad = 48.dp
@@ -332,7 +347,7 @@ private fun FilmographySection(
     val pivotSpec = remember(paddingPx) {
         FocusPivotSpec(
             customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 
@@ -371,7 +386,7 @@ private fun FilmographySection(
                     if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) true else false
                 }) {
                     FilmographyCard(
-                        item, accentColor, textColor,
+                        item, accentColor, textColor, enrichmentViewModel, enrichedItems,
                         modifier = when {
                             restoreFocusRequester != null && index == restoreIndex -> Modifier.focusRequester(restoreFocusRequester)
                             initialFocusRequester != null && index == 0 -> Modifier.focusRequester(initialFocusRequester)
@@ -394,6 +409,8 @@ private fun FilmographyCard(
     item: TmdbMetaPreview,
     accentColor: Color,
     textColor: Color,
+    enrichmentViewModel: com.saab.tv.ui.home.HomeViewModel,
+    enrichedItems: Map<String, com.saab.tv.data.model.stremio.MetaItem>,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit
@@ -402,8 +419,14 @@ private fun FilmographyCard(
         id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
         name = item.name, poster = item.poster, background = item.backdrop,
         description = item.description, releaseInfo = item.releaseInfo)
+    val previewItem = enrichedItems["${meta.type}:${meta.id}"] ?: meta
+    val landscapeCards = com.saab.tv.ui.components.LocalTitleCardShape.current == "landscape"
+    LaunchedEffect(meta.type, meta.id, landscapeCards) {
+        enrichmentViewModel.activeProfileId()?.let { enrichmentViewModel.ensureWatchedAlias(it, meta) }
+        if (landscapeCards) enrichmentViewModel.ensureTmdbEnrichment(meta)
+    }
     com.saab.tv.ui.components.SaabTvCard(
-        title = item.name, posterUrl = item.poster, previewItem = meta,
+        title = item.name, posterUrl = item.poster, previewItem = previewItem,
         normalWidth = 120.dp, normalHeight = 180.dp,
         modifier = modifier.titleTrailerFocus(meta), onClick = onClick,
         onLongClick = { bounds -> onLongClick(meta, bounds) })

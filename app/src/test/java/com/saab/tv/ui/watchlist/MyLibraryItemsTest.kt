@@ -16,12 +16,17 @@ class MyLibraryItemsTest {
                 history("tt-done", "movie", position = 900, watched = true),
                 history("tt-zero", "movie", position = 0, watched = false)
             ),
-            watchlist = listOf(WatchlistEntity(1, "tt-saved", "movie", "Saved", "saved.jpg", 20)),
+            watchlist = listOf(WatchlistEntity(
+                1, "tt-saved", "movie", "Saved", "saved.jpg", 20,
+                background = "saved-backdrop.jpg", logo = "saved-logo.png"
+            )),
             nextUp = emptyList()
         )
 
         assertEquals(listOf("tt-progress"), items.inProgress.map { it.id })
         assertEquals(listOf("tt-saved"), items.watchlist.map { it.id })
+        assertEquals("saved-backdrop.jpg", items.watchlist.single().background)
+        assertEquals("saved-logo.png", items.watchlist.single().logo)
         assertEquals(listOf("tt-done"), items.watched.map { it.id })
         assertEquals("tt-progress", items.inProgress.single().resumePlaybackId)
         assertTrue(items.inProgress.single().progress > 0f)

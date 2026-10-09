@@ -110,7 +110,7 @@ fun HubRow(
         FocusPivotSpec(
             customOffset = paddingPx,
             skipScrollProvider = { skipBringIntoViewScroll },
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         ) 
     }
     

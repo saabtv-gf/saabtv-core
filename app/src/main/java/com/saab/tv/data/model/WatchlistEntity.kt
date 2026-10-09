@@ -14,5 +14,7 @@ data class WatchlistEntity(
     val type: String,                 // "movie" or "series"
     val title: String,
     val poster: String?,
-    val addedAt: Long                 // System.currentTimeMillis() when bookmarked
+    val addedAt: Long,                // System.currentTimeMillis() when bookmarked
+    val background: String? = null,
+    val logo: String? = null
 )

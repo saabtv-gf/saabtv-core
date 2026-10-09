@@ -7,7 +7,7 @@ import androidx.compose.foundation.gestures.BringIntoViewSpec
 
 /**
  * ============================================================================
- * PIVOT BRING INTO VIEW SPEC - Netflix-Grade Premium Scroll Physics
+ * Fixed-pivot bring-into-view behavior for shelf navigation.
  * ============================================================================
  *
  * This custom BringIntoViewSpec implementation solves two problems:
@@ -20,9 +20,9 @@ import androidx.compose.foundation.gestures.BringIntoViewSpec
  *    "pivot point" (e.g., 10% from the left edge of the container).
  *    This creates a consistent, predictable focus position.
  *
- * 2. PREMIUM TWEEN ANIMATION:
- *    Uses tween with FastOutSlowInEasing for predictable, non-oscillating motion.
- *    This feels more premium on TV than spring animations which can oscillate.
+ * 2. INTERRUPTIBLE MOTION:
+ *    A no-bounce spring keeps its current velocity when D-pad input interrupts
+ *    an in-flight scroll, instead of restarting a fixed-duration animation.
  *
  * 3. RESTORATION SKIP:
  *    When returning from details screen, skip scrolling entirely to prevent
@@ -48,12 +48,11 @@ class FocusPivotSpec(
     private val stiffnessProvider: (() -> Float)? = null
 ) : BringIntoViewSpec {
 
-    // Dynamic stiffness: StiffnessLow for single presses (premium feel),
-    // StiffnessHigh for rapid navigation (keeps up with long-press)
+    // Medium-low stiffness stays responsive while preserving velocity on repeats.
     @Deprecated("", level = DeprecationLevel.HIDDEN)
     override val scrollAnimationSpec: androidx.compose.animation.core.AnimationSpec<Float>
         get() = spring(
-            stiffness = stiffnessProvider?.invoke() ?: Spring.StiffnessLow,
+            stiffness = stiffnessProvider?.invoke() ?: Spring.StiffnessMediumLow,
             dampingRatio = Spring.DampingRatioNoBouncy,
             visibilityThreshold = 0.1f
         )

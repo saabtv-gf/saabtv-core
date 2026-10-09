@@ -186,6 +186,10 @@ fun BackdropTrailerPreview(
             },
             onFullscreen = {
                 com.saab.tv.AppDiagnostics.event("Trailer Preview", "Expand Requested", "titleId=${item.id} videoId=${source?.videoId} positionMs=${player.currentPosition} playing=${player.isPlaying}")
+                // The fullscreen trailer is an intentional viewing action, so
+                // always enable sound even when inline previews are muted.
+                player.volume = 1f
+                muted = false
                 expanded = true; controlsVisible = true; interactionVersion++
             },
             onDismiss = { dismiss() },

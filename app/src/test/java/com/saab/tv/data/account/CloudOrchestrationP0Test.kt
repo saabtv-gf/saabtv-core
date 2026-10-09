@@ -77,12 +77,12 @@ class CloudOrchestrationP0Test {
     }
     @Test fun newerCloudAutomaticallyReplacesOlderLocalCopy() = runBlocking {
         cloud.upload(); remoteSnapshot("Cloud Newer",System.currentTimeMillis()+60_000,2)
-        cloud.initialize(); assertEquals("Cloud Newer",app.dao.getProfileById(1)?.name)
+        assertTrue(cloud.initialize()); assertEquals("Cloud Newer",app.dao.getProfileById(1)?.name)
     }
     @Test fun newerLocalCopyUploadsBeforeAppContinues() = runBlocking {
         cloud.upload(); remoteSnapshot("Older Cloud",1,2)
         app.dao.insertProfile(ProfileEntity(id=1,name="Local Newer"));cloud.noteLocalChange()
-        cloud.initialize(); assertEquals("Local Newer",app.dao.getProfileById(1)?.name)
+        assertFalse(cloud.initialize()); assertEquals("Local Newer",app.dao.getProfileById(1)?.name)
         assertEquals(3L,row?.get("revision")?.asLong)
     }
     @Test fun staleDeviceRevisionConflictPreservesDirtyLocalUntilNewerCloudIsApplied() = runBlocking {
@@ -163,6 +163,18 @@ class CloudOrchestrationP0Test {
             manager.resolveConflict(useCloud = false)
             assertEquals("Keep local", app.dao.getProfileById(1)?.name)
             assertEquals("Synced", manager.status.value)
+        } finally {
+            manager.stop()
+        }
+    }
+
+    @Test fun accountPageSyncRestoresNewerCloudInsteadOfOnlyUploadingThisDevice() = runBlocking {
+        val manager = AccountSyncManager(transport.context, transport.auth, app.db, app.configuration)
+        try {
+            remoteSnapshot("Newer device settings", System.currentTimeMillis() + 60_000, 1)
+            assertTrue(manager.syncAndReconcile())
+            assertEquals("Newer device settings", app.dao.getProfileById(1)?.name)
+            assertEquals("Cloud copy restored; reopening…", manager.status.value)
         } finally {
             manager.stop()
         }

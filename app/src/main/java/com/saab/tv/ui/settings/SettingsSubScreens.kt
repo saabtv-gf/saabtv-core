@@ -193,12 +193,12 @@ fun PersonalizationSettings(
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
         Spacer(Modifier.height(15.dp))
 
-        // CONTINUE WATCHING SHAPE
-        SettingRow("Continue Watching") {
+        // Profile-wide title-card layout
+        SettingRow("Title Cards") {
             VoidSegmentedControl(
                 options = listOf("Poster" to "poster", "Landscape" to "landscape"),
-                selectedOption = currentProfile.continueWatchingShape,
-                onOptionSelected = { viewModel.updateContinueWatchingShape(currentProfile.id, it) },
+                selectedOption = currentProfile.titleCardShape,
+                onOptionSelected = { viewModel.updateTitleCardShape(currentProfile.id, it) },
                 onBack = onGoBack,
                 blockUp = false
             )

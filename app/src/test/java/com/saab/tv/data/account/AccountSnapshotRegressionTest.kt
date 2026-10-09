@@ -8,6 +8,8 @@ import com.google.gson.JsonParser
 import com.saab.tv.data.local.SaabTvDatabase
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.model.WatchHistoryEntity
+import com.saab.tv.data.model.WatchlistEntity
+import com.saab.tv.data.security.SecurePreferences
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -46,7 +48,7 @@ class AccountSnapshotRegressionTest {
             duration = 1_000_000, lastWatched = 9_007_199_254_740_993L, type = "series", watched = false)
         db.addonDao().insertProfile(profile); db.addonDao().insertHistory(history)
         val bytes = store.capture()
-        assertEquals(52, JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject["schema"].asInt)
+        assertEquals(54, JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject["schema"].asInt)
         db.addonDao().updateProfile(profile.copy(name = "Changed")); db.addonDao().clearWatchHistory()
         store.restore(bytes)
         assertEquals(profile, db.addonDao().getProfileById(1))
@@ -67,6 +69,83 @@ class AccountSnapshotRegressionTest {
         val restored = db.addonDao().getProfileById(1)!!
         assertEquals("Legacy", restored.name)
         assertTrue(restored.skipRecap)
+    }
+
+    @Test fun legacySchema52CopiesTheSavedContinueWatchingShapeIntoGlobalTitleCards() = runBlocking {
+        val profile = ProfileEntity(id = 1, name = "Landscape profile", continueWatchingShape = "landscape")
+        db.addonDao().insertProfile(profile)
+        val legacySnapshot = snapshot().apply {
+            addProperty("schema", 52)
+            getAsJsonObject("tables").getAsJsonArray("profiles")[0].asJsonObject.remove("titleCardShape")
+        }
+        db.addonDao().updateProfile(profile.copy(name = "Changed"))
+
+        restore(legacySnapshot)
+
+        assertEquals("landscape", db.addonDao().getProfileById(1)?.titleCardShape)
+    }
+
+    @Test fun legacySchema53RestoresWatchlistRowsWithoutLandscapeArtwork() = runBlocking {
+        db.addonDao().insertProfile(ProfileEntity(id = 1, name = "Legacy"))
+        db.addonDao().addToWatchlist(WatchlistEntity(1, "tt-legacy", "movie", "Legacy title", "poster", 1))
+        val legacySnapshot = snapshot().apply {
+            addProperty("schema", 53)
+            getAsJsonObject("tables").getAsJsonArray("watchlist")[0].asJsonObject.apply {
+                remove("background")
+                remove("logo")
+            }
+        }
+        db.addonDao().removeFromWatchlist(1, "tt-legacy")
+
+        restore(legacySnapshot)
+
+        val restored = db.addonDao().getWatchlistItem(1, "tt-legacy")!!
+        assertNull(restored.background)
+        assertNull(restored.logo)
+    }
+
+    @Test fun portableSnapshotContainsLibraryHistoryIntegrationsAndAllProfileSettings() = runBlocking {
+        val profile = ProfileEntity(id = 1, name = "Portable", isActive = true, titleCardShape = "landscape",
+            sourceLanguagePriority1 = "ml", tmdbEnabled = true)
+        val watchlist = WatchlistEntity(1, "tt-watchlisted", "movie", "Saved title", "poster.jpg", 20,
+            background = "backdrop.jpg", logo = "logo.png")
+        val history = WatchHistoryEntity(id = "tt-watched", title = "Watched title", poster = null,
+            position = 950, duration = 1_000, lastWatched = 100, type = "movie", watched = true)
+        db.addonDao().insertProfile(profile)
+        db.addonDao().addToWatchlist(watchlist)
+        db.addonDao().insertHistory(history)
+        AccountStorage.preferences(context, "profile_configuration_prefs").edit().putString("onboarding", "complete").commit()
+        AccountStorage.preferences(context, "source_selection_prefs").edit().putString("preferred", "torrentio").commit()
+        val portable = snapshot()
+        val tables = portable.getAsJsonObject("tables")
+        assertEquals(1, tables.getAsJsonArray("watchlist").size())
+        assertEquals("backdrop.jpg", tables.getAsJsonArray("watchlist")[0].asJsonObject["background"].asString)
+        assertEquals("logo.png", tables.getAsJsonArray("watchlist")[0].asJsonObject["logo"].asString)
+        assertEquals(1, tables.getAsJsonArray("watch_history").size())
+        assertTrue(tables.getAsJsonArray("profiles")[0].asJsonObject["titleCardShape"].asString == "landscape")
+        val prefs = portable.getAsJsonObject("preferences")
+        assertTrue(prefs.has("stremio_secure_prefs"))
+        assertTrue(prefs.has("trakt_auth"))
+        assertTrue(prefs.has("tmdb_credentials"))
+        assertTrue(prefs.has("profile_configuration_prefs"))
+        assertTrue(prefs.has("source_selection_prefs"))
+    }
+
+    @Test fun integrationCredentialsAreRehydratedIntoTheCurrentDeviceSecureStores() {
+        val stremio = SecurePreferences.create(context, "stremio_secure_prefs", "saabtv_stremio_master_key").preferences
+        val trakt = SecurePreferences.create(context, "trakt_auth", "saabtv_trakt_master_key").preferences
+        val tmdb = SecurePreferences.create(context, "tmdb_credentials", "saabtv_tmdb_master_key").preferences
+        stremio.edit().putString("auth_key", "stremio-secret").commit()
+        trakt.edit().putString("access_token", "trakt-secret").commit()
+        tmdb.edit().putString("api_key", "tmdb-secret").commit()
+        val portable = store.capture()
+        stremio.edit().clear().commit(); trakt.edit().clear().commit(); tmdb.edit().clear().commit()
+
+        store.restore(portable)
+
+        assertEquals("stremio-secret", stremio.getString("auth_key", null))
+        assertEquals("trakt-secret", trakt.getString("access_token", null))
+        assertEquals("tmdb-secret", tmdb.getString("api_key", null))
     }
 
     @Test fun everyPortablePreferenceTypeRoundTripsAndStaleValuesAreRemoved() {

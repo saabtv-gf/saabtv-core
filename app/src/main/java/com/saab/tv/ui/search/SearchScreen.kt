@@ -1,7 +1,10 @@
 package com.saab.tv.ui.search
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Spring
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -9,6 +12,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
@@ -31,7 +35,10 @@ import com.saab.tv.ui.addons.RemotePasteDialog
 import com.saab.tv.ui.components.SaabTvBackground
 import com.saab.tv.ui.components.SaabTvCard
 import com.saab.tv.ui.home.DpadRepeatGate
+import com.saab.tv.ui.home.FocusPivotSpec
 import com.saab.tv.ui.home.CatalogQuickActionsPopup
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 private fun FocusRequester.requestFocusSafely(): Boolean = runCatching {
     requestFocus()
@@ -68,10 +75,18 @@ fun SearchScreen(
     var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
     var previewId by remember { mutableStateOf<String?>(null) }
     val previewViewModel = androidx.hilt.navigation.compose.hiltViewModel<com.saab.tv.ui.home.HomeViewModel>()
+    val enrichedItems by remember(previewViewModel) {
+        previewViewModel.state.map { it.enrichedMeta }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = emptyMap())
     val liveWatchedIds by remember(previewViewModel, currentProfile?.id) {
         previewViewModel.watchedIdsForProfile(currentProfile?.id ?: 1)
     }.collectAsStateWithLifecycle(initialValue = emptySet())
-    val focusedResult: (String?) -> Unit = { id -> previewId = id; onFocusedIdChange(id) }
+    val focusedResult: (String?) -> Unit = { id ->
+        previewId = id
+        onFocusedIdChange(id)
+        id?.let { focusedId -> state.results.firstOrNull { it.id == focusedId } }
+            ?.let(previewViewModel::ensureTmdbEnrichment)
+    }
     var hasFocus by remember { mutableStateOf(false) }
     var restoreResultFocus by remember { mutableStateOf(lastFocusedId != null) }
     val moviesEntry = remember { FocusRequester() }
@@ -89,8 +104,9 @@ fun SearchScreen(
             entryRequester.requestFocusSafely()
         }
     }
-    LaunchedEffect(currentProfile?.tmdbEnabled, currentProfile?.tmdbLanguage) {
+    LaunchedEffect(currentProfile?.id, currentProfile?.tmdbEnabled, currentProfile?.tmdbLanguage, currentProfile?.titleCardShape) {
         viewModel.configureTmdbSearch(currentProfile?.tmdbEnabled == true, currentProfile?.tmdbLanguage.orEmpty())
+        previewViewModel.configureTmdbProfile(currentProfile)
     }
     LaunchedEffect(lastFocusedId, targetKey) {
         if (restoreResultFocus && lastFocusedId != null && focusTarget?.id == lastFocusedId) {
@@ -133,14 +149,25 @@ fun SearchScreen(
                     }
                 } else {
                     Column(Modifier.weight(1f).onFocusChanged { resultFocus = it.hasFocus }) {
+                        val landscapeCards = currentProfile?.titleCardShape == "landscape"
                         SearchResultRow("Movies", state.movies, posterHeight, targetKey, resultsRequester,
                             entryRequester, drawerRequester, moviesViewMoreRequester, lastFocusedId, liveWatchedIds,
-                            onMovieClick, onLongClick, onViewMore, focusedResult, Modifier.weight(1f), moviesEntry,
-                            drawerRequester, if (state.series.isNotEmpty()) seriesEntry else entryRequester)
+                            enrichedItems, onMovieClick, onLongClick, onViewMore, focusedResult, Modifier.weight(1f), moviesEntry,
+                            drawerRequester, if (state.series.isNotEmpty()) seriesEntry else entryRequester,
+                            pivotOffset = if (topNav) 14.dp else 30.dp,
+                            onItemShown = {
+                                previewViewModel.ensureWatchedAlias(currentProfile?.id ?: 1, it)
+                                if (landscapeCards) previewViewModel.ensureTmdbEnrichment(it)
+                            })
                         SearchResultRow("Series", state.series, posterHeight, targetKey, resultsRequester,
                             entryRequester, drawerRequester, seriesViewMoreRequester, lastFocusedId, liveWatchedIds,
-                            onMovieClick, onLongClick, onViewMore, focusedResult, Modifier.weight(1f), seriesEntry,
-                            if (state.movies.isNotEmpty()) moviesEntry else drawerRequester, entryRequester)
+                            enrichedItems, onMovieClick, onLongClick, onViewMore, focusedResult, Modifier.weight(1f), seriesEntry,
+                            if (state.movies.isNotEmpty()) moviesEntry else drawerRequester, entryRequester,
+                            pivotOffset = if (topNav) 14.dp else 30.dp,
+                            onItemShown = {
+                                previewViewModel.ensureWatchedAlias(currentProfile?.id ?: 1, it)
+                                if (landscapeCards) previewViewModel.ensureTmdbEnrichment(it)
+                            })
                     }
                 }
                 TvKeyboard(
@@ -179,17 +206,27 @@ fun SearchScreen(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SearchResultRow(
     title: String, items: List<MetaItem>, posterHeight: Dp, targetKey: String?,
     targetRequester: FocusRequester, keyboardRequester: FocusRequester, drawerRequester: FocusRequester,
     moreRequester: FocusRequester, lastFocusedId: String?, watchedIds: Set<String>,
+    enrichedItems: Map<String, MetaItem>,
     onClick: (MetaItem) -> Unit, onLongClick: (MetaItem, Rect) -> Unit,
     onMore: (String, List<MetaItem>) -> Unit,
     onFocused: (String?) -> Unit, modifier: Modifier,
-    rowRequester: FocusRequester, upRequester: FocusRequester, downRequester: FocusRequester
+    rowRequester: FocusRequester, upRequester: FocusRequester, downRequester: FocusRequester,
+    pivotOffset: Dp,
+    onItemShown: (MetaItem) -> Unit = {}
 ) {
     val listState = rememberLazyListState()
+    val currentOnItemShown by rememberUpdatedState(onItemShown)
+    val density = LocalDensity.current
+    val pivotOffsetPx = remember(density, pivotOffset) { with(density) { pivotOffset.toPx() } }
+    val pivotSpec = remember(pivotOffsetPx) {
+        FocusPivotSpec(customOffset = pivotOffsetPx, stiffnessProvider = { Spring.StiffnessMediumLow })
+    }
     var focusedTitle by remember { mutableStateOf("") }
     var rowFocusedId by remember(items) { mutableStateOf(items.firstOrNull()?.id) }
     val initialFocusedId = remember { lastFocusedId }
@@ -213,10 +250,13 @@ private fun SearchResultRow(
             }
         }
         if (items.isEmpty()) Text("No Matching $title", color = Color.Gray)
-        else LazyRow(state = listState, horizontalArrangement = Arrangement.spacedBy(12.dp),
+        else CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
+          LazyRow(state = listState, horizontalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(6.dp)) {
             itemsIndexed(items, key = { _, item -> "${item.type}:${item.id}" }) { index, item ->
-                SaabTvCard(previewItem = item, title = item.name, posterUrl = item.poster, onClick = { onClick(item) },
+                LaunchedEffect(item.type, item.id) { currentOnItemShown(item) }
+                val previewItem = enrichedItems["${item.type}:${item.id}"] ?: item
+                SaabTvCard(previewItem = previewItem, title = item.name, posterUrl = item.poster, onClick = { onClick(item) },
                     onLongClick = { bounds -> onLongClick(item, bounds) },
                     isWatched = item.id in watchedIds,
                     onFocused = { focusedTitle = item.name; rowFocusedId = item.id; onFocused(item.id) },
@@ -232,6 +272,7 @@ private fun SearchResultRow(
                             } else false
                         })
             }
+          }
         }
     }
 }

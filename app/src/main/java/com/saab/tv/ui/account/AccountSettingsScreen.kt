@@ -69,7 +69,12 @@ fun AccountSettingsScreen(onBack: () -> Unit, viewModel: AccountSettingsViewMode
             Text("Meaningful changes sync automatically. Playback progress is batched; pausing, leaving playback and leaving the app flush pending changes. Backups are encrypted before upload.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             SetupButton(text = if (viewModel.busy) "Please Wait…" else "Sync Now", enabled = !viewModel.busy,
-                onClick = { viewModel.run { viewModel.sync.syncNow() } }, primary = true, focusRequester = syncFocus,
+                onClick = { viewModel.run {
+                    if (viewModel.sync.syncAndReconcile()) {
+                        viewModel.sync.stop()
+                        AccountRestart.restart(context as Activity)
+                    }
+                } }, primary = true, focusRequester = syncFocus,
                 modifier = Modifier.widthIn(min = 200.dp))
             if (viewModel.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         }

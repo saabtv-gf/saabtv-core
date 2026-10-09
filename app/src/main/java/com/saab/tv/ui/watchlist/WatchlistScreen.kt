@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -36,6 +37,7 @@ import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.ui.components.LocalPosterFocusReturn
 import com.saab.tv.ui.components.LocalWatchedIds
+import com.saab.tv.ui.components.LocalTitleCardShape
 import com.saab.tv.ui.home.CatalogQuickActionsPopup
 import com.saab.tv.ui.home.DpadRepeatGate
 import com.saab.tv.ui.home.HomeViewModel
@@ -45,6 +47,8 @@ import com.saab.tv.ui.trailer.BackdropTrailerPreview
 import com.saab.tv.ui.trailer.LocalManualTrailerActive
 import com.saab.tv.ui.trailer.LocalManualTrailerLauncher
 import com.saab.tv.data.profile.rememberTrailerPreviewSettings
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 @Composable
 fun WatchlistScreen(
@@ -63,6 +67,9 @@ fun WatchlistScreen(
     val liveWatchedIds by remember(actionsViewModel, currentProfile?.id) {
         actionsViewModel.watchedIdsForProfile(currentProfile?.id ?: 1)
     }.collectAsStateWithLifecycle(initialValue = emptySet())
+    val enrichedItems by remember(actionsViewModel) {
+        actionsViewModel.state.map { it.enrichedMeta }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = emptyMap())
     var actionItem by remember { mutableStateOf<MetaItem?>(null) }
     var actionBounds by remember { mutableStateOf(Rect.Zero) }
     var previewItem by remember { mutableStateOf<MetaItem?>(null) }
@@ -70,6 +77,7 @@ fun WatchlistScreen(
     var previewActive by remember { mutableStateOf(false) }
     var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
     val isTopNav = currentProfile?.navPosition == "top"
+    val landscapeCards = LocalTitleCardShape.current == "landscape"
     val startPadding = if (isTopNav) 50.dp else 120.dp
     val actionRows = remember { listOf(UpKeyDebouncer(), UpKeyDebouncer(), UpKeyDebouncer()) }
     val repeatGates = remember { listOf(DpadRepeatGate(), DpadRepeatGate(), DpadRepeatGate()) }
@@ -80,6 +88,21 @@ fun WatchlistScreen(
     ).filter { it.second.isNotEmpty() }
 
     LaunchedEffect(currentProfile?.id) { viewModel.setProfileId(currentProfile?.id) }
+    LaunchedEffect(actionsViewModel, currentProfile) {
+        actionsViewModel.configureTmdbProfile(currentProfile)
+    }
+    LaunchedEffect(currentProfile?.id, currentProfile?.tmdbEnabled, landscapeCards, library.watchlist.map { it.type to it.id }) {
+        actionsViewModel.configureTmdbProfile(currentProfile)
+        if (landscapeCards) {
+            // Warm a small first-screen window before D-pad focus reaches these cards.
+            library.watchlist.take(8).forEach { item ->
+                actionsViewModel.ensureTmdbEnrichment(item)
+                if (currentProfile?.tmdbEnabled != true || item.poster.isNullOrBlank()) {
+                    viewModel.resolvePosterIfNeeded(item)
+                }
+            }
+        }
+    }
     BackHandler(enabled = hasContentFocus && actionItem == null && !previewActive) {
         runCatching { drawerRequester.requestFocus() }
     }
@@ -127,7 +150,10 @@ fun WatchlistScreen(
                             onViewMore = {},
                             onFocused = { item, _ ->
                                 previewItem = item
-                                if (title == "Watchlist") item?.let(viewModel::resolvePosterIfNeeded)
+                                item?.let(actionsViewModel::ensureTmdbEnrichment)
+                                if (title == "Watchlist" &&
+                                    (currentProfile?.tmdbEnabled != true || item?.poster.isNullOrBlank())
+                                ) item?.let(viewModel::resolvePosterIfNeeded)
                             },
                             entryRequester = entryRequester,
                             drawerRequester = drawerRequester,
@@ -137,7 +163,18 @@ fun WatchlistScreen(
                             isInfiniteLoopEnabled = false,
                             upKeyDebouncer = actionRows[index],
                             repeatGate = repeatGates[index],
-                            externalListState = rowState
+                            externalListState = rowState,
+                            isLandscapeCards = landscapeCards,
+                            enrichedItems = enrichedItems,
+                            onItemShown = { item ->
+                                actionsViewModel.ensureTmdbEnrichment(item)
+                                if (currentProfile?.tmdbEnabled != true || item.poster.isNullOrBlank()) {
+                                    viewModel.resolvePosterIfNeeded(item)
+                                }
+                            },
+                            onWatchedItemShown = { item ->
+                                actionsViewModel.ensureWatchedAlias(currentProfile?.id ?: 1, item)
+                            }
                         )
                     }
                     Spacer(Modifier.height(120.dp))

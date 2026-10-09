@@ -11,6 +11,16 @@ internal object SeekThumbnailCarouselPolicy {
         return (-half..half).toList()
     }
 
+    /** Excludes out-of-range scene slots instead of rendering empty edge cards. */
+    fun positions(targetMs: Long, durationMs: Long, intervalSeconds: Int): List<Long> {
+        val intervalMs = intervalSeconds.coerceAtLeast(1) * 1_000L
+        return offsets(intervalSeconds).map { targetMs + it * intervalMs }
+            .filter { it >= 0L && (durationMs <= 0L || it <= durationMs) }
+    }
+
+    fun selectedIndex(positions: List<Long>, targetMs: Long): Int =
+        positions.indexOf(targetMs).takeIf { it >= 0 } ?: positions.size / 2
+
     fun loadOrder(cardCount: Int): List<Int> {
         if (cardCount <= 0) return emptyList()
         val center = cardCount / 2

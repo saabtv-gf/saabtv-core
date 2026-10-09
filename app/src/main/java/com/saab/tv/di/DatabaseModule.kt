@@ -267,6 +267,8 @@ object DatabaseModule {
             .addMigrations(MIGRATION_49_50)
             .addMigrations(MIGRATION_50_51)
             .addMigrations(MIGRATION_51_52)
+            .addMigrations(MIGRATION_52_53)
+            .addMigrations(MIGRATION_53_54)
             .build()
     }
 
@@ -299,5 +301,19 @@ internal val MIGRATION_51_52 = object : Migration(51, 52) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // Preserve the previous shared IntroDB behavior for upgraded profiles.
         db.execSQL("ALTER TABLE profiles ADD COLUMN skipRecap INTEGER NOT NULL DEFAULT 1")
+    }
+}
+
+internal val MIGRATION_52_53 = object : Migration(52, 53) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE profiles ADD COLUMN titleCardShape TEXT NOT NULL DEFAULT 'poster'")
+        db.execSQL("UPDATE profiles SET titleCardShape = continueWatchingShape")
+    }
+}
+
+internal val MIGRATION_53_54 = object : Migration(53, 54) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE watchlist ADD COLUMN background TEXT")
+        db.execSQL("ALTER TABLE watchlist ADD COLUMN logo TEXT")
     }
 }

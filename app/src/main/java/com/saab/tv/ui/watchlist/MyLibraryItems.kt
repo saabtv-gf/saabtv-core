@@ -41,7 +41,14 @@ internal fun buildMyLibraryItems(
         .distinctBy { it.type to it.id }
 
     val saved = watchlist.sortedByDescending { it.addedAt }.map {
-        MetaItem(id = it.id, type = it.type, name = it.title, poster = it.poster)
+        MetaItem(
+            id = it.id,
+            type = it.type,
+            name = it.title,
+            poster = it.poster,
+            background = it.background,
+            logo = it.logo
+        )
     }.distinctBy { it.type to it.id }
 
     val watched = history.asSequence()

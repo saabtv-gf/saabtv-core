@@ -18,6 +18,8 @@ object ImagePrefetcher {
     // Landscape card size matching SaabTvLandscapeCard (2x 190dp at 16:9)
     private const val LANDSCAPE_WIDTH = 380
     private const val LANDSCAPE_HEIGHT = 214
+    private const val LOGO_WIDTH = 300
+    private const val LOGO_HEIGHT = 90
     
     // Number of items to prefetch ahead
     private const val PREFETCH_COUNT = 5
@@ -134,19 +136,33 @@ object ImagePrefetcher {
      * Prefetch a single landscape-sized image URL
      */
     fun prefetchLandscape(context: Context, url: String?) {
-        if (url.isNullOrBlank()) return
-        if (!shouldEnqueue(url)) return
+        if (url.isNullOrBlank() || !shouldEnqueue("landscape:$url")) return
 
         val request = ImageRequest.Builder(context)
             .data(url)
             .size(LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
-            .memoryCacheKey(url)
-            .diskCacheKey(url)
+            .memoryCacheKey("landscape:$url")
+            .diskCacheKey("landscape:$url")
             .build()
 
         context.imageLoader.enqueue(request)
+    }
+
+    /** Warm the small transparent title mark separately from the full-card backdrop. */
+    fun prefetchLogo(context: Context, url: String?) {
+        if (url.isNullOrBlank() || !shouldEnqueue("logo:$url")) return
+        context.imageLoader.enqueue(
+            ImageRequest.Builder(context)
+                .data(url)
+                .size(LOGO_WIDTH, LOGO_HEIGHT)
+                .memoryCacheKey("logo:$url")
+                .diskCacheKey("logo:$url")
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .build()
+        )
     }
 
     /**
@@ -156,7 +172,8 @@ object ImagePrefetcher {
         context: Context,
         items: List<String?>,
         focusedIndex: Int,
-        count: Int = PREFETCH_COUNT
+        count: Int = PREFETCH_COUNT,
+        logos: List<String?> = emptyList()
     ) {
         val aroundCount = effectiveAroundCount(count)
         if (aroundCount == 0) return
@@ -165,6 +182,7 @@ object ImagePrefetcher {
             val aheadIndex = focusedIndex + i
             if (aheadIndex < items.size) {
                 prefetchLandscape(context, items[aheadIndex])
+                logos.getOrNull(aheadIndex)?.let { prefetchLogo(context, it) }
             }
         }
 
@@ -172,6 +190,7 @@ object ImagePrefetcher {
             val behindIndex = focusedIndex - i
             if (behindIndex >= 0) {
                 prefetchLandscape(context, items[behindIndex])
+                logos.getOrNull(behindIndex)?.let { prefetchLogo(context, it) }
             }
         }
     }

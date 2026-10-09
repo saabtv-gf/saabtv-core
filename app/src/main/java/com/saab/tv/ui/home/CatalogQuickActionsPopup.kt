@@ -125,11 +125,12 @@ fun CatalogQuickActionsPopup(
                 }
             }, modifier = Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
             CardActionIcon(Icons.Default.DoneAll,
-                if (watched) "Already Watched" else "Mark As Watched", onClick = {
-                    if (!watched) viewModel.markTitleWatched(profileId, item)
+                if (watched) "Mark As Unwatched" else "Mark As Watched", onClick = {
+                    if (watched) viewModel.unmarkTitleWatched(profileId, item)
+                    else viewModel.markTitleWatched(profileId, item)
                     onDismiss()
-                }, modifier = Modifier.weight(1f), enabled = actionsArmed && !watched,
-                destructive = watched)
+                }, modifier = Modifier.weight(1f), enabled = actionsArmed,
+                destructive = false)
             CardActionIcon(if (watchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                 if (watchlisted) "Remove From Watchlist" else "Add To Watchlist", onClick = {
                     viewModel.toggleWatchlist(profileId, item)

@@ -86,7 +86,7 @@ fun DetailActionButton(
     )
 
     val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.08f else 1f,
+        targetValue = if (isFocused) 1.04f else 1f,
         label = "btnScale"
     )
 

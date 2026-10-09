@@ -15,6 +15,7 @@ import java.lang.reflect.Proxy
 import java.util.Collections
 import kotlinx.coroutines.CancellationException
 import java.util.concurrent.atomic.AtomicInteger
+import java.net.SocketException
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class)
@@ -101,6 +102,24 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals(listOf("getMovieDetails"), stub.calls.toList())
     }
 
+    @Test fun landscapeHomeEnrichmentFetchesAndCachesTheTitleLogo() = runBlocking {
+        val stub = ApiStub(mapOf(
+            "getMovieDetails" to TmdbDetailsResponse(34, title = "Landscape Title", backdropPath = "/wide.jpg"),
+            "getMovieImages" to TmdbImagesResponse(logos = listOf(
+                TmdbImage("/logo.png", "en", null)
+            ))
+        ))
+        val service = service(stub)
+
+        val first = service.fetchHomeEnrichment("34", "movie", "en", includeLogo = true)
+        val cached = service.fetchHomeEnrichment("34", "movie", "en", includeLogo = true)
+
+        assertEquals("https://image.tmdb.org/t/p/w500/logo.png", first?.logo)
+        assertEquals(first, cached)
+        assertEquals(1, stub.calls.count { it == "getMovieDetails" })
+        assertEquals(1, stub.calls.count { it == "getMovieImages" })
+    }
+
     @Test fun metadataEnrichmentPropagatesCancellationInsteadOfConvertingItToEmptyData() = runBlocking {
         val api = Proxy.newProxyInstance(
             TmdbApiService::class.java.classLoader,
@@ -122,6 +141,19 @@ class TmdbMetadataServiceRegressionTest {
         } catch (_: CancellationException) {
             // Expected: the caller can stop obsolete metadata work on navigation.
         }
+    }
+
+    @Test fun imdbLookupContainsTlsSocketFailuresAsRecoverableNetworkErrors() = runBlocking {
+        val api = Proxy.newProxyInstance(
+            TmdbApiService::class.java.classLoader,
+            arrayOf(TmdbApiService::class.java)
+        ) { _, method, _ ->
+            if (method.name == "findByExternalId") throw SocketException("TLS handshake reset")
+            error("Unexpected TMDB request: ${method.name}")
+        } as TmdbApiService
+        val tmdbService = TmdbService(RuntimeEnvironment.getApplication(), api)
+
+        assertNull(tmdbService.imdbToTmdb("tt1234567", "movie"))
     }
 
     @Test fun episodeEnrichmentDropsMalformedEntriesDeduplicatesSeasonsAndCachesResults() = runBlocking {

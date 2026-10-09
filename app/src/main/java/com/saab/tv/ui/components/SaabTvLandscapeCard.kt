@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.Border
@@ -66,7 +67,7 @@ import com.saab.tv.ui.theme.LocalRoundCorners
  * ============================================================================
  *
  * Displays a 16:9 landscape card with:
- * - Hero/backdrop image (falls back to poster)
+ * - Landscape hero/backdrop image (never stretches a portrait poster)
  * - Gradient scrim at bottom for readability
  * - Logo overlay in bottom-left (falls back to text title)
  * - Progress bar at bottom
@@ -80,7 +81,6 @@ fun SaabTvLandscapeCard(
     title: String,
     backdropUrl: String?,
     logoUrl: String?,
-    posterUrl: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     previewItem: com.saab.tv.data.model.stremio.MetaItem? = null,
@@ -89,11 +89,18 @@ fun SaabTvLandscapeCard(
     hasNewEpisode: Boolean = false,
     onFocused: (() -> Unit)? = null,
     onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
-    enableWatchedBadge: Boolean = true
+    enableWatchedBadge: Boolean = true,
+    cardWidth: Dp = 190.dp,
+    showFocusOutline: Boolean = true
 ) {
+    val landscapeImageUrl = landscapeArtworkUrl(backdropUrl)
+    var artworkUnavailable by remember(landscapeImageUrl) {
+        mutableStateOf(shouldShowLandscapeInitialArtwork(backdropUrl))
+    }
     val showWatchedBadge = shouldShowWatchedBadge(
         isWatched, previewItem?.id, LocalWatchedIds.current, enabled = enableWatchedBadge
     )
+    val showWatchlistBadge = shouldShowWatchlistBadge(previewItem?.id, LocalWatchlistIds.current)
     var isFocused by remember { mutableStateOf(false) }
     val ownRequester = remember { FocusRequester() }
     val rememberReturnFocus = LocalPosterFocusReturn.current
@@ -106,12 +113,15 @@ fun SaabTvLandscapeCard(
 
     Box(
         modifier = modifier.trailerAnchor(previewItem)
-            .width(190.dp)
+            .width(cardWidth)
             .aspectRatio(16f / 9f)
             .onGloballyPositioned { cardCoordinates[0] = it }
             .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
     ) {
+        if (usesSeriesPosterStack(previewItem?.type)) {
+            SeriesTitleCardStack(cardShape, isFocused, landscape = true)
+        }
         Surface(
             onClick = onClick,
             modifier = Modifier
@@ -147,22 +157,36 @@ fun SaabTvLandscapeCard(
             ),
             border = ClickableSurfaceDefaults.border(
                 focusedBorder = Border(
-                    border = BorderStroke(2.dp, Color.White),
+                    border = BorderStroke(
+                        if (showFocusOutline) 2.dp else 0.dp,
+                        if (showFocusOutline) Color.White else Color.Transparent
+                    ),
                     shape = focusedCardShape
                 )
             )
         ) {
             val context = LocalContext.current
-            val imageUrl = backdropUrl ?: posterUrl
-
-            val imageRequest = remember(imageUrl) {
+            val imageRequest = remember(landscapeImageUrl) {
                 ImageRequest.Builder(context)
-                    .data(imageUrl)
-                    .crossfade(false)
+                    .data(landscapeImageUrl)
+                    .crossfade(70)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
                     .scale(Scale.FILL)
                     .size(380, 214) // 2x card size for crisp rendering on high-DPI
+                    .memoryCacheKey(landscapeImageUrl?.let { "landscape:$it" })
+                    .diskCacheKey(landscapeImageUrl?.let { "landscape:$it" })
+                    .allowHardware(true)
+                    .build()
+            }
+            val logoRequest = remember(logoUrl) {
+                ImageRequest.Builder(context)
+                    .data(logoUrl)
+                    .size(300, 90)
+                    .memoryCacheKey(logoUrl?.let { "logo:$it" })
+                    .diskCacheKey(logoUrl?.let { "logo:$it" })
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .diskCachePolicy(CachePolicy.ENABLED)
                     .allowHardware(true)
                     .build()
             }
@@ -173,13 +197,24 @@ fun SaabTvLandscapeCard(
                     model = imageRequest,
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
+                    onState = { state ->
+                        if (state is coil.compose.AsyncImagePainter.State.Error) {
+                            artworkUnavailable = shouldShowLandscapeInitialArtwork(
+                                backdropUrl, loadFailed = true
+                            )
+                        }
+                        if (state is coil.compose.AsyncImagePainter.State.Success) artworkUnavailable = false
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(cardShape)
                         .background(MaterialTheme.colorScheme.surface)
                 )
 
+                if (artworkUnavailable) TitleInitialArtwork(title)
+
                 if (showWatchedBadge) WatchedBadge(Modifier.align(Alignment.TopEnd))
+                if (showWatchlistBadge) WatchlistBadge(Modifier.align(Alignment.TopStart))
 
                 // Bottom gradient scrim for logo/text readability
                 Box(
@@ -214,13 +249,13 @@ fun SaabTvLandscapeCard(
                 ) {
                     if (!logoUrl.isNullOrEmpty()) {
                         SubcomposeAsyncImage(
-                            model = logoUrl,
+                            model = logoRequest,
                             contentDescription = title,
                             contentScale = ContentScale.Fit,
                             alignment = Alignment.BottomStart,
                             modifier = Modifier
-                                .widthIn(max = 130.dp)
-                                .heightIn(max = 35.dp),
+                                .widthIn(max = 150.dp)
+                                .heightIn(max = 45.dp),
                             error = {
                                 Text(
                                     text = title,
@@ -290,3 +325,12 @@ fun SaabTvLandscapeCard(
         }
     }
 }
+
+/** Landscape cards must use landscape artwork; absent backdrops use initials, not a portrait poster. */
+internal fun landscapeArtworkUrl(backdropUrl: String?): String? =
+    backdropUrl?.takeIf(String::isNotBlank)
+
+internal fun shouldShowLandscapeInitialArtwork(
+    backdropUrl: String?,
+    loadFailed: Boolean = false
+): Boolean = landscapeArtworkUrl(backdropUrl) == null || loadFailed

@@ -110,6 +110,8 @@ import kotlinx.coroutines.delay
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.saab.tv.R
 import com.saab.tv.ui.home.DpadRepeatGate
 import com.saab.tv.ui.home.FocusPivotSpec
@@ -138,6 +140,7 @@ fun DetailsScreen(
     isTrailerLoading: Boolean = false,
     trailerReturnToken: Int = 0,
     trailerHostViewModel: com.saab.tv.ui.home.HomeViewModel? = null,
+    currentProfile: com.saab.tv.data.model.ProfileEntity? = null,
     viewModel: DetailsViewModel = hiltViewModel(key = "details_${type}_${id}")
 ) {
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
@@ -149,6 +152,9 @@ fun DetailsScreen(
     var quickActionReturnFocus by remember { mutableStateOf<FocusRequester?>(null) }
     LaunchedEffect(quickActionViewModel) {
         quickActionProfileId = quickActionViewModel.activeProfileId() ?: 0
+    }
+    LaunchedEffect(quickActionViewModel, currentProfile) {
+        quickActionViewModel.configureTmdbProfile(currentProfile)
     }
     com.saab.tv.ui.trailer.TitleTrailerHost(onOpen = { onNavigateToDetails(it.type, it.id) },
         defaultItem = state.meta.takeIf { !state.isLoading && state.contentKey == "$type:$id" },
@@ -310,7 +316,7 @@ fun DetailsScreen(
         FocusPivotSpec(
             customOffset = pivotPx,
             skipScrollProvider = { heroHasFocus },
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 
@@ -347,7 +353,7 @@ fun DetailsScreen(
     // Smooth content reveal: animate alpha from 0→1 when content becomes ready
     val contentAlpha by animateFloatAsState(
         targetValue = if (contentReady) 1f else 0f,
-        animationSpec = tween(durationMillis = 400),
+        animationSpec = tween(durationMillis = 220),
         label = "content_reveal"
     )
 
@@ -610,6 +616,7 @@ fun DetailsScreen(
                             icon = Icons.Default.PlayArrow,
                             modifier = Modifier.focusRequester(firstButtonFocusRequester),
                             onClick = {
+                                if (!state.resumeStateReady) return@DetailActionButton
                                 val ep = resumeEpisode ?: firstEpisode ?: return@DetailActionButton
                                 val trackId = resumePlaybackId ?: episodePlaybackId(streamId, ep)
                                 val epStreamId = episodeStreamId(streamId, ep)
@@ -797,7 +804,7 @@ fun DetailsScreen(
                         Column(modifier = Modifier.padding(top = 28.dp)) {
                             SectionHeader("More Like This", textColor, Modifier.padding(start = 48.dp))
                             Spacer(modifier = Modifier.height(10.dp))
-                            RecommendationRow(
+                                            RecommendationRow(
                                         tmdbRecommendations, accentColor,
                                         rowKey = "tmdb_recs",
                                         profileId = quickActionProfileId,
@@ -821,7 +828,7 @@ fun DetailsScreen(
                         Column(modifier = Modifier.padding(top = 28.dp)) {
                             SectionHeader(collectionName, textColor, Modifier.padding(start = 48.dp))
                             Spacer(modifier = Modifier.height(10.dp))
-                            RecommendationRow(
+                                            RecommendationRow(
                                             tmdbCollection, accentColor,
                                             rowKey = "tmdb_collection",
                                             profileId = quickActionProfileId,
@@ -1045,7 +1052,7 @@ private fun CastRow(
     val pivotSpec = remember(paddingPx) {
         FocusPivotSpec(
             customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 
@@ -1203,7 +1210,7 @@ private fun StudioRow(
     val pivotSpec = remember(paddingPx) {
         FocusPivotSpec(
             customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 
@@ -1288,6 +1295,9 @@ private fun RecommendationRow(
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null
 ) {
+    val enrichedItems by androidx.compose.runtime.remember(watchedViewModel) {
+        watchedViewModel.state.map { it.enrichedMeta }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = emptyMap())
     val rowState = rememberLazyListState()
     val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
     val density = LocalDensity.current
@@ -1299,7 +1309,7 @@ private fun RecommendationRow(
     val pivotSpec = remember(paddingPx) {
         FocusPivotSpec(
             customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessLow }
+            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 
@@ -1315,7 +1325,7 @@ private fun RecommendationRow(
                     if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) true else false
                 }) {
                     RecommendationCard(
-                        item, accentColor, profileId, watchedViewModel,
+                        item, accentColor, profileId, watchedViewModel, enrichedItems,
                         modifier = if (restoreFocusRequester != null && index == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier,
                         onClick = {
                             val stremioType = if (item.type == "tv") "series" else item.type
@@ -1335,6 +1345,7 @@ private fun RecommendationCard(
     accentColor: Color,
     profileId: Int,
     watchedViewModel: com.saab.tv.ui.home.HomeViewModel,
+    enrichedItems: Map<String, com.saab.tv.data.model.stremio.MetaItem>,
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {},
     onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit = { _, _ -> }
@@ -1346,7 +1357,13 @@ private fun RecommendationCard(
             description = item.description, releaseInfo = item.releaseInfo
         )
     }
+    val landscapeCards = com.saab.tv.ui.components.LocalTitleCardShape.current == "landscape"
+    LaunchedEffect(meta.type, meta.id, landscapeCards, profileId) {
+        watchedViewModel.ensureWatchedAlias(profileId, meta)
+        if (landscapeCards) watchedViewModel.ensureTmdbEnrichment(meta)
+    }
     val watchedIds = com.saab.tv.ui.components.LocalWatchedIds.current
+    val previewItem = enrichedItems["${meta.type}:${meta.id}"] ?: meta
     var isWatched by remember(meta.id, profileId) { mutableStateOf(meta.id in watchedIds) }
     LaunchedEffect(meta.id, profileId, watchedIds) {
         isWatched = meta.id in watchedIds || (profileId > 0 && try {
@@ -1360,7 +1377,7 @@ private fun RecommendationCard(
     com.saab.tv.ui.components.SaabTvCard(
         title = item.name,
         posterUrl = item.poster,
-        previewItem = meta,
+        previewItem = previewItem,
         isWatched = isWatched,
         normalWidth = 120.dp,
         normalHeight = 180.dp,

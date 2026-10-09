@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.selects.select
 import javax.inject.Inject
 
 @HiltViewModel
@@ -76,28 +77,80 @@ class SearchViewModel @Inject constructor(
         _state.value = SearchState(query = newQuery, isLoading = newQuery.trim().length >= 3)
         if (newQuery.trim().length < 3) return
         searchJob = viewModelScope.launch {
-            delay(350)
+            delay(250)
             try {
                 com.saab.tv.AppDiagnostics.event("Search", "Request Started")
                 val intent = if (tmdbSearchEnabled) TmdbNaturalQuery.parse(newQuery.trim()) else null
-                val catalogRequest = async { repository.searchMovies(newQuery.trim()) }
+                val catalogRequest = async {
+                    try { repository.searchMovies(newQuery.trim()) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { emptyList() }
+                }
                 val tmdbRequest = intent?.let { queryIntent ->
                     async {
-                        resolveTmdbCandidates(
-                            tmdbMetadata.discoverByIntent(queryIntent, tmdbSearchLanguage, 15)
-                        )
+                        try {
+                            resolveTmdbCandidates(
+                                tmdbMetadata.discoverByIntent(queryIntent, tmdbSearchLanguage, 15)
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
                     }
                 }
-                val results = (tmdbRequest?.await().orEmpty() + catalogRequest.await())
-                    .filter { it.type == "movie" || it.type == "series" }
-                    .distinctBy { it.type to it.id }
+
+                var catalogItems = emptyList<MetaItem>()
+                var tmdbItems = emptyList<MetaItem>()
+                var catalogDone = false
+                var tmdbDone = tmdbRequest == null
+                suspend fun publishResults() {
+                    if (_state.value.query != newQuery) return
+                    val results = (tmdbItems + catalogItems)
+                        .filter { it.type == "movie" || it.type == "series" }
+                        .distinctBy { it.type to it.id }
+                    _state.value = SearchState(
+                        query = newQuery,
+                        results = results,
+                        movies = results.filter { it.type == "movie" },
+                        series = results.filter { it.type == "series" },
+                        isLoading = !(catalogDone && tmdbDone)
+                    )
+                }
+
+                if (tmdbRequest == null) {
+                    catalogItems = catalogRequest.await()
+                    catalogDone = true
+                    publishResults()
+                } else {
+                    val first = select<Pair<Boolean, List<MetaItem>>> {
+                        catalogRequest.onAwait { true to it }
+                        tmdbRequest.onAwait { false to it }
+                    }
+                    if (first.first) {
+                        catalogItems = first.second
+                        catalogDone = true
+                    } else {
+                        tmdbItems = first.second
+                        tmdbDone = true
+                    }
+                    publishResults()
+
+                    if (!catalogDone) {
+                        catalogItems = catalogRequest.await()
+                        catalogDone = true
+                        publishResults()
+                    }
+                    if (!tmdbDone) {
+                        tmdbItems = tmdbRequest.await()
+                        tmdbDone = true
+                        publishResults()
+                    }
+                }
+
                 if (_state.value.query != newQuery) return@launch
+                val results = _state.value.results
                 com.saab.tv.AppDiagnostics.event("Search", "Request Completed", "results=${results.size}")
-                _state.value = SearchState(
-                    query = newQuery, results = results,
-                    movies = results.filter { it.type == "movie" },
-                    series = results.filter { it.type == "series" }
-                )
             } catch (error: CancellationException) {
                 throw error
             } catch (failure: Exception) {

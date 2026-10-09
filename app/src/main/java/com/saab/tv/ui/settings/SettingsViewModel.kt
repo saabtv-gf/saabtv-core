@@ -66,6 +66,14 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun updateTitleCardShape(profileId: Int, shape: String) {
+        val normalized = if (shape == "landscape") "landscape" else "poster"
+        viewModelScope.launch(mutationDispatcher + NonCancellable) {
+            val profile = dao.getProfileById(profileId)
+            if (profile != null) dao.insertProfile(profile.copy(titleCardShape = normalized))
+        }
+    }
+
     fun updateTunnelingEnabled(profileId: Int, enabled: Boolean) {
         deviceDisplay.setTunneling(profileId, enabled)
     }

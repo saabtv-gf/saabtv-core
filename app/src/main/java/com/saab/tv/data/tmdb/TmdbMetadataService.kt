@@ -239,26 +239,48 @@ class TmdbMetadataService @Inject constructor(
     }
 
     /**
-     * Card/Home enrichment deliberately uses only the details endpoint. Full credits,
-     * image-logo, and certification payloads are reserved for the title details page.
+     * Lightweight card enrichment. Landscape cards opt into one parallel images
+     * request for a title logo; credits and certifications remain details-only.
      */
     suspend fun fetchHomeEnrichment(
         tmdbId: String,
         mediaType: String,
-        language: String = "en"
+        language: String = "en",
+        includeLogo: Boolean = false
     ): TmdbEnrichment? = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
-        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage"
+        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage${if (includeLogo) ":logo" else ""}"
         enrichmentCache.get(cacheKey)?.let { return@withContext it }
         homeEnrichmentCache.get(cacheKey)?.let { return@withContext it }
 
         val numericId = tmdbId.toIntOrNull() ?: return@withContext null
         try {
-            val details = when (tmdbType) {
-                "tv" -> tmdbApi.getTvDetails(numericId, apiKey, normalizedLanguage)
-                else -> tmdbApi.getMovieDetails(numericId, apiKey, normalizedLanguage)
-            }.body() ?: return@withContext null
+            val includeImageLanguage = "${normalizedLanguage.substringBefore("-")},$normalizedLanguage,en,null"
+            val (details, logoPath) = coroutineScope {
+                val detailsDeferred = async {
+                    when (tmdbType) {
+                        "tv" -> tmdbApi.getTvDetails(numericId, apiKey, normalizedLanguage)
+                        else -> tmdbApi.getMovieDetails(numericId, apiKey, normalizedLanguage)
+                    }.body()
+                }
+                val logoDeferred = if (includeLogo) async {
+                    try {
+                        val images = when (tmdbType) {
+                            "tv" -> tmdbApi.getTvImages(numericId, apiKey, includeImageLanguage)
+                            else -> tmdbApi.getMovieImages(numericId, apiKey, includeImageLanguage)
+                        }.body()
+                        images?.logos?.let { selectBestLocalizedImagePath(it, normalizedLanguage) }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        Log.w(TAG, "Failed to fetch landscape title logo for $tmdbId: ${failure.message}")
+                        null
+                    }
+                } else null
+                detailsDeferred.await() to logoDeferred?.await()
+            }
+            if (details == null) return@withContext null
 
             val enrichment = TmdbEnrichment(
                 localizedTitle = (details.title ?: details.name)?.takeIf(String::isNotBlank),
@@ -266,7 +288,7 @@ class TmdbMetadataService @Inject constructor(
                 genres = details.genres.orEmpty().mapNotNull { it.name.trim().takeIf(String::isNotBlank) },
                 genreIds = details.genres.orEmpty().map { it.id },
                 backdrop = buildImageUrl(details.backdropPath, "w1280"),
-                logo = null,
+                logo = buildImageUrl(logoPath, "w500"),
                 poster = buildImageUrl(details.posterPath, "w500"),
                 directorMembers = emptyList(),
                 writerMembers = emptyList(),

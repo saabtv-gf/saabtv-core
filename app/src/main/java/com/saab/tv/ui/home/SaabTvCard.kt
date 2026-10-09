@@ -47,6 +47,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.tv.material3.Border
@@ -76,6 +78,8 @@ import com.saab.tv.ui.theme.LocalRoundCorners
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 val LocalWatchedIds = compositionLocalOf { emptySet<String>() }
+val LocalWatchlistIds = compositionLocalOf { emptySet<String>() }
+val LocalTitleCardShape = compositionLocalOf { "poster" }
 
 internal fun shouldShowWatchedBadge(
     explicitWatched: Boolean,
@@ -83,6 +87,9 @@ internal fun shouldShowWatchedBadge(
     watchedIds: Set<String>,
     enabled: Boolean = true
 ): Boolean = enabled && (explicitWatched || (itemId != null && itemId in watchedIds))
+
+internal fun shouldShowWatchlistBadge(itemId: String?, watchlistIds: Set<String>): Boolean =
+    itemId != null && itemId in watchlistIds
 
 internal data class SeriesCardStackLayer(
     val widthFraction: Float,
@@ -103,23 +110,68 @@ internal fun usesSeriesPosterStack(type: String?): Boolean = type == "series" ||
 @Composable
 internal fun BoxScope.SeriesTitleCardStack(
     cardShape: androidx.compose.ui.graphics.Shape,
-    isFocused: Boolean
+    isFocused: Boolean,
+    landscape: Boolean = false
 ) {
     seriesCardStackLayers.forEach { layer ->
-        val alpha by animateFloatAsState(
+        val alpha = if (landscape) layer.alpha else animateFloatAsState(
             targetValue = (layer.alpha + if (isFocused) .1f else 0f).coerceAtMost(.9f),
-            animationSpec = tween(180),
-            label = "series-stack-alpha"
-        )
+            animationSpec = tween(180), label = "series-stack-alpha"
+        ).value
         Box(
             modifier = Modifier.align(Alignment.Center)
                 .fillMaxWidth(layer.widthFraction)
                 .fillMaxHeight(layer.heightFraction)
-                .offset(x = layer.xOffsetDp.dp, y = layer.yOffsetDp.dp)
-                .graphicsLayer { this.alpha = alpha }
+                .offset(
+                    x = if (landscape) (layer.xOffsetDp * .65f).dp else layer.xOffsetDp.dp,
+                    y = if (landscape) (layer.yOffsetDp * .65f).dp else layer.yOffsetDp.dp
+                )
+                .graphicsLayer { this.alpha = if (landscape) layer.alpha else alpha }
                 .clip(cardShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .border(1.dp, Color(0xFF8AA3C7).copy(alpha = .25f), cardShape)
+        )
+    }
+}
+
+@Composable
+internal fun WatchlistBadge(modifier: Modifier = Modifier) {
+    val badgeColor = MaterialTheme.colorScheme.primary
+    Canvas(modifier.size(28.dp).semantics { contentDescription = "Added to My Library" }) {
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(0f, 0f)
+            lineTo(size.width, 0f)
+            lineTo(0f, size.height)
+            close()
+        }
+        drawPath(path, badgeColor)
+        val bookmark = androidx.compose.ui.graphics.Path().apply {
+            moveTo(size.width * .19f, size.height * .15f)
+            lineTo(size.width * .55f, size.height * .15f)
+            lineTo(size.width * .55f, size.height * .68f)
+            lineTo(size.width * .37f, size.height * .57f)
+            lineTo(size.width * .19f, size.height * .68f)
+            close()
+        }
+        drawPath(bookmark, Color.White)
+    }
+}
+
+@Composable
+internal fun TitleInitialArtwork(title: String) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(
+            androidx.compose.ui.graphics.Brush.linearGradient(
+                listOf(Color(0xFF1A2944), Color(0xFF26395D), Color(0xFF101722))
+            )
+        ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = initialsForPerson(title),
+            color = Color.White.copy(alpha = .92f),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
         )
     }
 }
@@ -160,11 +212,35 @@ fun SaabTvCard(
     hasNewEpisode: Boolean = false,
     onFocused: (() -> Unit)? = null,
     onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
-    enableWatchedBadge: Boolean = true
+    enableWatchedBadge: Boolean = true,
+    landscapeWidth: androidx.compose.ui.unit.Dp = 190.dp,
+    forceLandscape: Boolean = false,
+    showFocusOutline: Boolean = true
 ) {
+    if (forceLandscape || LocalTitleCardShape.current == "landscape") {
+        SaabTvLandscapeCard(
+            title = title,
+            backdropUrl = previewItem?.background,
+            logoUrl = previewItem?.logo,
+            onClick = onClick,
+            modifier = modifier,
+            previewItem = previewItem,
+            progress = progress,
+            isWatched = isWatched,
+            hasNewEpisode = hasNewEpisode,
+            onFocused = onFocused,
+            onLongClick = onLongClick,
+            enableWatchedBadge = enableWatchedBadge,
+            cardWidth = landscapeWidth,
+            showFocusOutline = showFocusOutline
+        )
+        return
+    }
+    var posterUnavailable by remember(posterUrl) { mutableStateOf(true) }
     val showWatchedBadge = shouldShowWatchedBadge(
         isWatched, previewItem?.id, LocalWatchedIds.current, enabled = enableWatchedBadge
     )
+    val showWatchlistBadge = shouldShowWatchlistBadge(previewItem?.id, LocalWatchlistIds.current)
     val isSeriesCard = usesSeriesPosterStack(previewItem?.type)
     var isFocused by remember { mutableStateOf(false) }
     val ownRequester = remember { FocusRequester() }
@@ -235,8 +311,8 @@ fun SaabTvCard(
             border = ClickableSurfaceDefaults.border(
                 focusedBorder = Border(
                     border = BorderStroke(
-                        2.dp,
-                        Color.White
+                        if (showFocusOutline) 2.dp else 0.dp,
+                        if (showFocusOutline) Color.White else Color.Transparent
                     ),
                     shape = focusedCardShape
                 )
@@ -246,7 +322,7 @@ fun SaabTvCard(
             val imageRequest = remember(posterUrl) {
                 ImageRequest.Builder(context)
                     .data(posterUrl)
-                    .crossfade(false)
+                    .crossfade(120)
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
                     .scale(Scale.FILL)
@@ -260,14 +336,23 @@ fun SaabTvCard(
                     model = imageRequest,
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
+                    onState = { state ->
+                        if (state is coil.compose.AsyncImagePainter.State.Error) posterUnavailable = true
+                        if (state is coil.compose.AsyncImagePainter.State.Success) posterUnavailable = false
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(cardShape)
                         .background(MaterialTheme.colorScheme.surface)
                 )
 
+                if (posterUrl.isNullOrBlank() || posterUnavailable) {
+                    TitleInitialArtwork(title)
+                }
+
                 // Watched badge — corner triangle with checkmark
                 if (showWatchedBadge) WatchedBadge(Modifier.align(Alignment.TopEnd))
+                if (showWatchlistBadge) WatchlistBadge(Modifier.align(Alignment.TopStart))
 
                 // New episode badge for next-up items
                 if (hasNewEpisode) {
