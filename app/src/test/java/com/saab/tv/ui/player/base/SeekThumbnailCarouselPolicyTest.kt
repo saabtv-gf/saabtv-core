@@ -29,11 +29,29 @@ class SeekThumbnailCarouselPolicyTest {
     }
 
     @Test
+    fun nonPositiveDurationDoesNotClipTheSeekWindowAndInvalidIntervalsClampToOneSecond() {
+        assertEquals(
+            listOf(60_000L, 90_000L, 120_000L, 150_000L, 180_000L),
+            SeekThumbnailCarouselPolicy.positions(120_000L, 0L, 30)
+        )
+        assertEquals(
+            listOf(118_000L, 119_000L, 120_000L, 121_000L, 122_000L),
+            SeekThumbnailCarouselPolicy.positions(120_000L, -1L, 0)
+        )
+        assertEquals(
+            listOf(118_000L, 119_000L, 120_000L, 121_000L, 122_000L),
+            SeekThumbnailCarouselPolicy.positions(120_000L, 0L, -30)
+        )
+    }
+
+    @Test
     fun selectedThumbnailRemainsAtTargetEvenWhenEdgeCardsAreRemoved() {
         val start = SeekThumbnailCarouselPolicy.positions(0L, 180_000L, 30)
         val end = SeekThumbnailCarouselPolicy.positions(180_000L, 180_000L, 30)
         assertEquals(0, SeekThumbnailCarouselPolicy.selectedIndex(start, 0L))
         assertEquals(2, SeekThumbnailCarouselPolicy.selectedIndex(end, 180_000L))
+        assertEquals(1, SeekThumbnailCarouselPolicy.selectedIndex(listOf(0L, 30_000L, 60_000L), 45_000L))
+        assertEquals(0, SeekThumbnailCarouselPolicy.selectedIndex(emptyList(), 45_000L))
     }
 
     @Test
@@ -59,6 +77,14 @@ class SeekThumbnailCarouselPolicyTest {
         assertEquals(
             listOf(null, 0, null),
             SeekThumbnailCarouselPolicy.retainedFrameIndices(listOf(30L, 60L), listOf(null, 30L, 90L))
+        )
+        assertEquals(
+            listOf(null, 2),
+            SeekThumbnailCarouselPolicy.retainedFrameIndices(listOf(null, null, 30L), listOf(null, 30L))
+        )
+        assertEquals(
+            listOf(1),
+            SeekThumbnailCarouselPolicy.retainedFrameIndices(listOf(30L, 30L), listOf(30L))
         )
     }
 }
