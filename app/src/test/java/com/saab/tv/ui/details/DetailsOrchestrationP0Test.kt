@@ -30,7 +30,7 @@ class DetailsOrchestrationP0Test {
     @After fun cleanup() { vm.viewModelScope.cancel(); f.close() }
     private fun load(type: String = "series", id: String = "tt1") {
         vm.loadDetails(type, id, playbackOnly = true)
-        awaitAppState { !vm.state.value.isLoading }
+        awaitAppState { !vm.state.value.isLoading && vm.state.value.resumeStateReady }
     }
     private fun history(id: String, watched: Boolean, time: Long = 1, position: Long = 100_000) = runBlocking {
         f.dao.insertHistory(WatchHistoryEntity(profileId = 1, id = id, title = "Episode", poster = null, type = "series",

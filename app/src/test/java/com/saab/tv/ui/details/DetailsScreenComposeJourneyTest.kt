@@ -126,7 +126,9 @@ class DetailsScreenComposeJourneyTest {
 
         detailsViewModel.loadDetails("series", seriesId, addonBaseUrl = "https://fixture.invalid")
         awaitAppState {
-            !detailsViewModel.state.value.isLoading && detailsViewModel.state.value.contentKey == "series:$seriesId"
+            !detailsViewModel.state.value.isLoading &&
+                detailsViewModel.state.value.resumeStateReady &&
+                detailsViewModel.state.value.contentKey == "series:$seriesId"
         }
         assertEquals(continueEpisode, detailsViewModel.state.value.resumePlaybackId)
         awaitAppState { fixture.api.calls.any { it.contains("/stream/series/$continueEpisode.json") } }
@@ -176,7 +178,9 @@ class DetailsScreenComposeJourneyTest {
     private fun showDetails(type: String, id: String) {
         detailsViewModel.loadDetails(type, id, addonBaseUrl = "https://fixture.invalid")
         awaitAppState {
-            !detailsViewModel.state.value.isLoading && detailsViewModel.state.value.contentKey == "$type:$id"
+            !detailsViewModel.state.value.isLoading &&
+                detailsViewModel.state.value.resumeStateReady &&
+                detailsViewModel.state.value.contentKey == "$type:$id"
         }
         compose.setContent {
             MaterialTheme {
