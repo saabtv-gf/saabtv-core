@@ -107,6 +107,9 @@ fun WatchlistScreen(
     var hasContentFocus by remember { mutableStateOf(false) }
     var previewActive by remember { mutableStateOf(false) }
     var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    var pendingMutationFocusRestore by remember { mutableStateOf(false) }
+    var focusedLibraryAddress by remember { mutableStateOf<String?>(null) }
+    val mutationFocusRequester = remember { FocusRequester() }
     val actionScope = rememberCoroutineScope()
     var statusFilter by rememberSaveable(currentProfile?.id) { mutableStateOf(MyLibraryStatusFilter.ALL) }
     var mediaFilter by rememberSaveable(currentProfile?.id) { mutableStateOf(MyLibraryMediaFilter.ALL) }
@@ -137,6 +140,22 @@ fun WatchlistScreen(
             viewModel.lastFocusedKey,
             viewModel.lastFocusedItemIndex
         )
+    }
+
+    LaunchedEffect(pendingMutationFocusRestore, storedLibrary, restoredFocus?.itemId) {
+        if (!pendingMutationFocusRestore || storedLibrary != viewModel.libraryItems.value) return@LaunchedEffect
+        val targetAddress = restoredFocus?.let { "${it.rowId}:${it.itemId}" }
+        if (targetAddress == null) {
+            entryRequester.requestFocusWhenAttached()
+            pendingMutationFocusRestore = false
+            return@LaunchedEffect
+        }
+        if (mutationFocusRequester.requestFocusWhenAttached(maxFrameAttempts = 60) {
+                focusedLibraryAddress == targetAddress
+            }
+        ) {
+            pendingMutationFocusRestore = false
+        }
     }
 
     LaunchedEffect(currentProfile?.id) { viewModel.setProfileId(currentProfile?.id) }
@@ -251,6 +270,7 @@ fun WatchlistScreen(
                             onFocused = { item, focusKey ->
                                 item?.let {
                                     val itemIndex = focusKeyWithoutRowId(focusKey).substringAfterLast('_').toIntOrNull() ?: 0
+                                    focusedLibraryAddress = "$rowId:${it.canonicalPresentationKey()}"
                                     viewModel.rememberFocusedCard(title, it.canonicalPresentationKey(), itemIndex)
                                 }
                                 previewItem = item
@@ -280,7 +300,8 @@ fun WatchlistScreen(
                             },
                             onWatchedItemShown = { item ->
                                 currentProfile?.id?.let { actionsViewModel.ensureWatchedAlias(it, item) }
-                            }
+                            },
+                            restorationRequester = mutationFocusRequester.takeIf { rowFocus != null }
                         )
                     }
                     Spacer(Modifier.height(120.dp))
@@ -299,10 +320,9 @@ fun WatchlistScreen(
                 val mutationComplete: () -> Unit = {
                     actionScope.launch {
                         viewModel.refreshLibrary()
-                        // The card may have moved to another section (for example,
-                        // Watchlist -> Watched). Restore through the policy-selected
-                        // entry requester after the new rows have been laid out.
-                        entryRequester.requestFocusWhenAttached()
+                        // Compose must observe the new projection before we select the
+                        // policy's destination (the same card may now belong to Watched).
+                        pendingMutationFocusRestore = true
                     }
                 }
                 if (actionSectionTitle == LIBRARY_CONTINUE_WATCHING) {

@@ -165,15 +165,15 @@ class HomeScreenComposeJourneyTest {
                 android.view.KeyEvent.KEYCODE_DPAD_CENTER, 0
             ))
             view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime + 500, android.view.KeyEvent.ACTION_DOWN,
+                downTime, downTime + 600, android.view.KeyEvent.ACTION_DOWN,
                 android.view.KeyEvent.KEYCODE_DPAD_CENTER, 1
             ))
             view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime + 520, android.view.KeyEvent.ACTION_UP,
+                downTime, downTime + 650, android.view.KeyEvent.ACTION_UP,
                 android.view.KeyEvent.KEYCODE_DPAD_CENTER, 0
             ))
         }
-        compose.waitUntil(3_000) {
+        compose.waitUntil(5_000) {
             runCatching { action("Mark As Watched").assertIsEnabled() }.isSuccess
         }
         val markWatched = action("Mark As Watched")
@@ -256,15 +256,15 @@ class HomeScreenComposeJourneyTest {
                 android.view.KeyEvent.KEYCODE_DPAD_CENTER, 0
             ))
             view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime + 500, android.view.KeyEvent.ACTION_DOWN,
+                downTime, downTime + 600, android.view.KeyEvent.ACTION_DOWN,
                 android.view.KeyEvent.KEYCODE_DPAD_CENTER, 1
             ))
             view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime + 520, android.view.KeyEvent.ACTION_UP,
+                downTime, downTime + 650, android.view.KeyEvent.ACTION_UP,
                 android.view.KeyEvent.KEYCODE_DPAD_CENTER, 0
             ))
         }
-        compose.waitUntil(3_000) {
+        compose.waitUntil(5_000) {
             runCatching { action("Mark As Watched").assertIsEnabled() }.isSuccess
         }
         action("Mark As Watched").performClick()

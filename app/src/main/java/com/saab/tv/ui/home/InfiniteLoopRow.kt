@@ -139,6 +139,7 @@ internal fun InfiniteLoopRow(
     onPrepareArtworkItem: (MetaItem) -> Unit = {},
     onWatchedItemShown: (MetaItem) -> Unit = {},
     artworkPrefetchDispatcher: ArtworkPrefetchDispatcher? = null,
+    restorationRequester: FocusRequester? = null,
     verticalEntryRequester: FocusRequester? = null,
     upShelfRequester: FocusRequester? = null,
     downShelfRequester: FocusRequester? = null
@@ -330,6 +331,7 @@ internal fun InfiniteLoopRow(
                         enrichedItems = enrichedItems,
                         effectiveItemWidth = effectiveItemWidth,
                         verticalEntryRequester = verticalEntryRequester,
+                        restorationRequester = restorationRequester,
                         verticalFocusedIndex = focusedItemIndex
                     )
             }
@@ -437,6 +439,7 @@ private fun LinearContent(
     isLandscapeCards: Boolean = false,
     enrichedItems: Map<String, MetaItem> = emptyMap(),
     effectiveItemWidth: Dp = ITEM_WIDTH,
+    restorationRequester: FocusRequester? = null,
     verticalEntryRequester: FocusRequester? = null,
     verticalFocusedIndex: Int = 0
 ) {
@@ -525,6 +528,7 @@ private fun LinearContent(
                         hasNewEpisode = item.hasNewEpisode,
                         landscapeWidth = effectiveItemWidth,
                         onFocused = { onFocused(item, uniqueKey) },
+                        focusRequester = restorationRequester.takeIf { shouldRequestFocus },
                         modifier = Modifier.then(
                             if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                             else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
@@ -547,6 +551,7 @@ private fun LinearContent(
                         showFocusOutline = false,
                         hasNewEpisode = item.hasNewEpisode,
                         onFocused = { onFocused(item, uniqueKey) },
+                        focusRequester = restorationRequester.takeIf { shouldRequestFocus },
                         modifier = Modifier.then(
                             if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                             else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
