@@ -61,9 +61,11 @@ fun HubEditorContent(
     focusRequester: FocusRequester? = null,
     shapeFocusRequester: FocusRequester? = null,
     addCategoryFocusRequester: FocusRequester? = null,
-    manageCategoriesFocusRequester: FocusRequester? = null
+    manageCategoriesFocusRequester: FocusRequester? = null,
+    saveFocusRequester: FocusRequester? = null
 ) {
-    val saveFocusRequester = remember { FocusRequester() }
+    val defaultSaveFocusRequester = remember { FocusRequester() }
+    val effectiveSaveFocusRequester = saveFocusRequester ?: defaultSaveFocusRequester
     val cancelFocusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     var cancelFocused by remember { mutableStateOf(false) }
@@ -108,7 +110,7 @@ fun HubEditorContent(
                     onClick = onSave,
                     modifier = Modifier.weight(1f).then(interceptBackToCancel),
                     enabled = saveEnabled,
-                    focusRequester = saveFocusRequester
+                    focusRequester = effectiveSaveFocusRequester
                 )
             }
         }
@@ -186,7 +188,7 @@ fun HubEditorContent(
                 onClick = onManageCategories, 
                 modifier = Modifier.fillMaxWidth().alpha(if (categoryCount > 0) 1f else 0.5f).then(interceptBackToCancel).onPreviewKeyEvent {
                     if (it.key == Key.DirectionDown && it.type == KeyEventType.KeyDown) {
-                        saveFocusRequester.requestFocus()
+                        effectiveSaveFocusRequester.requestFocus()
                         true
                     } else false
                 },

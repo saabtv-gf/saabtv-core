@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.*
@@ -30,6 +31,7 @@ class DiagnosticsFocusTvJourneyTest {
             override fun getFilesDir() = File(directory, "files").apply { mkdirs() }
             override fun getCacheDir() = File(directory, "cache").apply { mkdirs() }
         }
+        val refreshFocusRequester = FocusRequester()
         try {
             val eventLog = File(context.filesDir, "app_diagnostics/events.log")
             eventLog.parentFile?.mkdirs()
@@ -38,13 +40,16 @@ class DiagnosticsFocusTvJourneyTest {
             compose.setContent {
                 CompositionLocalProvider(LocalContext provides context) {
                     MaterialTheme {
-                        PlaybackDiagnosticsSettings(onGoBack = {})
+                        PlaybackDiagnosticsSettings(
+                            onGoBack = {},
+                            refreshFocusRequester = refreshFocusRequester
+                        )
                     }
                 }
             }
             repeat(3) {
-                compose.onNodeWithText("Refresh")
-                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+                compose.onNodeWithText("Refresh").assertIsDisplayed()
+                compose.runOnIdle { assertTrue(refreshFocusRequester.requestFocus()) }
                 compose.waitUntil(5_000) {
                     runCatching { compose.onNodeWithText("Refresh").assertIsFocused(); true }
                         .getOrDefault(false)

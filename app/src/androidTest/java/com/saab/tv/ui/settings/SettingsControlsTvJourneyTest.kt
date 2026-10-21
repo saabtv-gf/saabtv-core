@@ -2,15 +2,14 @@ package com.saab.tv.ui.settings
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.pressKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -30,6 +29,9 @@ class SettingsControlsTvJourneyTest {
 
     @Test fun hubEditorKeepsFooterActionsVisibleAndDpadSelectable() {
         val selectedShape = mutableStateOf(HubShape.HORIZONTAL)
+        val shapeRequester = FocusRequester()
+        val addCategoryRequester = FocusRequester()
+        val saveRequester = FocusRequester()
         var saved = false
 
         compose.setContent {
@@ -44,7 +46,10 @@ class SettingsControlsTvJourneyTest {
                     onAddCategory = {},
                     onManageCategories = {},
                     onCancel = {},
-                    onSave = { saved = true }
+                    onSave = { saved = true },
+                    shapeFocusRequester = shapeRequester,
+                    addCategoryFocusRequester = addCategoryRequester,
+                    saveFocusRequester = saveRequester
                 )
             }
         }
@@ -56,7 +61,7 @@ class SettingsControlsTvJourneyTest {
         horizontal.performScrollTo()
         val vertical = compose.onNodeWithText("Portrait")
         val square = compose.onNodeWithText("Square")
-        horizontal.performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.runOnIdle { assertTrue(shapeRequester.requestFocus()) }
         compose.waitUntil(5_000) {
             runCatching { horizontal.assertIsFocused(); true }.getOrDefault(false)
         }
@@ -73,12 +78,14 @@ class SettingsControlsTvJourneyTest {
         compose.runOnIdle { assertEquals(HubShape.SQUARE, selectedShape.value) }
 
         val save = compose.onNodeWithText("Save")
-        save.assertIsDisplayed().performSemanticsAction(SemanticsActions.RequestFocus)
+        save.assertIsDisplayed()
+        compose.runOnIdle { assertTrue(saveRequester.requestFocus()) }
         save.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertTrue(saved) }
     }
 
     @Test fun backFromDialogBodyMovesFocusToCancelBeforeInvokingIt() {
+        val addCategoryRequester = FocusRequester()
         var cancelled = false
         compose.setContent {
             com.saab.tv.ui.navigation.BackNavigationHost(onUnhandledBack = {}) {
@@ -89,18 +96,19 @@ class SettingsControlsTvJourneyTest {
                         onNameChange = {},
                         shape = HubShape.HORIZONTAL,
                         onShapeChange = {},
-                        categoryCount = 0,
+                        categoryCount = 1,
                         onAddCategory = {},
                         onManageCategories = {},
                         onCancel = { cancelled = true },
-                        onSave = {}
+                        onSave = {},
+                        addCategoryFocusRequester = addCategoryRequester
                     )
                 }
             }
         }
 
         val addCategory = compose.onNodeWithText("Add Category")
-        addCategory.performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.runOnIdle { assertTrue(addCategoryRequester.requestFocus()) }
         compose.waitUntil(5_000) {
             runCatching { addCategory.assertIsFocused(); true }.getOrDefault(false)
         }

@@ -554,7 +554,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content")
+        requestNodeFocus("Content", content)
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionLeft) }
         assertNodeFocused("Home")
 
@@ -594,7 +594,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content")
+        requestNodeFocus("Content", content)
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionUp) }
         assertNodeFocused("Home")
 
@@ -654,8 +654,12 @@ class NavigationShellFocusTvJourneyTest {
         }
     }
 
-    private fun requestNodeFocus(label: String) {
-        compose.onNodeWithText(label).performSemanticsAction(SemanticsActions.RequestFocus)
+    private fun requestNodeFocus(label: String, requester: FocusRequester = contentRequester) {
+        // Request focus through the requester attached to this target. The
+        // semantics action can return false for these TV button nodes even
+        // though they are attached and focusable on the emulator.
+        compose.onNodeWithText(label).assertExists()
+        compose.runOnIdle { assertTrue("$label should accept focus", requester.requestFocus()) }
         assertNodeFocused(label)
     }
 
