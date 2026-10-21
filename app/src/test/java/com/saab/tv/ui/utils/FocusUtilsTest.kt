@@ -80,7 +80,7 @@ class FocusUtilsTest {
     }
 
     @Test
-    fun safelyReportsWhenAnAttachedFocusRequestIsRejected() {
+    fun safelyDispatchesAnAttachedRequestEvenWhenTheTargetCannotTakeFocus() {
         val blocked = FocusRequester()
         compose.setContent {
             Box(
@@ -92,7 +92,9 @@ class FocusUtilsTest {
             )
         }
 
-        compose.runOnIdle { assertFalse(blocked.requestFocusSafely()) }
+        // Compose's requestFocus() is Unit-returning and silently ignores canFocus=false;
+        // this helper can report dispatch exceptions, but not the eventual focus outcome.
+        compose.runOnIdle { assertTrue(blocked.requestFocusSafely()) }
         compose.onNodeWithTag("blocked-target").assertIsNotFocused()
     }
 

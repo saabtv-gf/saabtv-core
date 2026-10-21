@@ -6,7 +6,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.runtime.withFrameNanos
 
-/** Dispatch a focus request and report whether Compose accepted it. */
+/** Dispatch a focus request and report whether Compose threw while handling it. */
 fun FocusRequester.requestFocusSafely(): Boolean = runCatching {
     requestFocus()
 }.isSuccess
