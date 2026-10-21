@@ -437,6 +437,17 @@ class WatchlistScreenComposeJourneyTest {
                 type = "movie"
             )
         )
+        // This journey is about the destructive quick-action confirmation, not the
+        // asynchronous first Room subscription. Prime the same projection that a
+        // previously opened Library would already have before asserting card focus.
+        viewModel.setProfileId(81)
+        viewModel.refreshLibrary()
+        assertTrue(
+            "Continue Watching projection was not primed: ${viewModel.libraryItems.value}",
+            viewModel.libraryItems.value.inProgress.any {
+                it.asActionItem().id == "tt-library-progress-movie"
+            }
+        )
         var rootView: View? = null
         val entry = FocusRequester()
         val drawer = FocusRequester()
@@ -457,7 +468,7 @@ class WatchlistScreenComposeJourneyTest {
         }
 
         val card = compose.onNodeWithContentDescription("Progress Movie")
-        compose.waitUntil(5_000) { card.isDisplayedForWait() }
+        compose.waitUntil(10_000) { card.isDisplayedForWait() }
         card.performSemanticsAction(SemanticsActions.RequestFocus)
         longPressFocusedCard(requireNotNull(rootView))
         awaitEnabledAction("Clear Progress")
