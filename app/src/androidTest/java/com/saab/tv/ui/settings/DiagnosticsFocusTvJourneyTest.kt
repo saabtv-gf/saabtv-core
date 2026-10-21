@@ -3,7 +3,6 @@ package com.saab.tv.ui.settings
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalContext
@@ -36,19 +35,16 @@ class DiagnosticsFocusTvJourneyTest {
             eventLog.parentFile?.mkdirs()
             eventLog.writeText("${System.currentTimeMillis()}\tFATAL\tApplication\tUncaught Exception\tfixture crash\n")
             assertTrue(AppDiagnostics.report(context).events.any { it.event == "Uncaught Exception" })
-            val refreshRequester = FocusRequester()
             compose.setContent {
                 CompositionLocalProvider(LocalContext provides context) {
                     MaterialTheme {
-                        PlaybackDiagnosticsSettings(
-                            onGoBack = {},
-                            refreshFocusRequester = refreshRequester
-                        )
+                        PlaybackDiagnosticsSettings(onGoBack = {})
                     }
                 }
             }
             repeat(3) {
-                compose.runOnIdle { refreshRequester.requestFocus() }
+                compose.onNodeWithText("Refresh")
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
                 compose.waitUntil(5_000) {
                     runCatching { compose.onNodeWithText("Refresh").assertIsFocused(); true }
                         .getOrDefault(false)

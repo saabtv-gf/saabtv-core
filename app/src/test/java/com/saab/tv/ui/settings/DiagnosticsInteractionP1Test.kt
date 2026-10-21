@@ -24,7 +24,7 @@ class DiagnosticsInteractionP1Test {
         AppDiagnostics.clear(context); AppDiagnostics.setBasicEnabled(context,false); PlaybackDiagnostics.setEnabled(context,false)
     }
     @After fun cleanup() { AppDiagnostics.clear(RuntimeEnvironment.getApplication()) }
-    private fun show() { compose.setContent { MaterialTheme { PlaybackDiagnosticsSettings {} } } }
+    private fun show() { compose.setContent { MaterialTheme { PlaybackDiagnosticsSettings(onGoBack = {}) } } }
 
     @Test fun visibleDiagnosticRowsDoNotRequestParentScroll() {
         assertFalse(shouldScrollDiagnosticItemIntoViewport(120, 80, 0, 720))

@@ -71,12 +71,11 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun PlaybackDiagnosticsSettings(
-    onGoBack: () -> Unit,
-    refreshFocusRequester: FocusRequester? = null
+    onGoBack: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val firstButtonRequester = refreshFocusRequester ?: remember { FocusRequester() }
+    val firstButtonRequester = remember { FocusRequester() }
     val exportRequester = remember { FocusRequester() }
     val clearRequester = remember { FocusRequester() }
     val basicRequester = remember { FocusRequester() }
