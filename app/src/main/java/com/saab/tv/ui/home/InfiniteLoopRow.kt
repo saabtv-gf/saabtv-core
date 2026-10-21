@@ -1057,9 +1057,11 @@ private fun InfiniteViewMoreCard(
     Box(
         modifier = modifier
             .width(cardWidth)
-            .focusProperties {
-                left = previousCardFocusRequester ?: FocusRequester.Cancel
-            }
+            .then(
+                previousCardFocusRequester?.let { previous ->
+                    Modifier.focusProperties { left = previous }
+                } ?: Modifier
+            )
             .graphicsLayer {
                 clip = false
                 alpha = animatedAlpha

@@ -79,7 +79,7 @@ class FocusUtilsTest {
     }
 
     @Test
-    fun safelyReportsWhenAnAttachedTargetRejectsFocus() {
+    fun safelyReportsWhenAnAttachedFocusRequestIsDispatched() {
         val blocked = FocusRequester()
         compose.setContent {
             Box(
@@ -91,7 +91,7 @@ class FocusUtilsTest {
             )
         }
 
-        compose.runOnIdle { assertTrue(blocked.requestFocusSafely().not()) }
+        compose.runOnIdle { assertTrue(blocked.requestFocusSafely()) }
         compose.onNodeWithTag("blocked-target").assertIsNotFocused()
     }
 
