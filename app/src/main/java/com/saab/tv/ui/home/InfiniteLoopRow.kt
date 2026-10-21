@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -772,6 +773,7 @@ private fun InfiniteGridContent(
 
                 is GridRowItem.ViewMoreItem -> {
                     val uniqueKey = homeCardFocusKey(rowIndex, focusRowId, "viewmore", scrollIndex)
+                    val previousCardFocusRequester = cardFocusRequesters[scrollIndex - 1]
                     
                     InfiniteViewMoreCard(
                         isTopNav = isTopNav,
@@ -780,7 +782,7 @@ private fun InfiniteGridContent(
                         repeatGate = repeatGate,
                         scrollIndex = scrollIndex,
                         currentFocusedIndex = currentFocusedIndex,
-                        previousCardFocusRequester = cardFocusRequesters[scrollIndex - 1],
+                        previousCardFocusRequester = previousCardFocusRequester,
                         onClick = onViewMore,
                         onFocused = {
                             currentFocusedIndex = scrollIndex
@@ -965,10 +967,16 @@ private fun FiniteGridContent(
                 }
 
                 is GridRowItem.ViewMoreItem -> {
+                    val previousCardFocusRequester = cardFocusRequesters.getOrNull(index - 1)
                     Box(
                         modifier = Modifier
                         .width(effectiveItemWidth)
                             .graphicsLayer { clip = false }
+                            .then(
+                                previousCardFocusRequester?.let { previous ->
+                                    Modifier.focusProperties { left = previous }
+                                } ?: Modifier
+                            )
                             .onPreviewKeyEvent { keyEvent ->
                         // Inline player handles its own action-row navigation.
                                 if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
@@ -977,9 +985,7 @@ private fun FiniteGridContent(
                                     when (keyEvent.key) {
                                         Key.DirectionRight -> true // Block RIGHT at ViewMore (end of list)
                                         Key.DirectionLeft -> {
-                                            cardFocusRequesters.getOrNull(index - 1)?.let { requester ->
-                                                runCatching { requester.requestFocus(); true }.getOrDefault(false)
-                                            } ?: false
+                                            previousCardFocusRequester?.requestFocusSafely() ?: false
                                         }
                                         Key.DirectionUp -> {
                                             if (isTopNav) {
@@ -1051,6 +1057,9 @@ private fun InfiniteViewMoreCard(
     Box(
         modifier = modifier
             .width(cardWidth)
+            .focusProperties {
+                left = previousCardFocusRequester ?: FocusRequester.Cancel
+            }
             .graphicsLayer {
                 clip = false
                 alpha = animatedAlpha
@@ -1062,9 +1071,7 @@ private fun InfiniteViewMoreCard(
                 if (keyEvent.type == KeyEventType.KeyDown) {
                     when (keyEvent.key) {
                         Key.DirectionLeft -> {
-                            previousCardFocusRequester?.let { requester ->
-                                runCatching { requester.requestFocus(); true }.getOrDefault(false)
-                            } ?: false
+                            previousCardFocusRequester?.requestFocusSafely() ?: false
                         }
                         Key.DirectionRight -> {
                             // Let a fresh press advance into the loop; only held-key repeats stay at View More.

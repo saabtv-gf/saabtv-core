@@ -48,6 +48,18 @@ class ComponentInteractionRegressionTest {
         assertTrue(suppression.shouldPlay())
     }
 
+    @Test fun focusHandoffSuppressesEveryIntermediateFocusCueUntilDestinationSettles() {
+        val suppression = FocusSoundSuppression()
+        suppression.beginHandoff()
+
+        assertFalse(suppression.shouldPlay()) // inline control loses focus
+        assertFalse(suppression.shouldPlay()) // overlay anchor regains focus
+        assertFalse(suppression.shouldPlay()) // destination focus callback
+
+        suppression.endHandoff()
+        assertTrue(suppression.shouldPlay()) // one explicitly requested destination cue
+    }
+
     @Test fun setupButtonLabelUsesHighContrastColorForEachActionState() {
         val onPrimary = Color(0xFF112233)
         val onError = Color(0xFF445566)

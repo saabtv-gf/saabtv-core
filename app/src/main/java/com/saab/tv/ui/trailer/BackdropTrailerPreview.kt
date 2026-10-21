@@ -218,23 +218,26 @@ fun BackdropTrailerPreview(
             },
             onDismiss = { dismiss() },
             onNavigate = { direction ->
-                // Dismissing the overlay first can restore focus to its anchor
-                // card immediately. Suppress that intermediate cue, then let
-                // the destination card play the single navigation sound.
-                com.saab.tv.ui.components.suppressNextCardFocusSound()
+                // Focus can briefly visit the anchor while the trailer overlay
+                // is removed. Suppress every cue during that handoff, then play
+                // exactly one cue for the final destination.
+                com.saab.tv.ui.components.beginCardFocusSoundHandoff()
                 dismiss(false, "card-navigation")
                 navigationScope.launch {
+                    var destinationFocused = false
                     try {
-                        // Restore the poster and let its focus settle before
-                        // navigating to the neighboring title card.
                         withFrameNanos { }
                         dismissCallback()
                         withFrameNanos { }
-                        focusManager.moveFocus(direction)
+                        destinationFocused = focusManager.moveFocus(direction)
+                        // Let the destination's focus callback run while cues
+                        // remain suppressed; a manual cue below covers the move.
+                        withFrameNanos { }
                         withFrameNanos { }
                     } finally {
-                        com.saab.tv.ui.components.clearCardFocusSoundSuppression()
+                        com.saab.tv.ui.components.endCardFocusSoundHandoff()
                     }
+                    if (destinationFocused) com.saab.tv.ui.components.playCardFocusSoundOnce()
                 }
             })
     }

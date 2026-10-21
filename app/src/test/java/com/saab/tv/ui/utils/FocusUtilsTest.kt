@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
@@ -75,6 +76,23 @@ class FocusUtilsTest {
         compose.waitUntil(1_000) { result.get() != null }
         assertTrue(result.get() == true)
         compose.onNodeWithTag("attached-target").assertIsFocused()
+    }
+
+    @Test
+    fun safelyReportsWhenAnAttachedTargetRejectsFocus() {
+        val blocked = FocusRequester()
+        compose.setContent {
+            Box(
+                Modifier.size(100.dp)
+                    .focusRequester(blocked)
+                    .focusProperties { canFocus = false }
+                    .focusable()
+                    .testTag("blocked-target")
+            )
+        }
+
+        compose.runOnIdle { assertTrue(blocked.requestFocusSafely().not()) }
+        compose.onNodeWithTag("blocked-target").assertIsNotFocused()
     }
 
     @Test

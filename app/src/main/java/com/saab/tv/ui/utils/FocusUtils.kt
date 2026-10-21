@@ -6,12 +6,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.runtime.withFrameNanos
 
-/** Request and verify focus without allowing a detached requester to break a TV interaction. */
+/** Request focus without capturing it, and report whether Compose accepted the request. */
 fun FocusRequester.requestFocusSafely(): Boolean = runCatching {
     requestFocus()
-    val focused = captureFocus()
-    if (focused) freeFocus()
-    focused
 }.getOrDefault(false)
 
 /** Retry focus only while Compose is attaching the destination, not on wall-clock sleeps. */

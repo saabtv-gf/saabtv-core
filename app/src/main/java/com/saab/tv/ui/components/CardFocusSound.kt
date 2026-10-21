@@ -32,16 +32,24 @@ internal object CardFocusSoundPolicy {
 
 internal class FocusSoundSuppression {
     private var suppressNext = false
+    private var handoffDepth = 0
 
     @Synchronized
     fun suppressNext() { suppressNext = true }
 
     @Synchronized
     fun shouldPlay(): Boolean {
+        if (handoffDepth > 0) return false
         if (!suppressNext) return true
         suppressNext = false
         return false
     }
+
+    @Synchronized
+    fun beginHandoff() { handoffDepth++ }
+
+    @Synchronized
+    fun endHandoff() { if (handoffDepth > 0) handoffDepth-- }
 
     @Synchronized
     fun clear() { suppressNext = false }
@@ -105,6 +113,8 @@ private object CardFocusSoundPlayer {
 
     fun suppressNextFocusSound() = focusSoundSuppression.suppressNext()
     fun clearFocusSoundSuppression() = focusSoundSuppression.clear()
+    fun beginFocusSoundHandoff() = focusSoundSuppression.beginHandoff()
+    fun endFocusSoundHandoff() = focusSoundSuppression.endHandoff()
 
     private fun playOnWorker() {
         val now = SystemClock.uptimeMillis()
@@ -124,6 +134,9 @@ private object CardFocusSoundPlayer {
 /** Used when an overlay restores its anchor before handing focus to a neighbor. */
 internal fun suppressNextCardFocusSound() = CardFocusSoundPlayer.suppressNextFocusSound()
 internal fun clearCardFocusSoundSuppression() = CardFocusSoundPlayer.clearFocusSoundSuppression()
+internal fun beginCardFocusSoundHandoff() = CardFocusSoundPlayer.beginFocusSoundHandoff()
+internal fun endCardFocusSoundHandoff() = CardFocusSoundPlayer.endFocusSoundHandoff()
+internal fun playCardFocusSoundOnce() = CardFocusSoundPlayer.play()
 
 /** Plays SaabTv's own media-stream navigation cue whenever a card gains focus. */
 @Composable

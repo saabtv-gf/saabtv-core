@@ -156,6 +156,53 @@ class BrowseShelfFocusTvJourneyTest {
         }
     }
 
+    @Test fun leftFromFiniteViewMoreTargetsTheImmediatelyPreviousCard() {
+        assertViewMoreLeftTargetsPreviousCard(infiniteScrollingEnabled = false)
+    }
+
+    @Test fun leftFromInfiniteViewMoreTargetsTheImmediatelyPreviousCard() {
+        assertViewMoreLeftTargetsPreviousCard(infiniteScrollingEnabled = true)
+    }
+
+    private fun assertViewMoreLeftTargetsPreviousCard(infiniteScrollingEnabled: Boolean) {
+        val items = (0..4).map { index ->
+            MetaItem(id = "view-more-$index", type = "movie", name = "View More title $index")
+        }
+        compose.setContent {
+            MaterialTheme {
+                InfiniteLoopRow(
+                    startPadding = 48.dp,
+                    isTopNav = false,
+                    rowIndex = 0,
+                    title = "View More focus",
+                    items = items,
+                    onMovieClick = {},
+                    onViewMore = {},
+                    onFocused = { _, _ -> },
+                    entryRequester = FocusRequester(),
+                    drawerRequester = FocusRequester(),
+                    locallyFocusedItemId = null,
+                    isGlobalFocusPresent = true,
+                    isFirstRow = true,
+                    isInfiniteLoopEnabled = true,
+                    isInfiniteScrollingEnabled = infiniteScrollingEnabled,
+                    visibleItemCount = items.size,
+                    repeatGate = remember { DpadRepeatGate() },
+                    artworkPrefetchDispatcher = remember { ArtworkPrefetchDispatcher({}, {}, {}) }
+                )
+            }
+        }
+
+        val lastTitle = compose.onNode(hasClickAction() and hasContentDescription("View More title 4"))
+        lastTitle.performSemanticsAction(SemanticsActions.RequestFocus)
+        lastTitle.performKeyInput { pressKey(Key.DirectionRight) }
+        val viewMore = compose.onNode(hasClickAction() and hasText("View More"))
+        viewMore.assertIsFocused()
+
+        viewMore.performKeyInput { pressKey(Key.DirectionLeft) }
+        lastTitle.assertIsFocused()
+    }
+
     private fun assertAnyMatchingNodeFocused(matcher: SemanticsMatcher) {
         compose.waitUntil(5_000) {
             compose.onAllNodes(matcher).fetchSemanticsNodes().any { node ->
