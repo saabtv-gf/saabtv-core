@@ -31,6 +31,22 @@ class SingleFlightTest {
         }
     }
 
+    @Test fun laterCallerCanRetryACompletedNullableMiss() = runBlocking {
+        val sharedScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val singleFlight = SingleFlight<String, String?>(sharedScope)
+            var loads = 0
+
+            repeat(3) {
+                assertNull(singleFlight.await("not-found") { loads++; null })
+            }
+
+            assertEquals("completed misses are not cached as active work", 3, loads)
+        } finally {
+            sharedScope.cancel()
+        }
+    }
+
     @Test fun identicalCallersShareWorkAndOneCancellationDoesNotCancelTheOther() = runBlocking {
         val sharedScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {

@@ -5,14 +5,14 @@ import android.content.SharedPreferences
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 
-data class TrailerPreviewSettings(val enabled: Boolean = true, val delaySeconds: Int = 5,
+data class TrailerPreviewSettings(val enabled: Boolean = true, val delaySeconds: Int = 10,
     val muted: Boolean = false, val presentation: String = "inline")
 
 object TrailerPreviewPreferences {
     fun read(context: Context, id: Int): TrailerPreviewSettings {
         val p = EpisodeSpoilerPreferences.preferences(context)
         return TrailerPreviewSettings(p.getBoolean("trailer_preview_$id", true),
-            p.getInt("trailer_delay_$id", 5).takeIf { it in listOf(3, 5, 10, 15) } ?: 5,
+            p.getInt("trailer_delay_$id", 10).takeIf { it in listOf(3, 5, 10, 15) } ?: 10,
             p.getBoolean("trailer_muted_$id", false),
             p.getString("trailer_presentation_$id", "inline")?.takeIf { it in listOf("inline", "fullscreen") } ?: "inline")
     }

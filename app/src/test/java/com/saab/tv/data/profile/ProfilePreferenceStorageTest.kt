@@ -14,7 +14,9 @@ import org.robolectric.annotation.Config
 class ProfilePreferenceStorageTest {
     @Test fun trailerDefaultsAndExplicitSettingsRoundTrip() {
         val context = RuntimeEnvironment.getApplication()
-        assertEquals(TrailerPreviewSettings(), TrailerPreviewPreferences.read(context, 1))
+        val defaults = TrailerPreviewPreferences.read(context, 1)
+        assertEquals(TrailerPreviewSettings(), defaults)
+        assertEquals(10, defaults.delaySeconds)
         assertFalse(TrailerPreviewPreferences.read(context, 1).muted)
         val settings = TrailerPreviewSettings(false, 15, false, "fullscreen")
         TrailerPreviewPreferences.set(context, 1, settings)

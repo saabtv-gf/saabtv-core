@@ -71,6 +71,7 @@ import com.saab.tv.ui.trailer.LocalManualTrailerLauncher
 import com.saab.tv.data.profile.rememberTrailerPreviewSettings
 import com.saab.tv.ui.utils.requestFocusOrFallback
 import com.saab.tv.ui.utils.requestFocusSafely
+import com.saab.tv.ui.utils.requestFocusWhenAttached
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -298,8 +299,10 @@ fun WatchlistScreen(
                 val mutationComplete: () -> Unit = {
                     actionScope.launch {
                         viewModel.refreshLibrary()
-                        withFrameNanos { }
-                        originalPosterFocus.requestFocusOrFallback(entryRequester)
+                        // The card may have moved to another section (for example,
+                        // Watchlist -> Watched). Restore through the policy-selected
+                        // entry requester after the new rows have been laid out.
+                        entryRequester.requestFocusWhenAttached()
                     }
                 }
                 if (actionSectionTitle == LIBRARY_CONTINUE_WATCHING) {

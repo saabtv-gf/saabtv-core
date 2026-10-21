@@ -22,18 +22,27 @@ internal class SingleFlight<K : Any, V>(
 
     suspend fun await(key: K, load: suspend () -> V): V {
         val flight = synchronized(lock) {
-            flights[key] ?: if (flights.size < capacity.coerceAtLeast(1)) {
-                scope.async(start = CoroutineStart.LAZY) { permits.withPermit { load() } }
-                    .also { deferred ->
-                        flights[key] = deferred
-                        deferred.invokeOnCompletion {
-                            synchronized(lock) {
-                                if (flights[key] === deferred) flights.remove(key)
+            val current = flights[key]
+            if (current != null && !current.isCompleted) {
+                current
+            } else {
+                // Completion callbacks run after the deferred enters the completed state.
+                // A caller can arrive in that small window and otherwise reuse a stale
+                // null/failure result instead of retrying the load.
+                if (current != null) flights.remove(key)
+                if (flights.size < capacity.coerceAtLeast(1)) {
+                    scope.async(start = CoroutineStart.LAZY) { permits.withPermit { load() } }
+                        .also { deferred ->
+                            flights[key] = deferred
+                            deferred.invokeOnCompletion {
+                                synchronized(lock) {
+                                    if (flights[key] === deferred) flights.remove(key)
+                                }
                             }
+                            deferred.start()
                         }
-                        deferred.start()
-                    }
-            } else null
+                } else null
+            }
         }
         // Under saturation, keep the registry bounded and still respect the same concurrency
         // limit. Normal identical keys are coalesced; overflow callers don't grow retained state.
