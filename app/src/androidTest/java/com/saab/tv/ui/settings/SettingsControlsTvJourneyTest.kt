@@ -61,7 +61,7 @@ class SettingsControlsTvJourneyTest {
         horizontal.performScrollTo()
         val vertical = compose.onNodeWithText("Portrait")
         val square = compose.onNodeWithText("Square")
-        compose.runOnIdle { assertTrue(shapeRequester.requestFocus()) }
+        compose.runOnIdle { shapeRequester.requestFocus() }
         compose.waitUntil(5_000) {
             runCatching { horizontal.assertIsFocused(); true }.getOrDefault(false)
         }
@@ -79,7 +79,7 @@ class SettingsControlsTvJourneyTest {
 
         val save = compose.onNodeWithText("Save")
         save.assertIsDisplayed()
-        compose.runOnIdle { assertTrue(saveRequester.requestFocus()) }
+        compose.runOnIdle { saveRequester.requestFocus() }
         save.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertTrue(saved) }
     }
@@ -108,7 +108,7 @@ class SettingsControlsTvJourneyTest {
         }
 
         val addCategory = compose.onNodeWithText("Add Category")
-        compose.runOnIdle { assertTrue(addCategoryRequester.requestFocus()) }
+        compose.runOnIdle { addCategoryRequester.requestFocus() }
         compose.waitUntil(5_000) {
             runCatching { addCategory.assertIsFocused(); true }.getOrDefault(false)
         }

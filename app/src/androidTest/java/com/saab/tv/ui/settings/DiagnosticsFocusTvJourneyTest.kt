@@ -49,7 +49,7 @@ class DiagnosticsFocusTvJourneyTest {
             }
             repeat(3) {
                 compose.onNodeWithText("Refresh").assertIsDisplayed()
-                compose.runOnIdle { assertTrue(refreshFocusRequester.requestFocus()) }
+                compose.runOnIdle { refreshFocusRequester.requestFocus() }
                 compose.waitUntil(5_000) {
                     runCatching { compose.onNodeWithText("Refresh").assertIsFocused(); true }
                         .getOrDefault(false)

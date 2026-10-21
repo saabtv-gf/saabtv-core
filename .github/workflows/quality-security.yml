@@ -25,7 +25,7 @@ jobs:
       - name: Test phone companion pages
         run: node --test web/remote/test/*.test.mjs
       - name: Unit Tests And Release Lint
-        run: ./gradlew :app:testDebugUnitTest :app:lintRelease
+        run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintRelease
       - name: Retain Unit And Lint Reports
         if: always()
         uses: actions/upload-artifact@v4

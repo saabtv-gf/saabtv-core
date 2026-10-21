@@ -659,7 +659,7 @@ class NavigationShellFocusTvJourneyTest {
         // semantics action can return false for these TV button nodes even
         // though they are attached and focusable on the emulator.
         compose.onNodeWithText(label).assertExists()
-        compose.runOnIdle { assertTrue("$label should accept focus", requester.requestFocus()) }
+        compose.runOnIdle { requester.requestFocus() }
         assertNodeFocused(label)
     }
 
