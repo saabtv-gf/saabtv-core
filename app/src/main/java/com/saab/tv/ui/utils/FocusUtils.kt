@@ -9,7 +9,7 @@ import androidx.compose.runtime.withFrameNanos
 /** Dispatch a focus request and report whether Compose accepted it. */
 fun FocusRequester.requestFocusSafely(): Boolean = runCatching {
     requestFocus()
-}.getOrDefault(false)
+}.isSuccess
 
 /** Retry focus only while Compose is attaching the destination, not on wall-clock sleeps. */
 suspend fun FocusRequester.requestFocusWhenAttached(
