@@ -4,7 +4,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -17,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -41,6 +41,8 @@ import com.saab.tv.ui.addons.VoidInput
 import com.saab.tv.ui.components.SaabMotion
 import com.saab.tv.ui.navigation.isInitialBackPress
 import com.saab.tv.ui.navigation.isBackOrEscape
+import com.saab.tv.ui.utils.requestFocusWhenAttached
+import kotlinx.coroutines.launch
 
 @Composable
 fun HubEditorContent(
@@ -62,12 +64,18 @@ fun HubEditorContent(
 ) {
     val saveFocusRequester = remember { FocusRequester() }
     val cancelFocusRequester = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
     var cancelFocused by remember { mutableStateOf(false) }
+    fun focusCancel() {
+        scope.launch {
+            cancelFocusRequester.requestFocusWhenAttached(hasFocus = { cancelFocused })
+        }
+    }
     val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction {
-        if (cancelFocused) onCancel() else cancelFocusRequester.requestFocus()
+        if (cancelFocused) onCancel() else focusCancel()
     }
     com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Modal) {
-        if (cancelFocused) onCancel() else cancelFocusRequester.requestFocus()
+        if (cancelFocused) onCancel() else focusCancel()
     }
 
     // Helper modifier to redirect Back press to Cancel button
@@ -224,9 +232,8 @@ private fun RowScope.HubShapeItem(
             .clip(RoundedCornerShape(8.dp)) // Match VoidButton radius
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(8.dp))
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable(interactionSource = interactionSource)
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .padding(horizontal = 4.dp), // Minimal padding to prevent text touching edges
         contentAlignment = Alignment.Center
     ) {

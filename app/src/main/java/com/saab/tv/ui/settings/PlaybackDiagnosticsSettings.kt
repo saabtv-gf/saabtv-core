@@ -30,7 +30,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +43,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.nativeKeyCode
 import com.saab.tv.ui.components.scrollToItemUsingSaabMotion
+import com.saab.tv.ui.utils.requestFocusWhenAttached
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -115,10 +115,9 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
         scope.launch {
             try {
                 listState.scrollToItem(index)
-                withFrameNanos { }
-                if (listState.layoutInfo.visibleItemsInfo.any { it.index == index }) {
-                    requester.requestFocus()
-                }
+                requester.requestFocusWhenAttached(hasFocus = {
+                    listState.layoutInfo.visibleItemsInfo.any { it.index == index }
+                })
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: IllegalStateException) {

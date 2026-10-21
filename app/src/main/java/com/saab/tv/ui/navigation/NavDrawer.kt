@@ -83,7 +83,11 @@ fun NavDrawer(
     val navigationBlocked = !navigationActive || hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
         com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
     val isMenuFocused = drawerHasFocus && !navigationBlocked
-    val focusGuard = rememberNavigationFocusGuard(navigationBlocked, Key.DirectionLeft, onClose)
+    val focusRecoveryBlocked = hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
+        com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
+    val focusGuard = rememberNavigationFocusGuard(
+        navigationBlocked, Key.DirectionLeft, onClose, focusRecoveryBlocked
+    )
     val boundaryPressGate = remember { DpadFreshPressGate() }
     val focusHandoffRegistry = LocalNavigationFocusHandoffRegistry.current
     val focusHandoff: (KeyEvent?) -> Boolean = remember(focusGuard, currentDestination, drawerRequesters) {

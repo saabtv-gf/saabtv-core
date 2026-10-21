@@ -29,6 +29,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
@@ -127,26 +128,37 @@ class BrowseShelfFocusTvJourneyTest {
         }
 
         val root = compose.onRoot()
-        val firstCard = compose.onNode(hasClickAction() and hasContentDescription("View More shelf title 0"))
+        // The infinite shelf renders the first logical item in multiple generations.
+        val firstCard = compose.onAllNodes(
+            hasClickAction() and hasContentDescription("View More shelf title 0")
+        )[0]
         firstCard.performSemanticsAction(SemanticsActions.RequestFocus)
         firstCard.assertIsFocused()
         repeat(5) {
             root.performKeyInput { pressKey(Key.DirectionRight) }
             compose.waitForIdle()
         }
-        val viewMore = compose.onNode(hasClickAction() and hasText("View More"))
-        viewMore.assertIsFocused()
+        val viewMore = hasClickAction() and hasText("View More")
+        assertAnyMatchingNodeFocused(viewMore)
 
         root.performKeyInput { pressKey(Key.DirectionLeft) }
-        compose.onNode(hasClickAction() and hasContentDescription("View More shelf title 4")).assertIsFocused()
+        assertAnyMatchingNodeFocused(hasClickAction() and hasContentDescription("View More shelf title 4"))
         root.performKeyInput { pressKey(Key.DirectionRight) }
-        viewMore.assertIsFocused()
+        assertAnyMatchingNodeFocused(viewMore)
 
         root.performKeyInput { pressKey(Key.DirectionRight) }
 
         val nextLoopCard = hasClickAction() and hasContentDescription("View More shelf title 0")
         compose.waitUntil(5_000) {
             compose.onAllNodes(nextLoopCard).fetchSemanticsNodes().any { node ->
+                node.config.contains(SemanticsProperties.Focused) && node.config[SemanticsProperties.Focused]
+            }
+        }
+    }
+
+    private fun assertAnyMatchingNodeFocused(matcher: SemanticsMatcher) {
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(matcher).fetchSemanticsNodes().any { node ->
                 node.config.contains(SemanticsProperties.Focused) && node.config[SemanticsProperties.Focused]
             }
         }

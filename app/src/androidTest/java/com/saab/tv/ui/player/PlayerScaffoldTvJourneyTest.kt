@@ -152,8 +152,10 @@ class PlayerScaffoldTvJourneyTest {
             playback.uiState.value = playback.uiState.value.copy(positionMs = 180_000L)
         }
         compose.waitForIdle()
+        val animationStartTime = compose.mainClock.currentTime
         compose.mainClock.advanceTimeBy(500L)
         compose.waitForIdle()
+        val halfwayTime = compose.mainClock.currentTime
         val halfwayWidth = fill.fetchSemanticsNode().boundsInRoot.width
 
         compose.mainClock.advanceTimeBy(500L)
@@ -162,7 +164,8 @@ class PlayerScaffoldTvJourneyTest {
 
         assertTrue(halfwayWidth > initialWidth)
         assertTrue(finalWidth > halfwayWidth)
-        assertEquals((initialWidth + finalWidth) / 2f, halfwayWidth, 3f)
+        val elapsedFraction = ((halfwayTime - animationStartTime) / 1_000f).coerceIn(0f, 1f)
+        assertEquals(initialWidth + (finalWidth - initialWidth) * elapsedFraction, halfwayWidth, 2f)
     }
 
     @Test fun subtitlePanelChangesToAnAvailableLanguageTrack() {

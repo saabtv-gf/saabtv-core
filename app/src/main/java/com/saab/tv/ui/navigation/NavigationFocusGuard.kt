@@ -44,7 +44,8 @@ internal class NavigationFocusGuard(
     private val scope: CoroutineScope,
     private val blocked: () -> Boolean,
     private val returnToContent: () -> Unit,
-    private val incomingDirection: Key
+    private val incomingDirection: Key,
+    private val recoveryBlocked: () -> Boolean = blocked
 ) {
     private val policy = NavigationFocusEntryPolicy(android.os.SystemClock::elapsedRealtime)
     private val areas = mutableSetOf<String>()
@@ -102,7 +103,7 @@ internal class NavigationFocusGuard(
             com.saab.tv.AppDiagnostics.event("Navigation", "Automatic Menu Focus Rejected", "area=$area blocked=${blocked()}")
             scope.launch {
                 withFrameNanos { }
-                if (!blocked() && policy.shouldReturnToContent()) returnToContent()
+                if (!recoveryBlocked() && policy.shouldReturnToContent()) returnToContent()
             }
         } else {
             areas.remove(area)
@@ -114,12 +115,18 @@ internal class NavigationFocusGuard(
 }
 
 @Composable
-internal fun rememberNavigationFocusGuard(blocked: Boolean, direction: Key, onReturn: () -> Unit): NavigationFocusGuard {
+internal fun rememberNavigationFocusGuard(
+    blocked: Boolean,
+    direction: Key,
+    onReturn: () -> Unit,
+    recoveryBlocked: Boolean = blocked
+): NavigationFocusGuard {
     val scope = rememberCoroutineScope()
     val latestBlocked by rememberUpdatedState(blocked)
     val latestReturn by rememberUpdatedState(onReturn)
+    val latestRecoveryBlocked by rememberUpdatedState(recoveryBlocked)
     val guard = remember(scope, direction) {
-        NavigationFocusGuard(scope, { latestBlocked }, { latestReturn() }, direction)
+        NavigationFocusGuard(scope, { latestBlocked }, { latestReturn() }, direction, { latestRecoveryBlocked })
     }
     LaunchedEffect(blocked, guard) {
         if (blocked) guard.resetForBlockedNavigation()

@@ -298,16 +298,17 @@ class SearchShelfFocusMotionTest {
 
         val lastCard = compose.onNode(hasClickAction() and hasContentDescription("Last result"))
         if (verifySmoothFocus) {
-            val startLeft = indicator.fetchSemanticsNode().boundsInRoot.left
+            val startFrameLeft = indicator.fetchSemanticsNode().boundsInRoot.left
             val targetLeft = lastCard.fetchSemanticsNode().boundsInRoot.left
             compose.mainClock.autoAdvance = false
             try {
                 compose.runOnIdle { lastRequester.requestFocus() }
                 compose.waitForIdle()
                 compose.mainClock.advanceTimeBy(48)
-                val inFlightLeft = indicator.fetchSemanticsNode().boundsInRoot.left
-                assertTrue("focus frame should move toward, but not jump to, the card", inFlightLeft > startLeft + 1f)
-                assertTrue("focus frame should still be travelling toward the card", inFlightLeft < targetLeft - 1f)
+                val inFlightFrameLeft = indicator.fetchSemanticsNode().boundsInRoot.left
+                val inFlightCardLeft = lastCard.fetchSemanticsNode().boundsInRoot.left
+                assertEquals("focus frame stays at the shelf pivot", startFrameLeft, inFlightFrameLeft, 0.5f)
+                assertTrue("card slides toward the fixed focus frame", inFlightCardLeft < targetLeft - 1f)
                 compose.mainClock.advanceTimeBy(600)
             } finally {
                 compose.mainClock.autoAdvance = true
@@ -321,7 +322,7 @@ class SearchShelfFocusMotionTest {
             val cardLeft = lastCard.fetchSemanticsNode().boundsInRoot.left
             val frameLeft = indicator.fetchSemanticsNode().boundsInRoot.left
             assertEquals(cardLeft, frameLeft, 0.5f)
-            assert(cardLeft > with(compose.density) { 48.dp.toPx() })
+            assertEquals(with(compose.density) { 48.dp.toPx() }, cardLeft, 0.5f)
         }
 
         if (verifyFocusExit) {

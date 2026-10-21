@@ -524,6 +524,8 @@ internal fun SearchResultRow(
         }
         if (items.isEmpty()) Text(stringResource(R.string.search_no_matching_type, title), color = Color.Gray)
         else {
+          BoxWithConstraints(Modifier.fillMaxWidth()) {
+          val pivotEndPadding = (maxWidth - pivotOffset - cardWidth).coerceAtLeast(0.dp)
           FocusShelf(
             state = listState,
             focused = rowHasCardFocus,
@@ -532,7 +534,8 @@ internal fun SearchResultRow(
             startPadding = pivotOffset,
             focusedItemIndex = focusedItemIndex,
             tag = "search-shelf-focus-indicator",
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(start = pivotOffset, end = pivotEndPadding, top = 6.dp, bottom = 6.dp)
           ) {
                 itemsIndexed(items, key = { _, item -> item.canonicalPresentationKey() }) { index, item ->
                     LaunchedEffect(item.canonicalPresentationKey()) { currentOnItemShown(item) }
@@ -586,6 +589,7 @@ internal fun SearchResultRow(
                             }
                     )
                 }
+          }
           }
         }
     }

@@ -86,7 +86,11 @@ fun TopNavigationBar(
     val navigationBlocked = !navigationActive || hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
         com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
     val isTopNavActive = (isSettingsAreaFocused || isCenterAreaFocused) && !navigationBlocked
-    val focusGuard = rememberNavigationFocusGuard(navigationBlocked, Key.DirectionUp, onEnterContent)
+    val focusRecoveryBlocked = hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
+        com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
+    val focusGuard = rememberNavigationFocusGuard(
+        navigationBlocked, Key.DirectionUp, onEnterContent, focusRecoveryBlocked
+    )
     val boundaryPressGate = remember { DpadFreshPressGate() }
     val focusHandoffRegistry = LocalNavigationFocusHandoffRegistry.current
     val focusHandoff: (KeyEvent?) -> Boolean = remember(focusGuard, currentDestination, topNavRequesters) {

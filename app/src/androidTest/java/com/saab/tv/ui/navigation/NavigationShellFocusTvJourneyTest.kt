@@ -65,13 +65,16 @@ class NavigationShellFocusTvJourneyTest {
                     onNavigate = { selected += it; contentRequester.requestFocus() },
                     onClose = { contentReturns++; contentRequester.requestFocus() }
                 ) {
+                    val authorizeHandoff = LocalNavigationFocusHandoff.current
                     Box(Modifier.padding(start = 250.dp, top = 50.dp)) {
                         SetupButton(
                             text = "Browse content",
                             onClick = {},
                             focusRequester = contentRequester,
-                            modifier = Modifier.focusProperties {
-                                left = requesters.getValue(NavDestination.Home)
+                            modifier = Modifier.onPreviewKeyEvent { event ->
+                                if (event.key == Key.DirectionLeft) {
+                                    handoffNavigationFocus(event, authorizeHandoff)
+                                } else false
                             }
                         )
                     }
@@ -103,13 +106,16 @@ class NavigationShellFocusTvJourneyTest {
                     onNavigate = { navigated += it },
                     onClose = {}
                 ) {
+                    val authorizeHandoff = LocalNavigationFocusHandoff.current
                     Box(Modifier.padding(start = 250.dp, top = 50.dp)) {
                         SetupButton(
                             text = "Browse every route",
                             onClick = {},
                             focusRequester = contentRequester,
-                            modifier = Modifier.focusProperties {
-                                left = requesters.getValue(NavDestination.Home)
+                            modifier = Modifier.onPreviewKeyEvent { event ->
+                                if (event.key == Key.DirectionLeft) {
+                                    handoffNavigationFocus(event, authorizeHandoff)
+                                } else false
                             }
                         )
                     }
