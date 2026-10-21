@@ -121,16 +121,13 @@ class SeekThumbnailWorkerService : Service() {
     }
 
     private suspend fun generate(request: SeekThumbnailWorkerRequest) {
+        val batchStartedMs = android.os.SystemClock.elapsedRealtime()
         val mediaUrl = TorBoxStreamUrlPolicy.forThumbnailWorker(request.mediaUrl)
         var targets = SeekThumbnailCache.persistentDecoderTargets(
             durationMs = request.durationMs,
             intervalSeconds = request.intervalSeconds,
             priorityPositionMs = request.priorityPositionMs
         )
-        val engine = LibMpvThumbnailEngine(
-            context = applicationContext
-        )
-        val platformEngine = PlatformThumbnailEngine()
         val mpvGuard = mpvCrashGuard(request)
         val skipMpv = mpvGuard.exists()
         var consecutiveFailures = 0
@@ -142,6 +139,19 @@ class SeekThumbnailWorkerService : Service() {
         var plannedPriority = request.priorityPositionMs
         val attemptedPositions = mutableSetOf<Long>()
         var targetIndex = 0
+        val workingSet = cache.beginWorkingSet(request.profileId, request.contentId)
+        if (!workingSet.admitted) {
+            diagnostic(
+                request,
+                "Cache Capacity Unavailable",
+                "reason=${workingSet.refusalReason ?: "unknown"} usedBytes=${workingSet.currentBytes} " +
+                    "limitBytes=${workingSet.limitBytes}",
+                "WARN"
+            )
+            return
+        }
+        val engine = LibMpvThumbnailEngine(context = applicationContext)
+        val platformEngine = PlatformThumbnailEngine()
 
         try {
             diagnostic(
@@ -254,6 +264,7 @@ class SeekThumbnailWorkerService : Service() {
                 ) continue
 
                 attemptedFrames++
+                val frameStartedMs = android.os.SystemClock.elapsedRealtime()
                 try {
                     var usedEngine = if (mpvAvailable) "libmpv" else "platform"
                     var bitmap = if (mpvAvailable) engine.capture(positionMs) else null
@@ -299,7 +310,7 @@ class SeekThumbnailWorkerService : Service() {
                             "WARN"
                         )
                     } else {
-                        val stored = cache.store(
+                        val storeResult = cache.store(
                             profileId = request.profileId,
                             contentId = request.contentId,
                             positionMs = positionMs,
@@ -310,15 +321,35 @@ class SeekThumbnailWorkerService : Service() {
                         // Duplicate/rejected cache writes must not repeatedly abort
                         // the same opening timestamps on every worker session.
                         consecutiveFailures = 0
-                        if (stored) {
-                            storedFrames++
-                            diagnostic(
-                                request,
-                                "Frame Cached",
-                                "position=${positionMs / 1_000}s engine=$usedEngine " +
-                                    "actualMs=${if (usedEngine == "libmpv") engine.lastCapturePositionMs else "platform-closest-frame"} " +
-                                    "batch=$storedFrames/$MAX_FRAMES_PER_SESSION"
-                            )
+                        when (storeResult) {
+                            ThumbnailStoreResult.STORED -> {
+                                storedFrames++
+                                diagnostic(
+                                    request,
+                                    "Frame Cached",
+                                    "position=${positionMs / 1_000}s engine=$usedEngine " +
+                                        "actualMs=${if (usedEngine == "libmpv") engine.lastCapturePositionMs else "platform-closest-frame"} " +
+                                        "batch=$storedFrames/$MAX_FRAMES_PER_SESSION " +
+                                        "frameMs=${android.os.SystemClock.elapsedRealtime() - frameStartedMs} " +
+                                        "elapsedMs=${android.os.SystemClock.elapsedRealtime() - batchStartedMs}"
+                                )
+                                if (storedFrames == 10) diagnostic(request, "First Ten Frames Cached",
+                                    "elapsedMs=${android.os.SystemClock.elapsedRealtime() - batchStartedMs} " +
+                                        "priorityMs=$plannedPriority interval=${request.intervalSeconds}s")
+                            }
+                            ThumbnailStoreResult.CAPACITY_EXCEEDED -> {
+                                diagnostic(
+                                    request,
+                                    "Cache Capacity Unavailable",
+                                    "reason=active_timeline_limit limitBytes=${workingSet.limitBytes} " +
+                                        "cached=$storedFrames/$MAX_FRAMES_PER_SESSION",
+                                    "WARN"
+                                )
+                                break
+                            }
+                            ThumbnailStoreResult.DUPLICATE,
+                            ThumbnailStoreResult.INVALID,
+                            ThumbnailStoreResult.WRITE_FAILED -> Unit
                         }
                     }
                 } catch (cancelled: CancellationException) {
@@ -337,16 +368,19 @@ class SeekThumbnailWorkerService : Service() {
             cancelled = true
             throw cancellation
         } finally {
-            engine.close()
-            platformEngine.close()
+            val cleanupFailures = listOf(
+                runCatching { cache.endWorkingSet(request.profileId, request.contentId) }.exceptionOrNull(),
+                runCatching { engine.close() }.exceptionOrNull(),
+                runCatching { platformEngine.close() }.exceptionOrNull(),
+                runCatching { mpvGuard.delete() }.exceptionOrNull()
+            ).count { it != null }
             // If this process reaches finally, it did not die in native code.
             // Never leave a known/recoverable error latched as a permanent crash.
-            mpvGuard.delete()
             diagnostic(
                 request,
                 "Batch Finished",
                 "attempted=$attemptedFrames cached=$storedFrames " +
-                    PlaybackDiagnostics.memorySummary()
+                    "cleanupFailures=$cleanupFailures " + PlaybackDiagnostics.memorySummary()
             )
             if (!cancelled) updateRetryBackoff(request, storedFrames > 0)
         }

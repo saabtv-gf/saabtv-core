@@ -12,20 +12,50 @@ The availability RPC returns only a boolean. Account snapshots are protected by 
 
 - Usernames are case-insensitive, 3–32 ASCII letters, digits or underscores. The UI uses an internal `username@accounts.saabtv.invalid` email alias for managed email/password authentication.
 - Signup validates at least eight characters with uppercase, lowercase, digit and special character. Live testing confirmed that Neon rejects six-character passwords; the UI follows the provider's eight-character minimum. Email verification must not be required for the internal aliases.
-- There is no email recovery or password-change flow yet. Losing the password can make the encrypted backup unrecoverable. Do not reset passwords through the console without a snapshot re-encryption migration.
+- Password recovery is intentionally unavailable for now, per product decision. The username uses a non-deliverable internal email alias, so a recovery key by itself cannot restore a Neon Auth session or authorize a server-side password reset. Do not reset passwords through the console; the encrypted backup may become unrecoverable. Revisit only with a verified recovery email or an explicitly approved recovery service plus a tested snapshot-key rewrapping migration.
 - The stable managed-auth user ID selects a separate Room database, encrypted integration preferences, profile files and thumbnail cache on each TV.
 - Portable snapshots include profiles, themes, PIN data, settings, addons, integrations, watchlists, progress, source choices, subtitle choices and custom profile/hub images. Videos, thumbnails, diagnostic logs and login sessions are not uploaded.
 - Backups are AES-GCM encrypted on the TV. The encryption key is derived using PBKDF2-HMAC-SHA256 (210,000 iterations) from the password and stable account ID. Session credentials and the derived key are kept in Android Keystore-backed encrypted preferences.
 - Local PIN/runtime state remains subject to Android app sandbox protection. Cloud encryption does not replace a device lock or protect a rooted TV.
 - Existing local profiles can be explicitly imported once. Original data is retained. Sign-out keeps the isolated local account cache; it does not delete the account or cloud backup.
-- Sync is event-driven: progress is batched for up to 120 seconds, settings changes are debounced, and explicit playback/background boundaries can flush promptly. Unchanged data is not uploaded. Offline playback continues with cached account data. Revision-based compare-and-swap protects writes; newer local/cloud timestamps decide which whole-account copy wins. See incremental sync below for the new transfer protocol.
+- Sync is event-driven: progress is batched for up to 120 seconds, settings changes are debounced, and explicit playback/background boundaries can flush promptly. Unchanged data is not uploaded. Offline playback continues with cached account data. Sync v3 uses per-entity revisions, idempotent operations and tombstones; causal edits win after observing a remote revision, while simultaneous offline edits use a deterministic tie-break. The encrypted whole-account snapshot remains only for migration/compatibility and its legacy conflict policy is timestamp-directed. See the v2 transfer and v3 protocol sections below.
 - A cloud restore is journaled as ciphertext so an interrupted restore can safely replay at next launch. Account changes restart the app process to clear account-owned singleton state.
 
 ## Validation
 
-`smoke-test.rb` uses only the public service URLs. It creates two disposable QA accounts and checks username availability, sign-in, JWT access, revision conflicts and cross-account/anonymous isolation. It attempts account deletion, but the configured managed service currently returns 404 for `/delete-user`; complete cleanup in the Neon Console using only the exact generated QA usernames printed by the script, and verify that none remain. Running it requires explicit authorization to create and permanently clean up test data. It must never be used with a real account. All six accounts from the implementation's three approved QA rounds were removed and the zero-remaining count was verified.
+`smoke-test.rb` uses only the public service URLs and refuses to run unless
+`SAAB_QA_CREATE_USERS=1` is explicitly set. It creates two disposable QA accounts
+and checks username availability, sign-in, JWT access, v2 revision conflicts,
+v2/v3 account isolation, and v3 push/pull. After testing, it attempts account
+deletion, but the configured managed service currently returns 404 for
+`/delete-user`; complete cleanup in the Neon Console using only the exact generated
+QA usernames printed by the script, and verify that none remain. It must never be
+used with a real account. All six accounts from the implementation's three
+approved QA rounds were removed and the zero-remaining count was verified.
 
-Local validation: 134 unit tests passed; release lint reported no errors; the 32-bit release APK signature and package metadata verified. The Android snapshot round-trip/isolation instrumentation test compiles, but was not executed because no Android device/emulator was connected. Account UI, legacy import, multi-TV restore and process restart still need physical-TV validation before calling the release production-proven.
+With migration 006 installed, add
+`SAAB_QA_VALIDATE_006=1` to verify direct-write denial and the actual PostgREST
+429/PT429 mapping at the 31st push and 13th pull. This adds at most 30 small v3 QA
+rows to the second temporary account before the expected throttle. Add
+`SAAB_QA_VALIDATE_413=1` as a separate, explicit opt-in to send one 20 MiB+ test
+request and verify the 413/PT413 mapping; this incurs deliberate network transfer
+and is not part of the default smoke test. `SAAB_QA_VALIDATE_PUSH_BYTES=1` opts in
+to two ~13.6 MiB v3 pushes, verifying that the aggregate 25 MiB/minute byte cap is
+independent of the single-request cap; the first request creates ~13.6 MiB of
+temporary encrypted-state test rows on the disposable account. It also incurs
+deliberate transfer and storage churn. Example:
+
+```sh
+SAAB_QA_CREATE_USERS=1 SAAB_QA_VALIDATE_006=1 ruby cloud/neon/smoke-test.rb
+SAAB_QA_CREATE_USERS=1 SAAB_QA_VALIDATE_006=1 SAAB_QA_VALIDATE_413=1 ruby cloud/neon/smoke-test.rb
+SAAB_QA_CREATE_USERS=1 SAAB_QA_VALIDATE_006=1 SAAB_QA_VALIDATE_PUSH_BYTES=1 ruby cloud/neon/smoke-test.rb
+```
+
+Run these only with approval for disposable test accounts and cleanup. Do not run
+them against production accounts; the current Managed Auth deletion route requires
+manual cleanup in the Neon Console.
+
+Local validation is recorded in `docs/CENTRAL_INFORMATION_SCHEMA_PLAN.md`; its latest checkpoint is 1,100 JVM tests (0 failures, 2 skipped), 31/31 API 36 emulator instrumentation tests, and passing lint and policy coverage gates. These are not live Neon or physical-TV acceptance results. Account UI, legacy import, multi-TV restore, process restart, 32-bit Fire TV playback and release/ABI install/upgrade still need representative-device validation before calling the release production-proven.
 
 Rotate any database-owner credential previously shared in chat. Never put it into source, Android resources, Gradle properties or an APK.
 
@@ -81,6 +111,54 @@ cleared progress, source/subtitle choices, and RLS isolation against migration 0
 Existing unit tests cover partition round-trip, component isolation, progress
 deletion, compression, account isolation and decompression limits. They are not a
 substitute for live Data API/database or physical-TV testing.
+
+## Sync v3 (migration applied)
+
+`005_sync_v3_state.sql` is applied to the production branch. Postflight verified
+protocol version 3, all three v3 tables and both RPCs, forced row-level security,
+no direct authenticated table reads, authenticated RPC execution and preservation
+of the v2 snapshot table. The app negotiates v3 and retains v2 as a compatibility
+path. V3 stores encrypted per-entity operations with idempotent operation IDs,
+portable identities, causal entity revisions and deletion tombstones. A local edit
+after observing remote revision N is emitted at a higher revision; truly concurrent
+offline edits use the deterministic `(entity_revision, device_id)` tie-break, not
+reconstructed wall-clock order. Detailed client/schema behavior and tests are in
+`docs/CENTRAL_INFORMATION_SCHEMA_PLAN.md`.
+
+The client limits one v3 pass to four batches of at most 4 MiB each. Remaining
+operations continue on the batched cadence. This limits one TV to 16 MiB per pass
+and leaves some quota headroom; it cannot guarantee the account aggregate when
+multiple TVs sync concurrently, so the server remains the enforcement point.
+
+The postflight did not validate a live two-TV user journey, conflict/deletion
+recreation against production, or old-client coexistence. Those remain release
+acceptance gates and require controlled test accounts/devices; deterministic
+multi-database tests do not replace them.
+
+## Sync v3 abuse limits (migration 006 applied)
+
+`006_sync_v3_abuse_limits.sql` wraps the encrypted snapshot and v3 sync mutation
+RPCs with authenticated per-account fixed-window limits: at most 30 pushes and
+25 MiB of aggregate push request bodies per minute, 12 v3 pulls per minute, and a
+20 MiB cap on one v3 push request. Direct authenticated inserts/updates to account
+state and direct inserts/deletes to encrypted component objects are revoked;
+reads remain account-scoped and write RPCs keep their compare-and-swap checks. The
+previous RPC bodies become owner-only internals. Quota state contains only the
+account ID and counters; it is not directly readable by app roles and is removed
+with the auth account. The Data API maps throttles to HTTP 429; the app waits one
+minute before retrying that quota window. An HTTP 413 payload-size response is
+deferred until an explicit retry or new local mutation instead of being uploaded
+repeatedly.
+
+Applied to the approved Neon production primary endpoint on 2026-10-12. Postflight
+verified the private quota schema/table, wrapper execution grants, owner-only
+internal RPCs, revoked direct writes, retained account-scoped reads, forced v3 RLS,
+and preservation of the v2 snapshot table. Existing snapshots were not deleted.
+These checks verify installed permissions and objects; they do not exercise the
+live HTTP 429/413 boundaries or prove that real multi-device burst sizes fit the
+limits. Those behavioral checks remain opt-in in `smoke-test.rb` and must use
+disposable accounts with approved cleanup. No production account was used for a
+quota stress test.
 
 Do not run `VACUUM FULL` or delete auth data to force the storage dashboard lower.
 Live-table/TOAST/index sizes and obsolete row versions need measurement first;

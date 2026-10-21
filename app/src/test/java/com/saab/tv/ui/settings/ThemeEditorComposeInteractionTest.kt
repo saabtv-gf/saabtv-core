@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.*
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -63,5 +64,20 @@ class ThemeEditorComposeInteractionTest {
             assertEquals(1, cancelCalls)
             assertEquals(0, saveCalls)
         }
+    }
+
+    @Test fun themeEditorColorAndActionControlsKeepTheirBoundsWhenFocused() {
+        compose.setContent { MaterialTheme { ThemeEditorScreen(null, { _, _, _ -> }, {}) } }
+        val actionBounds = mutableMapOf<String, androidx.compose.ui.geometry.Rect>()
+        listOf("Primary", "Cancel", "Save").forEach { label ->
+            val node = compose.onNodeWithText(label)
+            val initialBounds = node.fetchSemanticsNode().boundsInRoot
+            if (label != "Primary") node.assertHeightIsAtLeast(48.dp)
+            node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+            node.assertIsFocused()
+            assertEquals("$label must not resize when focused", initialBounds, node.fetchSemanticsNode().boundsInRoot)
+            if (label != "Primary") actionBounds[label] = initialBounds
+        }
+        assertEquals("Save and Cancel share the same control geometry", actionBounds["Cancel"]?.size, actionBounds["Save"]?.size)
     }
 }

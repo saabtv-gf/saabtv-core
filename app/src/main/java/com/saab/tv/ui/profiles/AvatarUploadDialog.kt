@@ -20,6 +20,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import com.saab.tv.R
 import com.saab.tv.remote_input.AvatarServerManager
 import com.saab.tv.remote_input.ServerInfo
 import kotlinx.coroutines.delay
@@ -47,7 +49,7 @@ fun AvatarUploadDialog(
 ) {
     val context = LocalContext.current
     var serverInfo by remember { mutableStateOf<ServerInfo?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<Int?>(null) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     
     val serverManager = remember { AvatarServerManager() }
@@ -72,7 +74,7 @@ fun AvatarUploadDialog(
             serverInfo = info
             qrBitmap = generateQrCode(info.url)
         } else {
-            error = "Secure pairing unavailable. Check your internet connection and try again."
+            error = R.string.account_remote_unavailable
         }
     }
 
@@ -80,7 +82,7 @@ fun AvatarUploadDialog(
         if (serverInfo != null) {
             delay(5 * 60_000L)
             serverManager.stopServer()
-            error = "Pairing expired. Close and reopen for a new QR code."
+            error = R.string.account_remote_qr_expired
         }
     }
 
@@ -110,13 +112,13 @@ fun AvatarUploadDialog(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    "Upload Avatar",
+                            stringResource(R.string.profile_upload_title),
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = Color.White
                 )
                 
                 Text(
-                    "Scan with your phone to upload a picture",
+                    stringResource(R.string.profile_upload_description),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray,
                     modifier = Modifier.padding(top = 8.dp)
@@ -130,7 +132,7 @@ fun AvatarUploadDialog(
                 when {
                     currentError != null -> {
                         Text(
-                            currentError,
+                            stringResource(currentError),
                             color = MaterialTheme.colorScheme.error,
                             textAlign = TextAlign.Center
                         )
@@ -146,7 +148,7 @@ fun AvatarUploadDialog(
                         ) {
                             Image(
                                 bitmap = currentQrBitmap.asImageBitmap(),
-                                contentDescription = "QR Code",
+                                contentDescription = stringResource(R.string.profile_upload_qr_description),
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -155,7 +157,7 @@ fun AvatarUploadDialog(
                         
                         // Manual URL
                         Text(
-                            "Private QR · expires in 5 minutes",
+                            stringResource(R.string.profile_upload_expiry),
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Gray
                         )
@@ -177,7 +179,7 @@ fun AvatarUploadDialog(
                         )
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            "Connecting securely…",
+                            stringResource(R.string.account_remote_connecting),
                             color = Color.Gray
                         )
                     }

@@ -32,8 +32,8 @@ class AddonsViewModel @Inject constructor(
     private val profileConfigurationManager: ProfileConfigurationManager
 ) : ViewModel() {
 
-    private fun persistProfileState() {
-        viewModelScope.launch { profileConfigurationManager.saveActiveRuntimeState() }
+    private suspend fun persistProfileState() {
+        profileConfigurationManager.saveActiveRuntimeState()
     }
 
     data class UiState(

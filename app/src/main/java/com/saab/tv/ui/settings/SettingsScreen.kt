@@ -1,10 +1,9 @@
 package com.saab.tv.ui.settings
 
-import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,39 +22,51 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.saab.tv.R
 import com.saab.tv.data.model.ProfileEntity
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.components.scrollToItemUsingSaabMotion
+import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
+import com.saab.tv.ui.navigation.isBackOrEscape
+import com.saab.tv.ui.navigation.handoffNavigationFocus
+import com.saab.tv.ui.navigation.isInitialBackPress
+import com.saab.tv.ui.navigation.isInitialKeyPress
 import com.saab.tv.ui.addons.AddonsScreen
 import com.saab.tv.ui.theme.ThemeManager
-import com.saab.tv.ui.utils.rememberLastFocus
+import com.saab.tv.ui.utils.requestFocusOrFallback
+import com.saab.tv.ui.utils.requestFocusSafely
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.withFrameNanos
 
 import androidx.compose.ui.ExperimentalComposeUiApi
 
-enum class SettingsSection(val label: String, @DrawableRes val iconRes: Int) {
-    Account("Account", R.drawable.info_icon),
-    Personalization("Personalization", R.drawable.personalization_icon),
-    Theme("Theme", R.drawable.palette_icon),
-    Dashboard("Home Screen", R.drawable.home_icon),
-    Playback("Playback", R.drawable.playback_icon),
-    SourcePreferences("Sort & Filter", R.drawable.source_preferences_icon),
-    Addons("Addons", R.drawable.puzzle_icon),
-    Integrations("Integrations", R.drawable.integrations_icon),
-    PlaybackDiagnostics("App Diagnostics", R.drawable.info_icon),
-    About("About", R.drawable.info_icon)
+enum class SettingsSection(@StringRes val labelRes: Int, @DrawableRes val iconRes: Int) {
+    Account(R.string.settings_section_account, R.drawable.info_icon),
+    Personalization(R.string.settings_section_personalization, R.drawable.personalization_icon),
+    Theme(R.string.settings_section_theme, R.drawable.palette_icon),
+    Dashboard(R.string.settings_section_home_screen, R.drawable.home_icon),
+    Playback(R.string.settings_section_playback, R.drawable.playback_icon),
+    SourcePreferences(R.string.settings_section_sort_filter, R.drawable.source_preferences_icon),
+    Addons(R.string.settings_section_addons, R.drawable.puzzle_icon),
+    Integrations(R.string.settings_section_integrations, R.drawable.integrations_icon),
+    PlaybackDiagnostics(R.string.settings_section_diagnostics, R.drawable.info_icon),
+    About(R.string.settings_section_about, R.drawable.info_icon)
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -70,16 +81,24 @@ fun SettingsScreen(
     onContentFocusChanged: (Boolean) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val context = androidx.compose.ui.platform.LocalContext.current
     var selectedSection by remember { mutableStateOf(SettingsSection.Personalization) }
     var displayedSection by remember { mutableStateOf(SettingsSection.Personalization) }
     var isContentFocused by remember { mutableStateOf(false) }
-    var isTransitioning by remember { mutableStateOf(false) } // LOCK: prevent re-entry
 
-    val sidebarListRequester = remember { FocusRequester() }
     val sidebarListState = rememberLazyListState()
     val contentPaneRequester = remember { FocusRequester() }
     val itemRequesters = remember { SettingsSection.entries.associateWith { FocusRequester() } }
+    fun restoreSelectedSectionFocus() {
+        itemRequesters[selectedSection].requestFocusOrFallback(entryRequester)
+    }
+
+    fun returnToNavigation() {
+        val handedOff = authorizeNavigationHandoff?.invoke(null) == true
+        val drawerFocused = drawerRequester.requestFocusSafely()
+        if (!handedOff && !drawerFocused) onBack()
+    }
 
     val scope = rememberCoroutineScope()
 
@@ -100,33 +119,39 @@ fun SettingsScreen(
     // 1. Side Nav (Always)
     // 2. Top Nav AND Screen is Focused (Handle = Open Nav/Go Back)
     // Disabled when Top Nav AND Screen NOT Focused (Nav is focused) -> Let Nav handle Close.
-    BackHandler(enabled = isScreenFocused) {
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction {
+        returnToNavigation()
+    }
+    com.saab.tv.ui.navigation.AppBackHandler(
+        enabled = isScreenFocused,
+        priority = com.saab.tv.ui.navigation.AppBackPriority.Screen
+    ) {
         if (isContentFocused) {
-            itemRequesters[selectedSection]?.requestFocus()
+            restoreSelectedSectionFocus()
         } else {
-            drawerRequester.requestFocus()
+            returnToNavigation()
         }
     }
     
     // Animated padding values for smooth transition when nav mode changes
     val rowStartPadding by animateDpAsState(
         targetValue = if (isTopNav) 0.dp else 80.dp,
-        animationSpec = androidx.compose.animation.core.tween(300),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "rowStartPadding"
     )
     val colTopPadding by animateDpAsState(
         targetValue = if (isTopNav) 70.dp else 40.dp,
-        animationSpec = androidx.compose.animation.core.tween(300),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "colTopPadding"
     )
     val contentTopPadding by animateDpAsState(
         targetValue = if (isTopNav) 70.dp else 40.dp,
-        animationSpec = androidx.compose.animation.core.tween(300),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "contentTopPadding"
     )
     val colStartPadding by animateDpAsState(
         targetValue = if (isTopNav) 50.dp else 32.dp,
-        animationSpec = androidx.compose.animation.core.tween(300),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "colStartPadding"
     )
 
@@ -150,10 +175,12 @@ fun SettingsScreen(
                 .fillMaxHeight()
                 .padding(top = colTopPadding, start = colStartPadding, end = 16.dp)
                 .onFocusChanged { if (it.hasFocus) { isContentFocused = false; onContentFocusChanged(false) } }
-                .rememberLastFocus()
+                // Selected-section FocusRequesters below restore this list explicitly;
+                // avoid focusRestorer's duplicate lazy-item pin release on section handoffs.
+                .focusGroup()
         ) {
             Text(
-                "Settings",
+                stringResource(R.string.settings_title),
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 20.sp
@@ -169,7 +196,6 @@ fun SettingsScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .focusRequester(sidebarListRequester)
                     .padding(top = 0.dp)
             ) {
                 itemsIndexed(
@@ -178,16 +204,20 @@ fun SettingsScreen(
                 ) { index, section ->
                         val isSelected = selectedSection == section
 
-                        // FUNCTION: Enter Content Logic (with lock)
+                        // Move into the section immediately. The right-hand pane is
+                        // a focus group, so request focus after AnimatedContent has
+                        // installed the destination's first focusable control.
                         fun enterContent() {
-                            if (isTransitioning) return // BLOCKED
-                            isTransitioning = true
                             selectedSection = section
                             displayedSection = section
                             scope.launch {
-                                delay(400) // Wait for animation
-                                contentPaneRequester.requestFocus()
-                                isTransitioning = false // UNLOCK
+                                delay(SaabMotion.duration(SaabMotion.NAVIGATION_REVEAL_MS).toLong())
+                                repeat(12) {
+                                    if (isContentFocused) return@launch
+                                    withFrameNanos { }
+                                    runCatching { contentPaneRequester.requestFocus() }
+                                    withFrameNanos { }
+                                }
                             }
                         }
 
@@ -197,29 +227,25 @@ fun SettingsScreen(
                             .focusRequester(itemRequesters[section]!!)
                             .then(if (isSelected) Modifier.focusRequester(entryRequester) else Modifier)
                             .onPreviewKeyEvent {
-                                if (it.type == KeyEventType.KeyDown) {
+                                if (it.isBackOrEscape()) {
+                                    if (it.isInitialBackPress()) dispatchBackFromKey()
+                                    true
+                                } else if (it.type == KeyEventType.KeyDown) {
                                     when (it.key) {
                                         Key.DirectionLeft -> {
-                                            if (!isTransitioning) {
-                                                drawerRequester.requestFocus()
+                                            when {
+                                                isTopNav -> false
+                                                else -> handoffNavigationFocus(it, authorizeNavigationHandoff, drawerRequester)
                                             }
-                                            true
-                                        }
-                                        Key.Back -> {
-                                            if (!isTransitioning) {
-                                                drawerRequester.requestFocus()
-                                                true
-                                            } else false
                                         }
                                         Key.DirectionUp -> {
                                             // Up on first section -> go to drawer/topnav (ONLY in top nav mode)
-                                            if (isFirstSection && !isTransitioning && isTopNav) {
-                                                drawerRequester.requestFocus()
-                                                true
+                                            if (isFirstSection && isTopNav) {
+                                                handoffNavigationFocus(it, authorizeNavigationHandoff, drawerRequester)
                                             } else false
                                         }
                                         Key.DirectionRight, Key.DirectionCenter, Key.Enter -> {
-                                            enterContent()
+                                            if (it.isInitialKeyPress()) enterContent()
                                             true
                                         }
                                         else -> false
@@ -228,15 +254,15 @@ fun SettingsScreen(
                             }
 
                         SettingsSidebarItem(
-                            label = section.label,
+                            label = stringResource(section.labelRes),
                             iconRes = section.iconRes,
                             isSelected = isSelected,
                             modifier = focusModifier,
-                            onClick = { if (!isTransitioning) enterContent() }, // GATED
+                            onClick = { enterContent() },
                             onFocus = {
                                 selectedSection = section
                                 scope.launch {
-                                    runCatching { sidebarListState.animateScrollToItem(index) }
+                                    runCatching { sidebarListState.scrollToItemUsingSaabMotion(index) }
                                 }
                             }
                         )
@@ -249,33 +275,38 @@ fun SettingsScreen(
             modifier = Modifier
                 .weight(0.72f) // Expanded content area
                 .fillMaxHeight()
-                .focusGroup()
                 .focusRequester(contentPaneRequester)
-                .rememberLastFocus()
-                .onFocusChanged { if (it.hasFocus) { isContentFocused = true; onContentFocusChanged(true) } }
+                .focusGroup()
+                .onFocusChanged {
+                    isContentFocused = it.hasFocus
+                    onContentFocusChanged(it.hasFocus)
+                }
         ) {
             // INCREASED PADDING: Gutter 64dp (Sidebar ends at weight 0.28, this starts at 0 without extra padding logic, so we add start padding here)
             Column(modifier = Modifier.fillMaxSize().padding(top = contentTopPadding, start = 64.dp, end = 80.dp)) {
                 AnimatedContent(
                     targetState = displayedSection,
-                    transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(300)) },
+                    transitionSpec = {
+                        fadeIn(SaabMotion.navigationRevealSpec()) togetherWith
+                            fadeOut(SaabMotion.navigationRevealSpec())
+                    },
                     label = "SettingsContent"
                 ) { target ->
                     when (target) {
                         SettingsSection.Account -> com.saab.tv.ui.account.AccountSettingsScreen(
-                            onBack = { itemRequesters[selectedSection]?.requestFocus() }
+                            onBack = { restoreSelectedSectionFocus() }
                         )
                         SettingsSection.Personalization -> {
                             PersonalizationSettings(
                                 currentProfile = currentProfile,
                                 viewModel = viewModel,
-                                onGoBack = { itemRequesters[selectedSection]?.requestFocus() }
+                                onGoBack = { restoreSelectedSectionFocus() }
                             )
                         }
                         SettingsSection.Theme -> {
                             ThemeSettings(
                                 currentProfile = currentProfile,
-                                onGoBack = { itemRequesters[selectedSection]?.requestFocus() },
+                                onGoBack = { restoreSelectedSectionFocus() },
                                 isTopNav = isTopNav
                             )
                         }
@@ -283,7 +314,7 @@ fun SettingsScreen(
                             DashboardEditorScreen(
                                 onBack = {
                                     onDashboardChanged() // Invalidate home screen cache
-                                    itemRequesters[selectedSection]?.requestFocus()
+                                    restoreSelectedSectionFocus()
                                 },
                                 isTopNav = isTopNav,
                                 currentProfile = currentProfile
@@ -293,35 +324,35 @@ fun SettingsScreen(
                             PlaybackSettings(
                                 currentProfile = currentProfile,
                                 viewModel = viewModel,
-                                onGoBack = { itemRequesters[selectedSection]?.requestFocus() }
+                                onGoBack = { restoreSelectedSectionFocus() }
                             )
                         }
                         SettingsSection.SourcePreferences -> {
                             SourcePreferencesSettings(
                                 currentProfile = currentProfile,
                                 viewModel = viewModel,
-                                onGoBack = { itemRequesters[selectedSection]?.requestFocus() }
+                                onGoBack = { restoreSelectedSectionFocus() }
                             )
                         }
                         SettingsSection.Addons -> {
                             AddonsScreen(
-                                onBack = { itemRequesters[selectedSection]?.requestFocus() },
+                                onBack = { restoreSelectedSectionFocus() },
                                 isTopNav = isTopNav
                             )
                         }
                         SettingsSection.Integrations -> {
                             IntegrationsScreen(
-                                onBack = { itemRequesters[selectedSection]?.requestFocus() }
+                                onBack = { restoreSelectedSectionFocus() }
                             )
                         }
                         SettingsSection.PlaybackDiagnostics -> {
                             PlaybackDiagnosticsSettings(
-                                onGoBack = { itemRequesters[selectedSection]?.requestFocus() }
+                                onGoBack = { restoreSelectedSectionFocus() }
                             )
                         }
                         SettingsSection.About -> {
                             AboutSettings(
-                                onGoBack = { itemRequesters[selectedSection]?.requestFocus() }
+                                onGoBack = { restoreSelectedSectionFocus() }
                             )
                         }
                     }
@@ -359,6 +390,7 @@ fun SettingsSidebarItem(
             isSelected -> Color.White
             else -> Color.White.copy(0.52f)
         },
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "Content"
     )
 
@@ -368,6 +400,7 @@ fun SettingsSidebarItem(
             isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
             else -> Color.Transparent
         },
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "SettingsItemBackground"
     )
 
@@ -377,22 +410,23 @@ fun SettingsSidebarItem(
             isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
             else -> Color.Transparent
         },
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "SettingsItemBorder"
     )
     
-    // Scale only when focused
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
-
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start,
         modifier = Modifier
             .fillMaxWidth()
-            .scale(scale)
             .then(modifier)
             .clip(RoundedCornerShape(10.dp))
             .background(backgroundColor)
             .border(if (isFocused) 2.dp else if (isSelected) 1.dp else 0.dp, borderColor, RoundedCornerShape(10.dp))
+            .semantics {
+                role = Role.Tab
+                selected = isSelected
+            }
             .focusable(interactionSource = interactionSource)
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .padding(vertical = 12.dp, horizontal = 16.dp)

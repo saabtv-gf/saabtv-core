@@ -87,4 +87,41 @@ class SeekThumbnailCarouselPolicyTest {
             SeekThumbnailCarouselPolicy.retainedFrameIndices(listOf(30L, 30L), listOf(30L))
         )
     }
+
+    @Test
+    fun carouselFramesAreVisibleOnlyForTheCurrentSourceAndExactSeekWindow() {
+        val positions = listOf(30_000L, 60_000L, 90_000L)
+        val keys = listOf("source-a", "source-a", "source-a")
+
+        assertEquals(true, SeekThumbnailCarouselPolicy.hasCurrentFrames(
+            framePositions = positions,
+            frameCacheKeys = keys,
+            requestedPositions = positions,
+            cacheKey = "source-a"
+        ))
+        assertEquals(false, SeekThumbnailCarouselPolicy.hasCurrentFrames(
+            framePositions = positions,
+            frameCacheKeys = keys,
+            requestedPositions = positions,
+            cacheKey = "source-b"
+        ))
+        assertEquals(false, SeekThumbnailCarouselPolicy.hasCurrentFrames(
+            framePositions = positions,
+            frameCacheKeys = keys,
+            requestedPositions = listOf(60_000L, 90_000L, 120_000L),
+            cacheKey = "source-a"
+        ))
+        assertEquals(false, SeekThumbnailCarouselPolicy.hasCurrentFrames(
+            framePositions = positions,
+            frameCacheKeys = listOf("source-a", "source-b", "source-a"),
+            requestedPositions = positions,
+            cacheKey = "source-a"
+        ))
+        assertEquals(false, SeekThumbnailCarouselPolicy.hasCurrentFrames(
+            framePositions = positions,
+            frameCacheKeys = keys.dropLast(1),
+            requestedPositions = positions,
+            cacheKey = "source-a"
+        ))
+    }
 }

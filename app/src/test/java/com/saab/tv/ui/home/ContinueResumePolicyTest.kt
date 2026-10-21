@@ -21,6 +21,32 @@ class ContinueResumePolicyTest {
         assertTrue(ContinueResumePolicy.mayReuseOpenStream("movie"))
     }
 
+    @Test fun currentMovieStreamIsReusedOnlyForTheExactUnwatchedSelection() {
+        val entry = episode("movie-1", 200, 650_000).copy(type = "movie")
+        fun canReuse(
+            contentId: String = "movie-1",
+            mediaType: String = "movie",
+            selectedContentId: String = "movie-1",
+            selectedContentType: String = "movie",
+            selectedPlaybackId: String = "movie-1",
+            videoUrl: String = "https://stream.test/video.mkv",
+            hasCurrentStream: Boolean = true,
+            history: List<WatchHistoryEntity> = listOf(entry)
+        ) = ContinueResumePolicy.canReuseCurrentStream(
+            contentId, mediaType, selectedContentId, selectedContentType,
+            selectedPlaybackId, videoUrl, hasCurrentStream, history
+        )
+
+        assertTrue(canReuse())
+        assertFalse(canReuse(mediaType = "series"))
+        assertFalse(canReuse(contentId = "another-movie"))
+        assertFalse(canReuse(selectedContentType = "series"))
+        assertFalse(canReuse(selectedPlaybackId = "another-movie"))
+        assertFalse(canReuse(videoUrl = "file:///video.mkv"))
+        assertFalse(canReuse(hasCurrentStream = false))
+        assertFalse(canReuse(history = listOf(entry.copy(watched = true))))
+    }
+
     @Test fun continueCardEpisodeWinsOverStaleDetailsResume() {
         assertEquals("tt123:2:5", ContinueResumePolicy.playbackId(
             seriesId = "tt123", continueHint = "tt123:2:5", hintIsWatched = false,

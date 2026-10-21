@@ -13,7 +13,8 @@ import androidx.compose.ui.input.key.type
  */
 class DpadRepeatGate(
     private val horizontalRepeatIntervalMs: Long = 120L,
-    private val verticalRepeatIntervalMs: Long = horizontalRepeatIntervalMs
+    private val verticalRepeatIntervalMs: Long = horizontalRepeatIntervalMs,
+    private val nowMs: () -> Long = SystemClock::uptimeMillis
 ) {
     private val lastAcceptedByKey = mutableMapOf<Key, Long>()
 
@@ -30,11 +31,11 @@ class DpadRepeatGate(
         // A new physical press must never be swallowed because it followed a
         // previous press quickly. Only pace key-repeat events from a held key.
         if (event.nativeKeyEvent.repeatCount == 0) {
-            lastAcceptedByKey[key] = SystemClock.uptimeMillis()
+            lastAcceptedByKey[key] = nowMs()
             return false
         }
 
-        val eventTimeMs = SystemClock.uptimeMillis()
+        val eventTimeMs = nowMs()
         val lastAcceptedEventTimeMs = lastAcceptedByKey[key]
         if (lastAcceptedEventTimeMs == null) {
             lastAcceptedByKey[key] = eventTimeMs

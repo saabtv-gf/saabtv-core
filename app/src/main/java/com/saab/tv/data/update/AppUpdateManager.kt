@@ -52,8 +52,37 @@ sealed class UpdateState {
     data object AwaitingInstallPermission : UpdateState()
     data object Verifying : UpdateState()
     data class ReadyToInstall(val file: File) : UpdateState()
-    data class InstallError(val file: File, val message: String) : UpdateState()
-    data class Error(val message: String) : UpdateState()
+    data class InstallError(
+        val file: File,
+        val message: String,
+        val kind: UpdateFailureKind = UpdateFailureKind.INSTALLER
+    ) : UpdateState()
+    data class Error(
+        val message: String,
+        val kind: UpdateFailureKind = UpdateFailureKind.UNKNOWN,
+        val recovery: UpdateRecoveryAction = UpdateRecoveryAction.CHECK_FOR_UPDATES
+    ) : UpdateState()
+}
+
+/** Stable failure classes keep update copy and recovery controls tied to the actual failed stage. */
+enum class UpdateFailureKind {
+    UPDATE_CHECK,
+    UNTRUSTED_SOURCE,
+    MISSING_CHECKSUM,
+    UNSUPPORTED_DEVICE,
+    DOWNLOAD,
+    STORAGE,
+    PACKAGE_VERIFICATION,
+    INSTALL_PERMISSION,
+    INSTALLER,
+    UNKNOWN
+}
+
+enum class UpdateRecoveryAction {
+    CHECK_FOR_UPDATES,
+    RETRY_DOWNLOAD,
+    DOWNLOAD_AGAIN,
+    OPEN_INSTALL_SETTINGS
 }
 
 // GitHub Releases API response (only fields we need)
@@ -116,13 +145,17 @@ class AppUpdateManager @Inject constructor(
                 val apkAsset = UpdateReleasePolicy.selectApk(releaseAssets, Build.SUPPORTED_ABIS.toList())
                 if (apkAsset != null) {
                     if (!isAllowedDownloadUrl(apkAsset.downloadUrl)) {
-                        _state.value = UpdateState.Error("Update URL is not from a trusted source.")
+                        _state.value = UpdateState.Error(
+                            "Update URL is not from a trusted source.",
+                            UpdateFailureKind.UNTRUSTED_SOURCE
+                        )
                         return
                     }
                     val expectedHash = UpdateReleasePolicy.expectedSha256(apkAsset, release.body, apkCount)
                     if (expectedHash == null) {
                         _state.value = UpdateState.Error(
-                            "Release is missing a mandatory SHA-256 checksum for ${apkAsset.name}."
+                            "Release is missing a mandatory SHA-256 checksum for ${apkAsset.name}.",
+                            UpdateFailureKind.MISSING_CHECKSUM
                         )
                         return
                     }
@@ -134,7 +167,10 @@ class AppUpdateManager @Inject constructor(
                         )
                     _state.value = UpdateState.UpdateAvailable(requireNotNull(offeredUpdate))
                 } else {
-                    _state.value = UpdateState.Error("Release has no APK compatible with this device.")
+                    _state.value = UpdateState.Error(
+                        "Release has no APK compatible with this device.",
+                        UpdateFailureKind.UNSUPPORTED_DEVICE
+                    )
                 }
             } else {
                 _state.value = UpdateState.UpToDate
@@ -143,14 +179,20 @@ class AppUpdateManager @Inject constructor(
             _state.value = UpdateState.Idle
             throw e
         } catch (e: Exception) {
-            _state.value = UpdateState.Error(e.message ?: "Failed to check for updates.")
+            _state.value = UpdateState.Error(
+                e.message ?: "Failed to check for updates.",
+                UpdateFailureKind.UPDATE_CHECK
+            )
         } finally { operation.unlock() }
     }
 
     suspend fun downloadAndInstall(apkUrl: String, expectedSha256: String) {
         recordDiagnostic("download-clicked")
         if (!isAllowedDownloadUrl(apkUrl) || !UpdateDownloadPolicy.validHash(expectedSha256)) {
-            _state.value = UpdateState.Error("Download URL is not from a trusted source.")
+            _state.value = UpdateState.Error(
+                "Download URL is not from a trusted source.",
+                UpdateFailureKind.UNTRUSTED_SOURCE
+            )
             return
         }
         if (!operation.tryLock()) return
@@ -195,7 +237,20 @@ class AppUpdateManager @Inject constructor(
             throw e
         } catch (e: Exception) {
             withContext(Dispatchers.IO) { AppHealthMonitor.recordUpdateStage(context, "failed", e) }
-            _state.value = UpdateState.Error("Download failed: ${e.message}")
+            val kind = when {
+                e is SecurityException -> UpdateFailureKind.PACKAGE_VERIFICATION
+                e.message?.contains("storage", ignoreCase = true) == true -> UpdateFailureKind.STORAGE
+                else -> UpdateFailureKind.DOWNLOAD
+            }
+            _state.value = UpdateState.Error(
+                "Download failed: ${e.message}",
+                kind,
+                if (kind == UpdateFailureKind.PACKAGE_VERIFICATION) {
+                    UpdateRecoveryAction.DOWNLOAD_AGAIN
+                } else {
+                    UpdateRecoveryAction.RETRY_DOWNLOAD
+                }
+            )
         } finally { operation.unlock() }
     }
 
@@ -211,11 +266,19 @@ class AppUpdateManager @Inject constructor(
             try { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             catch (fallbackFailure: Exception) {
                 com.saab.tv.AppDiagnostics.failure(context, "Updater", "Permission Fallback Failed", fallbackFailure)
-                _state.value = UpdateState.Error("Open TV Settings and allow Saab TV to install unknown apps, then retry.")
+                _state.value = UpdateState.Error(
+                    "Open TV Settings and allow Saab TV to install unknown apps, then retry.",
+                    UpdateFailureKind.INSTALL_PERMISSION,
+                    UpdateRecoveryAction.OPEN_INSTALL_SETTINGS
+                )
             }
         } catch (failure: Exception) {
             com.saab.tv.AppDiagnostics.failure(context, "Updater", "Permission Launch Failed", failure)
-            _state.value = UpdateState.Error("Installation permission is blocked. Allow Saab TV in your TV’s security settings.")
+            _state.value = UpdateState.Error(
+                "Installation permission is blocked. Allow Saab TV in your TV’s security settings.",
+                UpdateFailureKind.INSTALL_PERMISSION,
+                UpdateRecoveryAction.OPEN_INSTALL_SETTINGS
+            )
         }
     }
 
@@ -237,12 +300,23 @@ class AppUpdateManager @Inject constructor(
         if (!operation.tryLock()) return
         try {
             val verification = withContext(Dispatchers.IO) { ApkPackageVerifier.verify(context, file) }
-            if (!verification.valid) { _state.value = UpdateState.Error(verification.message); return }
+            if (!verification.valid) {
+                _state.value = UpdateState.Error(
+                    verification.message,
+                    UpdateFailureKind.PACKAGE_VERIFICATION,
+                    UpdateRecoveryAction.DOWNLOAD_AGAIN
+                )
+                return
+            }
             launchInstaller(file)
         } catch (e: CancellationException) { throw e }
         catch (failure: Exception) {
             com.saab.tv.AppDiagnostics.failure(context, "Updater", "Install Retry Failed", failure)
-            _state.value = UpdateState.InstallError(file, "The downloaded APK could not be opened. Try downloading it again.")
+            _state.value = UpdateState.InstallError(
+                file,
+                "The downloaded APK could not be opened. Try downloading it again.",
+                UpdateFailureKind.PACKAGE_VERIFICATION
+            )
         }
         finally { operation.unlock() }
     }
@@ -260,7 +334,11 @@ class AppUpdateManager @Inject constructor(
         try { installApk(file) }
         catch (failure: Exception) {
             com.saab.tv.AppDiagnostics.failure(context, "Updater", "Installer Launch Failed", failure)
-            _state.value = UpdateState.InstallError(file, "The TV could not open its installer. The verified APK is saved; retry installation or check your TV’s security settings.")
+            _state.value = UpdateState.InstallError(
+                file,
+                "The TV could not open its installer. The verified APK is saved; retry installation or check your TV’s security settings.",
+                UpdateFailureKind.INSTALLER
+            )
         }
     }
 

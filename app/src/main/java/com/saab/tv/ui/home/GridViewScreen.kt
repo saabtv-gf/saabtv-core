@@ -1,7 +1,5 @@
 package com.saab.tv.ui.home
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -19,22 +17,37 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.saab.tv.R
+import com.saab.tv.ui.components.ArtworkPrefetchDispatcher
+import com.saab.tv.ui.components.GridArtworkPrefetchEffect
+import com.saab.tv.ui.components.FocusPivotSpec
+import com.saab.tv.ui.components.LocalTitleCardShape
+import com.saab.tv.ui.components.scrollToItemUsingSaabMotion
+import com.saab.tv.ui.navigation.isBackOrEscape
+import com.saab.tv.ui.navigation.isInitialBackPress
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Rect
@@ -54,44 +67,94 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.schema.canonicalPresentationKey
 import com.saab.tv.ui.components.SaabTvCard
-import com.saab.tv.ui.utils.ImagePrefetcher
+import com.saab.tv.ui.utils.requestFocusOrFallback
+import com.saab.tv.ui.utils.requestFocusSafely
+import com.saab.tv.ui.utils.requestFocusWhenAttached
 
 private const val COLUMNS = 6
 private const val DPAD_REPEAT_INTERVAL_HORIZONTAL_MS = 150L
 private const val DPAD_REPEAT_INTERVAL_VERTICAL_MS = 200L
 
+internal class GridPaginationGate(private val prefetchDistance: Int = 12) {
+    private var requestedSourceCount = -1
+
+    fun shouldLoadMore(itemCount: Int, lastVisibleIndex: Int, sourceItemCount: Int = itemCount): Boolean {
+        if (itemCount <= 0 || lastVisibleIndex < itemCount - prefetchDistance) {
+            requestedSourceCount = -1
+            return false
+        }
+        if (requestedSourceCount == sourceItemCount) return false
+        requestedSourceCount = sourceItemCount
+        return true
+    }
+
+    fun reset() { requestedSourceCount = -1 }
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun GridViewScreen(
+internal fun GridViewScreen(
     title: String,
     items: List<MetaItem>,
+    gridStateKey: String = title,
+    initialFilter: CatalogMediaFilter = when (title.trim().lowercase()) {
+        "movies" -> CatalogMediaFilter.MOVIES
+        "series" -> CatalogMediaFilter.SERIES
+        else -> CatalogMediaFilter.ALL
+    },
     lastFocusedIndex: Int?,
-    onFocusChange: (Int) -> Unit,
+    lastFocusedItemKey: String? = null,
+    onFocusChange: (Int, String) -> Unit,
     onMovieClick: (MetaItem) -> Unit,
     profileId: Int = 1,
     onTrailerClick: (String, String) -> Unit = { _, _ -> },
     onBack: () -> Unit,
     onLoadMore: () -> Unit = {},
+    hasMoreItems: Boolean = false,
+    isLoadingMore: Boolean = false,
+    hasLoadMoreError: Boolean = false,
+    onRetryLoadMore: () -> Unit = onLoadMore,
+    isInitialLoading: Boolean = false,
+    hasInitialLoadError: Boolean = false,
+    onRetryInitialLoad: () -> Unit = {},
     // Scroll position persistence for instant restoration
     initialScrollIndex: Int = 0,
     initialScrollOffset: Int = 0,
     onScrollPositionChange: (Int, Int) -> Unit = { _, _ -> },
     watchedIds: Set<String> = emptySet(),
     allowTrailerAutoplay: Boolean = true,
-    previewViewModel: HomeViewModel = hiltViewModel()
+    previewViewModel: HomeViewModel = hiltViewModel(),
+    artworkPrefetchDispatcher: ArtworkPrefetchDispatcher? = null
 ) {
+    var filterKey by rememberSaveable(gridStateKey) { mutableStateOf(initialFilter.name) }
+    var sortKey by rememberSaveable(gridStateKey) { mutableStateOf(CatalogGridSort.FEATURED.name) }
+    val selectedFilter = CatalogMediaFilter.entries.firstOrNull { it.name == filterKey } ?: initialFilter
+    val selectedSort = CatalogGridSort.entries.firstOrNull { it.name == sortKey } ?: CatalogGridSort.FEATURED
+    val visibleItems = remember(items, selectedFilter, selectedSort) {
+        applyCatalogGridOptions(items, selectedFilter, selectedSort)
+    }
+    var filterMenuExpanded by remember { mutableStateOf(false) }
+    var sortMenuExpanded by remember { mutableStateOf(false) }
     val liveWatchedIds by remember(previewViewModel, profileId) {
         previewViewModel.watchedIdsForProfile(profileId)
     }.collectAsStateWithLifecycle(initialValue = emptySet())
@@ -103,10 +166,11 @@ fun GridViewScreen(
     var previewActive by remember { mutableStateOf(false) }
     var gridHasFocus by remember { mutableStateOf(false) }
     var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    val actionScope = rememberCoroutineScope()
     var actionBounds by remember { mutableStateOf(Rect.Zero) }
     val context = LocalContext.current
     val density = LocalDensity.current
-    val landscapeCards = com.saab.tv.ui.components.LocalTitleCardShape.current == "landscape"
+    val landscapeCards = LocalTitleCardShape.current == "landscape"
     val columnCount = if (landscapeCards) 4 else COLUMNS
     
     val startPadding = 50.dp
@@ -128,14 +192,39 @@ fun GridViewScreen(
     val pivotSpec = remember(headerHeightPx) {
         FocusPivotSpec(
             customOffset = headerHeightPx + 16f,
-            stiffnessProvider = { androidx.compose.animation.core.Spring.StiffnessMediumLow }
         )
     }
+
+    val itemKeys = remember(visibleItems) { visibleItems.map(MetaItem::canonicalPresentationKey) }
+    val lazyItemKeys = remember(title, itemKeys) { homeRowItemLazyKeys("grid:$title", itemKeys) }
+    val itemIndexByKey = remember(itemKeys) { firstIndexByKey(itemKeys) }
+    val restoredFocusIndex = resolveFocusedItemIndex(itemKeys, lastFocusedItemKey, lastFocusedIndex, itemIndexByKey)
+    val requestedFocusIndex = restoredFocusIndex ?: 0
     
-    // Grid state with restored position - start at exact item index for instant restoration
+    // Restore the saved viewport independently from the focused card. If that card
+    // is still visible, keep the user's scroll position; only move when it is not.
     val gridState = rememberLazyGridState(
-        initialFirstVisibleItemIndex = lastFocusedIndex ?: initialScrollIndex,
+        initialFirstVisibleItemIndex = initialScrollIndex.coerceAtLeast(0),
         initialFirstVisibleItemScrollOffset = initialScrollOffset
+    )
+    val artworkDispatcher = remember(context, artworkPrefetchDispatcher) {
+        artworkPrefetchDispatcher ?: ArtworkPrefetchDispatcher.forCoil(context)
+    }
+    var focusedArtworkKey by remember(gridState) { mutableStateOf<String?>(null) }
+    GridArtworkPrefetchEffect(
+        items = visibleItems,
+        enrichedItems = enrichedItems,
+        gridState = gridState,
+        focusedItemKey = focusedArtworkKey,
+        landscapeCards = landscapeCards,
+        dispatcher = artworkDispatcher,
+        posterSize = if (landscapeCards) null else androidx.compose.ui.unit.DpSize(
+            gridCardWidth, gridCardWidth * 1.5f
+        ),
+        landscapeSize = if (landscapeCards) androidx.compose.ui.unit.DpSize(
+            gridCardWidth, gridCardWidth * (9f / 16f)
+        ) else null,
+        onPrepareItem = { if (landscapeCards) previewViewModel.ensureTmdbEnrichment(it) }
     )
     var lastSavedScrollIndex by remember { mutableIntStateOf(Int.MIN_VALUE) }
     var lastSavedScrollOffset by remember { mutableIntStateOf(Int.MIN_VALUE) }
@@ -167,84 +256,77 @@ fun GridViewScreen(
         }
     }
     
-    // Lazy pagination: load more items when scrolling near the end
-    val lastVisibleIndex = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-    LaunchedEffect(lastVisibleIndex, items.size) {
-        if (items.size > 0 && lastVisibleIndex >= items.size - 12) {
-            onLoadMore()
-        }
+    // Observe layout outside composition and request at most once per current item batch.
+    val currentOnLoadMore by rememberUpdatedState(onLoadMore)
+    val paginationGate = remember(title) { GridPaginationGate() }
+    LaunchedEffect(gridState, title, items.size, visibleItems.size) {
+        val itemCount = visibleItems.size
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+            .distinctUntilChanged()
+            .collect { lastVisibleIndex ->
+                if (paginationGate.shouldLoadMore(itemCount, lastVisibleIndex, items.size)) {
+                    currentOnLoadMore()
+                }
+            }
     }
     
     // Entry focus requester
     val entryRequester = remember { FocusRequester() }
     val backIconRequester = remember { FocusRequester() }
+    val filterRequester = remember { FocusRequester() }
+    val emptyStateActionRequester = remember { FocusRequester() }
     val cardRequesters = remember { mutableMapOf<Int, FocusRequester>() }
-    var pendingDirectionalTargetIndex by remember { mutableStateOf<Int?>(null) }
+    var pendingDirectionalTargetIndex by remember(itemKeys) { mutableStateOf<Int?>(null) }
+    var lastReportedFocusKey by remember(itemKeys) { mutableStateOf<String?>(null) }
     var isBackIconFocused by remember { mutableStateOf(false) }
-    val backIconScale by animateFloatAsState(
-        targetValue = if (isBackIconFocused) 1.05f else 1f,
-        label = "grid_back_icon_scale"
-    )
     var lastFocusedPosterIndex by remember {
-        mutableIntStateOf((lastFocusedIndex ?: 0).coerceIn(0, (items.lastIndex).coerceAtLeast(0)))
-    }
-    
-    // Prefetch image URLs list
-    val imageUrls = remember(items, enrichedItems, landscapeCards) {
-        items.map { item ->
-            if (landscapeCards) {
-                enrichedItems["${item.type}:${item.id}"]?.background ?: item.background
-            } else item.poster
-        }
-    }
-
-    LaunchedEffect(gridState, items, enrichedItems, landscapeCards) {
-        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.map { it.index } }
-            .distinctUntilChanged()
-            .collect { visibleIndices ->
-                val visibleItems = visibleIndices.mapNotNull(items::getOrNull)
-                visibleItems.forEach { item ->
-                    if (landscapeCards) {
-                        previewViewModel.ensureTmdbEnrichment(item)
-                        val index = items.indexOfFirst { it.type == item.type && it.id == item.id }
-                        ImagePrefetcher.prefetchLandscape(context, imageUrls.getOrNull(index))
-                        ImagePrefetcher.prefetchLogo(context, enrichedItems["${item.type}:${item.id}"]?.logo ?: item.logo)
-                    }
-                }
-                if (landscapeCards) visibleIndices.firstOrNull { it in items.indices }?.let { index ->
-                    val logos = items.map { enrichedItems["${it.type}:${it.id}"]?.logo ?: it.logo }
-                    ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index, count = 2, logos = logos)
-                }
-            }
+        mutableIntStateOf(requestedFocusIndex.coerceIn(0, (visibleItems.lastIndex).coerceAtLeast(0)))
     }
     
     // Track if focus has been restored to prevent re-triggering
     var focusRestored by remember { mutableStateOf(false) }
 
-    BackHandler {
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction(onBack)
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Screen) {
         if (isBackIconFocused) {
             onBack()
         } else {
-            backIconRequester.requestFocus()
+            backIconRequester.requestFocusSafely()
         }
     }
 
-    // Focus restoration - just request focus, no scrolling needed since grid starts at correct position
-    LaunchedEffect(lastFocusedIndex, gridState.layoutInfo.totalItemsCount) {
-        if (!focusRestored && gridState.layoutInfo.totalItemsCount > 0) {
-            // Small delay to ensure item is composed
-            kotlinx.coroutines.delay(16)
-            entryRequester.requestFocus()
+    // Keep the saved viewport when it still contains the selected card; otherwise
+    // bring that card into view before restoring focus.
+    LaunchedEffect(itemKeys, lastFocusedItemKey, restoredFocusIndex, gridState.layoutInfo.totalItemsCount) {
+        if (visibleItems.isEmpty()) {
+            focusRestored = false
+            withFrameNanos { }
+            backIconRequester.requestFocusSafely()
+            return@LaunchedEffect
+        }
+        val focusedItemWasRemoved = lastFocusedItemKey != null && lastFocusedItemKey !in itemKeys
+        if (gridState.layoutInfo.totalItemsCount > 0 && (!focusRestored || focusedItemWasRemoved)) {
+            withFrameNanos { }
+            val targetIndex = requestedFocusIndex.coerceIn(0, visibleItems.lastIndex)
+            if (gridState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex }) {
+                gridState.scrollToItem(targetIndex)
+            }
+            entryRequester.requestFocusWhenAttached()
             focusRestored = true
         }
     }
 
-    // If UP/DOWN fallback used native scroll, re-apply focus as soon as the intended target is composed.
-    LaunchedEffect(gridState) {
-        snapshotFlow { pendingDirectionalTargetIndex to gridState.layoutInfo.visibleItemsInfo.map { it.index } }
-            .collect { (pendingTarget, visibleIndexes) ->
-                if (pendingTarget != null && visibleIndexes.contains(pendingTarget)) {
-                    cardRequesters[pendingTarget]?.requestFocus()
+    // Scroll and restore as one cancellable operation so newer D-pad input wins.
+    LaunchedEffect(gridState, itemKeys) {
+        snapshotFlow { pendingDirectionalTargetIndex }
+            .distinctUntilChanged()
+            .collectLatest { target ->
+                if (target != null && target in visibleItems.indices) {
+                    if (gridState.layoutInfo.visibleItemsInfo.none { it.index == target }) {
+                        gridState.scrollToItemUsingSaabMotion(target)
+                    }
+                    withFrameNanos { }
+                    cardRequesters[target]?.requestFocusWhenAttached()
                 }
             }
     }
@@ -276,18 +358,17 @@ fun GridViewScreen(
                 verticalArrangement = Arrangement.spacedBy(24.dp),
                 modifier = Modifier.fillMaxSize().zIndex(
                     if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)
-                    .onFocusChanged { gridHasFocus = it.hasFocus }
+                    .onFocusChanged {
+                        gridHasFocus = it.hasFocus
+                        if (!it.hasFocus) lastReportedFocusKey = null
+                    }
             ) {
                 itemsIndexed(
-                    items = items,
-                    key = { index, item -> "${item.id}_$index" }
+                    items = visibleItems,
+                    key = { index, _ -> lazyItemKeys[index] }
                 ) { index, item ->
                     
-                    val shouldRequestFocus = if (lastFocusedIndex != null) {
-                        index == lastFocusedIndex
-                    } else {
-                        index == 0
-                    }
+                    val shouldRequestFocus = index == requestedFocusIndex
                     val itemRequester = remember(index) { FocusRequester() }
                     val effectiveRequester = if (shouldRequestFocus) entryRequester else itemRequester
                     DisposableEffect(index, effectiveRequester) {
@@ -300,9 +381,11 @@ fun GridViewScreen(
                     }
                     
                     SaabTvCard(
-                        previewItem = enrichedItems["${item.type}:${item.id}"] ?: item,
+                        previewItem = enrichedItems[item.canonicalPresentationKey()] ?: item,
                         title = item.name,
                         posterUrl = item.poster,
+                        normalWidth = gridCardWidth,
+                        normalHeight = gridCardWidth * 1.5f,
                         landscapeWidth = gridCardWidth,
                         onClick = { onMovieClick(item) },
                         onLongClick = { bounds -> actionBounds = bounds; actionItem = item },
@@ -318,14 +401,12 @@ fun GridViewScreen(
                                         Key.DirectionUp -> {
                                             if (index < columnCount) {
                                                 pendingDirectionalTargetIndex = null
-                                                backIconRequester.requestFocus()
-                                                return@onPreviewKeyEvent true
+                                                return@onPreviewKeyEvent backIconRequester.requestFocusSafely()
                                             }
                                             val targetIndex = index - columnCount
                                             val targetRequester = cardRequesters[targetIndex]
-                                            if (targetRequester != null) {
+                                            if (targetRequester?.requestFocusSafely() == true) {
                                                 pendingDirectionalTargetIndex = null
-                                                targetRequester.requestFocus()
                                                 return@onPreviewKeyEvent true
                                             } else {
                                                 // Let native focus/scroll happen, then correct to the intended same-column target.
@@ -335,14 +416,13 @@ fun GridViewScreen(
                                         }
                                         Key.DirectionDown -> {
                                             val targetIndex = index + columnCount
-                                            if (targetIndex >= items.size) {
+                                            if (targetIndex >= visibleItems.size) {
                                                 pendingDirectionalTargetIndex = null
                                                 return@onPreviewKeyEvent true
                                             }
                                             val targetRequester = cardRequesters[targetIndex]
-                                            if (targetRequester != null) {
+                                            if (targetRequester?.requestFocusSafely() == true) {
                                                 pendingDirectionalTargetIndex = null
-                                                targetRequester.requestFocus()
                                                 return@onPreviewKeyEvent true
                                             } else {
                                                 // Let native focus/scroll happen, then correct to the intended same-column target.
@@ -367,13 +447,12 @@ fun GridViewScreen(
                             .onFocusChanged {
                                 if (it.isFocused) {
                                     previewItem = item
+                                    focusedArtworkKey = itemKeys[index]
                                     previewViewModel.ensureTmdbEnrichment(item)
-                                    if (landscapeCards) {
-                                        ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index, count = 5)
-                                    } else {
-                                        ImagePrefetcher.prefetchAround(context, imageUrls, index, count = 5)
+                                    if (lastReportedFocusKey != itemKeys[index]) {
+                                        lastReportedFocusKey = itemKeys[index]
+                                        onFocusChange(index, itemKeys[index])
                                     }
-                                    onFocusChange(index)
                                     lastFocusedPosterIndex = index
                                     val pendingTarget = pendingDirectionalTargetIndex
                                     if (pendingTarget != null) {
@@ -382,13 +461,103 @@ fun GridViewScreen(
                                             pendingDirectionalTargetIndex = null
                                         } else {
                                             // Keep pending until correction actually succeeds.
-                                            cardRequesters[pendingTarget]?.requestFocus()
+                                            cardRequesters[pendingTarget]?.requestFocusSafely()
                                         }
                                     }
                                 }
                             }
                             .focusRequester(effectiveRequester)
                     )
+                }
+                if (hasMoreItems) {
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "grid-load-more") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            when {
+                                isLoadingMore -> Text(stringResource(R.string.catalog_grid_loading_more), color = Color.White.copy(alpha = 0.7f))
+                                hasLoadMoreError -> {
+                                    Text(stringResource(R.string.catalog_grid_page_failed), color = Color.White.copy(alpha = 0.75f))
+                                    TextButton(onClick = {
+                                        paginationGate.reset()
+                                        onRetryLoadMore()
+                                    }, modifier = Modifier.testTag("grid-load-more-retry")) {
+                                        Text(stringResource(R.string.common_retry), color = Color.White)
+                                    }
+                                }
+                                else -> TextButton(onClick = {
+                                    paginationGate.reset()
+                                    onLoadMore()
+                                }, modifier = Modifier.testTag("grid-load-more-button")) {
+                                    Text(stringResource(R.string.catalog_grid_load_more), color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (visibleItems.isEmpty()) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(top = headerHeight + 48.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                when {
+                    isInitialLoading -> Text(stringResource(R.string.catalog_grid_loading), color = Color.White.copy(alpha = 0.75f))
+                    hasInitialLoadError -> {
+                        Text(stringResource(R.string.catalog_grid_page_failed), color = Color.White.copy(alpha = 0.75f))
+                        TextButton(
+                            onClick = onRetryInitialLoad,
+                            modifier = Modifier.focusRequester(emptyStateActionRequester).testTag("grid-initial-retry")
+                        ) {
+                            Text(stringResource(R.string.common_retry), color = Color.White)
+                        }
+                    }
+                    else -> {
+                        Text(
+                            text = stringResource(
+                                if (items.isEmpty()) R.string.catalog_grid_empty_title else R.string.catalog_grid_no_filter_results
+                            ),
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                            color = Color.White
+                        )
+                        when {
+                            isLoadingMore -> Text(
+                                stringResource(R.string.catalog_grid_loading_more),
+                                color = Color.White.copy(alpha = 0.75f)
+                            )
+                            hasLoadMoreError -> {
+                                Text(
+                                    stringResource(R.string.catalog_grid_page_failed),
+                                    color = Color.White.copy(alpha = 0.75f)
+                                )
+                                TextButton(
+                                    onClick = {
+                                        paginationGate.reset()
+                                        onRetryLoadMore()
+                                    },
+                                    modifier = Modifier.focusRequester(emptyStateActionRequester)
+                                        .testTag("grid-empty-page-retry")
+                                ) {
+                                    Text(stringResource(R.string.common_retry), color = Color.White)
+                                }
+                            }
+                            hasMoreItems -> TextButton(
+                                onClick = {
+                                    paginationGate.reset()
+                                    onLoadMore()
+                                },
+                                modifier = Modifier.focusRequester(emptyStateActionRequester)
+                                    .testTag("grid-empty-load-more")
+                            ) {
+                                Text(stringResource(R.string.catalog_grid_load_more), color = Color.White)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -442,22 +611,32 @@ fun GridViewScreen(
                         .focusRequester(backIconRequester)
                         .onFocusChanged { isBackIconFocused = it.isFocused }
                         .onPreviewKeyEvent { event ->
+                            if (event.isBackOrEscape()) {
+                                if (event.isInitialBackPress()) dispatchBackFromKey()
+                                return@onPreviewKeyEvent true
+                            }
                             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                             when (event.key) {
                                 Key.DirectionDown -> {
-                                    if (items.isNotEmpty()) {
-                                        val targetIndex = lastFocusedPosterIndex.coerceIn(0, items.lastIndex)
+                                    if (visibleItems.isNotEmpty()) {
+                                        val targetIndex = lastFocusedPosterIndex.coerceIn(0, visibleItems.lastIndex)
                                         val targetRequester = cardRequesters[targetIndex]
-                                        if (targetRequester != null) {
+                                        if (targetRequester?.requestFocusSafely() == true) {
                                             pendingDirectionalTargetIndex = null
-                                            targetRequester.requestFocus()
                                         } else {
                                             pendingDirectionalTargetIndex = targetIndex
                                         }
+                                    } else if (
+                                        hasInitialLoadError ||
+                                        (hasLoadMoreError || hasMoreItems) && visibleItems.isEmpty()
+                                    ) {
+                                        emptyStateActionRequester.requestFocusSafely()
+                                    } else {
+                                        filterRequester.requestFocusSafely()
                                     }
                                     true
                                 }
-                                Key.Enter, Key.NumPadEnter, Key.DirectionCenter, Key.Back -> {
+                                Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
                                     onBack()
                                     true
                                 }
@@ -466,15 +645,15 @@ fun GridViewScreen(
                             }
                         }
                         .focusable()
+                        .testTag("grid-back-control")
                         .size(30.dp)
                         .graphicsLayer {
-                            scaleX = -backIconScale // Mirror horizontally + animated scale
-                            scaleY = backIconScale
+                            scaleX = -1f // Mirror the icon without changing its focus geometry.
                         }
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.ic_view_more_arrow),
-                        contentDescription = "Back",
+                        contentDescription = stringResource(R.string.common_back),
                         tint = if (isBackIconFocused) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.5f),
                         modifier = Modifier.fillMaxSize()
                     )
@@ -485,10 +664,52 @@ fun GridViewScreen(
                 // Category title
                 Text(
                     text = title,
+                    modifier = Modifier.widthIn(max = 420.dp),
                     style = MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White
-                    )
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.weight(1f))
+                GridChoiceMenu(
+                    label = stringResource(R.string.catalog_grid_filter_label),
+                    value = when (selectedFilter) {
+                        CatalogMediaFilter.ALL -> stringResource(R.string.catalog_grid_filter_all)
+                        CatalogMediaFilter.MOVIES -> stringResource(R.string.catalog_grid_filter_movies)
+                        CatalogMediaFilter.SERIES -> stringResource(R.string.catalog_grid_filter_series)
+                    },
+                    expanded = filterMenuExpanded,
+                    onExpandedChange = { filterMenuExpanded = it },
+                    options = listOf(
+                        stringResource(R.string.catalog_grid_filter_all) to CatalogMediaFilter.ALL,
+                        stringResource(R.string.catalog_grid_filter_movies) to CatalogMediaFilter.MOVIES,
+                        stringResource(R.string.catalog_grid_filter_series) to CatalogMediaFilter.SERIES
+                    ),
+                    onSelect = { filterKey = it.name },
+                    testTag = "grid-filter-button",
+                    focusRequester = filterRequester
+                )
+                Spacer(Modifier.width(8.dp))
+                GridChoiceMenu(
+                    label = stringResource(R.string.catalog_grid_sort_label),
+                    value = when (selectedSort) {
+                        CatalogGridSort.FEATURED -> stringResource(R.string.catalog_grid_sort_featured)
+                        CatalogGridSort.TITLE -> stringResource(R.string.catalog_grid_sort_title)
+                        CatalogGridSort.NEWEST -> stringResource(R.string.catalog_grid_sort_newest)
+                        CatalogGridSort.RATING -> stringResource(R.string.catalog_grid_sort_rating)
+                    },
+                    expanded = sortMenuExpanded,
+                    onExpandedChange = { sortMenuExpanded = it },
+                    options = listOf(
+                        stringResource(R.string.catalog_grid_sort_featured) to CatalogGridSort.FEATURED,
+                        stringResource(R.string.catalog_grid_sort_title) to CatalogGridSort.TITLE,
+                        stringResource(R.string.catalog_grid_sort_newest) to CatalogGridSort.NEWEST,
+                        stringResource(R.string.catalog_grid_sort_rating) to CatalogGridSort.RATING
+                    ),
+                    onSelect = { sortKey = it.name },
+                    testTag = "grid-sort-button"
                 )
             }
         }
@@ -496,16 +717,59 @@ fun GridViewScreen(
     actionItem?.let { item ->
         CompositionLocalProvider(com.saab.tv.ui.components.LocalWatchedIds provides liveWatchedIds) {
             CatalogQuickActionsPopup(item, actionBounds, profileId,
-                onDismiss = { actionItem = null }, onTrailerClick = onTrailerClick, viewModel = previewViewModel)
+                onDismiss = {
+                    actionItem = null
+                    actionScope.launch {
+                        withFrameNanos { }
+                        originalPosterFocus.requestFocusOrFallback(entryRequester)
+                    }
+                }, onTrailerClick = onTrailerClick, viewModel = previewViewModel)
         }
     }
     com.saab.tv.ui.trailer.BackdropTrailerPreview(
         profileId = profileId,
-        focusedItem = previewItem, catalog = items,
+        focusedItem = previewItem,
         settings = com.saab.tv.data.profile.rememberTrailerPreviewSettings(profileId),
         enabled = allowTrailerAutoplay && !com.saab.tv.ui.trailer.LocalManualTrailerActive.current && (gridHasFocus || previewActive) && !isBackIconFocused && actionItem == null,
         resolveTrailer = previewViewModel::trailerFor, onActiveChanged = { previewActive = it },
-        onOpen = onMovieClick, onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: entryRequester.requestFocus() } },
+        onOpen = onMovieClick, onDismiss = { originalPosterFocus.requestFocusOrFallback(entryRequester) },
         homeViewModel = previewViewModel
     )
+}
+
+@Composable
+private fun <T> GridChoiceMenu(
+    label: String,
+    value: String,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    options: List<Pair<String, T>>,
+    onSelect: (T) -> Unit,
+    testTag: String,
+    focusRequester: FocusRequester? = null
+) {
+    Box {
+        TextButton(
+            onClick = { onExpandedChange(true) },
+            modifier = Modifier.testTag(testTag)
+                .then(if (focusRequester == null) Modifier else Modifier.focusRequester(focusRequester))
+        ) {
+            Text(
+                stringResource(R.string.common_labeled_value, label, value),
+                color = Color.White,
+                maxLines = 1
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            options.forEach { (text, option) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = {
+                        onSelect(option)
+                        onExpandedChange(false)
+                    }
+                )
+            }
+        }
+    }
 }

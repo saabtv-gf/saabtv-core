@@ -4,6 +4,11 @@ import android.content.Context
 import coil.imageLoader
 import coil.request.CachePolicy
 import coil.request.ImageRequest
+import coil.memory.MemoryCache
+import coil.size.Scale
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
 
 /**
  * Netflix-grade image prefetcher for smooth scrolling.
@@ -11,19 +16,14 @@ import coil.request.ImageRequest
  */
 object ImagePrefetcher {
     
-    // Standard poster size matching SaabTvCard for cache hit
-    private const val POSTER_WIDTH = 280
-    private const val POSTER_HEIGHT = 420
-
-    // Landscape card size matching SaabTvLandscapeCard (2x 190dp at 16:9)
-    private const val LANDSCAPE_WIDTH = 380
-    private const val LANDSCAPE_HEIGHT = 214
-    private const val LOGO_WIDTH = 300
-    private const val LOGO_HEIGHT = 90
+    private fun artworkSize(context: Context, requestedSize: DpSize) =
+        artworkDecodeSizePx(requestedSize.width, requestedSize.height, displayDensity(context))
+    private fun logoSize(context: Context) = artworkDecodeSizePx(150.dp, 45.dp, displayDensity(context))
+    private fun displayDensity(context: Context) = Density(context.resources.displayMetrics.density)
     
     // Number of items to prefetch ahead
-    private const val PREFETCH_COUNT = 5
-    private const val PREFETCH_DEDUP_WINDOW_MS = 450L
+    private const val PREFETCH_COUNT = 2
+    private const val PREFETCH_DEDUP_WINDOW_MS = 2_000L
     private const val AROUND_PREFETCH_SKIP_WINDOW_MS = 100L
     private const val AROUND_PREFETCH_REDUCED_WINDOW_MS = 220L
     private const val RECENT_PREFETCH_CAPACITY = 512
@@ -36,12 +36,14 @@ object ImagePrefetcher {
 
     /** Warm only the nearest hero backdrops; poster requests do not populate this size's cache. */
     fun prefetchBackdrop(context: Context, url: String?) {
-        if (url.isNullOrBlank() || !shouldEnqueue("backdrop:$url")) return
+        if (url.isNullOrBlank() || !shouldEnqueue(context, "backdrop:$url")) return
         context.imageLoader.enqueue(
             ImageRequest.Builder(context)
                 .data(url)
                 .size(1280, 720)
-                .memoryCacheKey(url)
+                .memoryCacheKey("backdrop:$url")
+                .diskCacheKey(url)
+                .scale(Scale.FILL)
                 .memoryCachePolicy(CachePolicy.ENABLED)
                 .diskCachePolicy(CachePolicy.ENABLED)
                 .build()
@@ -49,8 +51,12 @@ object ImagePrefetcher {
     }
 
     @Synchronized
+    private fun shouldEnqueue(context: Context, key: String): Boolean =
+        context.imageLoader.memoryCache?.get(MemoryCache.Key(key)) == null && shouldEnqueue(key)
+
+    @Synchronized
     private fun shouldEnqueue(url: String): Boolean {
-        val now = System.currentTimeMillis()
+        val now = android.os.SystemClock.uptimeMillis()
         val lastEnqueuedAt = recentPrefetches[url]
         if (lastEnqueuedAt != null && now - lastEnqueuedAt < PREFETCH_DEDUP_WINDOW_MS) {
             return false
@@ -69,7 +75,7 @@ object ImagePrefetcher {
 
     @Synchronized
     private fun effectiveAroundCount(requestedCount: Int): Int {
-        val now = System.currentTimeMillis()
+        val now = android.os.SystemClock.uptimeMillis()
         val delta = now - lastAroundPrefetchAtMs
         lastAroundPrefetchAtMs = now
 
@@ -85,21 +91,13 @@ object ImagePrefetcher {
     /**
      * Prefetch a single image URL
      */
-    fun prefetch(context: Context, url: String?) {
+    fun prefetch(context: Context, url: String?, requestedSize: DpSize = DpSize(140.dp, 210.dp)) {
         if (url.isNullOrBlank()) return
-        if (!shouldEnqueue(url)) return
-        
-        val request = ImageRequest.Builder(context)
-            .data(url)
-            .size(POSTER_WIDTH, POSTER_HEIGHT)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            // Don't need the result, just cache it
-            .memoryCacheKey(url)
-            .diskCacheKey(url)
-            .build()
-        
-        context.imageLoader.enqueue(request)
+        val size = artworkSize(context, requestedSize)
+        val cacheKey = artworkMemoryCacheKey(ArtworkCacheRole.Poster.key, url, size)
+        if (!shouldEnqueue(context, cacheKey)) return
+
+        context.imageLoader.enqueue(artworkImageRequest(context, url, ArtworkCacheRole.Poster, size))
     }
     
     /**
@@ -135,34 +133,26 @@ object ImagePrefetcher {
     /**
      * Prefetch a single landscape-sized image URL
      */
-    fun prefetchLandscape(context: Context, url: String?) {
-        if (url.isNullOrBlank() || !shouldEnqueue("landscape:$url")) return
+    fun prefetchLandscape(
+        context: Context,
+        url: String?,
+        requestedSize: DpSize = DpSize(190.dp, 190.dp * (9f / 16f))
+    ) {
+        if (url.isNullOrBlank()) return
+        val size = artworkSize(context, requestedSize)
+        val cacheKey = artworkMemoryCacheKey(ArtworkCacheRole.Landscape.key, url, size)
+        if (!shouldEnqueue(context, cacheKey)) return
 
-        val request = ImageRequest.Builder(context)
-            .data(url)
-            .size(LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT)
-            .memoryCachePolicy(CachePolicy.ENABLED)
-            .diskCachePolicy(CachePolicy.ENABLED)
-            .memoryCacheKey("landscape:$url")
-            .diskCacheKey("landscape:$url")
-            .build()
-
-        context.imageLoader.enqueue(request)
+        context.imageLoader.enqueue(artworkImageRequest(context, url, ArtworkCacheRole.Landscape, size))
     }
 
     /** Warm the small transparent title mark separately from the full-card backdrop. */
     fun prefetchLogo(context: Context, url: String?) {
-        if (url.isNullOrBlank() || !shouldEnqueue("logo:$url")) return
-        context.imageLoader.enqueue(
-            ImageRequest.Builder(context)
-                .data(url)
-                .size(LOGO_WIDTH, LOGO_HEIGHT)
-                .memoryCacheKey("logo:$url")
-                .diskCacheKey("logo:$url")
-                .memoryCachePolicy(CachePolicy.ENABLED)
-                .diskCachePolicy(CachePolicy.ENABLED)
-                .build()
-        )
+        if (url.isNullOrBlank()) return
+        val size = logoSize(context)
+        val cacheKey = artworkMemoryCacheKey(ArtworkCacheRole.Logo.key, url, size)
+        if (!shouldEnqueue(context, cacheKey)) return
+        context.imageLoader.enqueue(artworkImageRequest(context, url, ArtworkCacheRole.Logo, size))
     }
 
     /**

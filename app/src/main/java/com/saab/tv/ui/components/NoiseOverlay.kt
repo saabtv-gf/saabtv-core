@@ -7,8 +7,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.TileMode
 import kotlin.random.Random
 
 private const val NOISE_SIZE = 128
@@ -41,23 +42,13 @@ fun rememberNoiseBitmap(): Bitmap {
 @Composable
 fun NoiseOverlay(modifier: Modifier = Modifier, alpha: Float = 0.018f) {
     val noiseBitmap = rememberNoiseBitmap()
-    val imageBitmap = remember(noiseBitmap) { noiseBitmap.asImageBitmap() }
+    val brush = remember(noiseBitmap) {
+        ShaderBrush(ImageShader(noiseBitmap.asImageBitmap(), TileMode.Repeated, TileMode.Repeated))
+    }
 
     Canvas(modifier = modifier.fillMaxSize()) {
-        val tileW = NOISE_SIZE
-        val tileH = NOISE_SIZE
-        val cols = (size.width / tileW).toInt() + 1
-        val rows = (size.height / tileH).toInt() + 1
-
-        for (row in 0 until rows) {
-            for (col in 0 until cols) {
-                drawImage(
-                    image = imageBitmap,
-                    dstOffset = androidx.compose.ui.unit.IntOffset(col * tileW, row * tileH),
-                    dstSize = IntSize(tileW, tileH),
-                    alpha = alpha
-                )
-            }
-        }
+        // One repeated shader draw replaces hundreds of individual tile draws
+        // while two backdrops are composited during a transition.
+        drawRect(brush = brush, alpha = alpha.coerceIn(0f, 1f))
     }
 }

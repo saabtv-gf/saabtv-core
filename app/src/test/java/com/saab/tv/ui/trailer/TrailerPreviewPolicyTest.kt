@@ -5,6 +5,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TrailerPreviewPolicyTest {
+    @Test fun newTrailerPreviewsSkipFirstTenSecondsButRenditionFallbackResumesInPlace() {
+        assertEquals(10_000L, TrailerPreviewPolicy.initialStartPositionMs(0L))
+        assertEquals(18_500L, TrailerPreviewPolicy.initialStartPositionMs(18_500L))
+    }
     @Test fun searchNeverAutoplaysOnHover() {
         assertFalse(TrailerPreviewPolicy.allowsHover(true, false))
         assertFalse(TrailerPreviewPolicy.allowsHover(true, true))
@@ -54,5 +58,47 @@ class TrailerPreviewPolicyTest {
     }
     @Test fun keyboardOrMissingPosterCannotStartPreview() {
         assertFalse(TrailerPreviewPolicy.canStart(true, true, null, null, null, null))
+    }
+
+    @Test fun volumeTracksMuteStateInsteadOfOnlyChangingTheButtonLabel() {
+        assertEquals(0f, TrailerPreviewPolicy.volume(muted = true), 0f)
+        assertEquals(1f, TrailerPreviewPolicy.volume(muted = false), 0f)
+    }
+
+    @Test fun fullscreenPromotionKeepsTheActivePreviewRequestCurrent() {
+        val gate = TrailerPreviewRequestGate()
+        val request = gate.begin("series:related", allowed = true)!!
+
+        // Presentation changes are not identity changes; promotion must not
+        // cause extraction/player creation to restart.
+        assertTrue(gate.accepts(request))
+    }
+
+    @Test fun routeOrFocusChangeRejectsLateTrailerExtraction() {
+        val gate = TrailerPreviewRequestGate()
+        val original = gate.begin("movie:old", allowed = true)!!
+        val next = gate.begin("movie:new", allowed = true)!!
+
+        assertFalse(gate.accepts(original))
+        assertTrue(gate.accepts(next))
+    }
+
+    @Test fun disablingOrDismissingPreviewInvalidatesPendingResolution() {
+        val gate = TrailerPreviewRequestGate()
+        val request = gate.begin("movie:one", allowed = true)!!
+        gate.begin("movie:one", allowed = false)
+        assertFalse(gate.accepts(request))
+
+        val next = gate.begin("movie:one", allowed = true)!!
+        gate.invalidate()
+        assertFalse(gate.accepts(next))
+    }
+
+    @Test fun missingTargetInvalidatesAnEarlierRequest() {
+        val gate = TrailerPreviewRequestGate()
+        val request = gate.begin("movie:one", allowed = true)!!
+
+        assertNull(gate.begin(null, allowed = true))
+        assertFalse(gate.accepts(request))
     }
 }

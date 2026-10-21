@@ -3,7 +3,7 @@ package com.saab.tv.ui.trailer
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import com.saab.tv.data.localization.LocalizedComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -14,10 +14,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import androidx.tv.material3.Button
+import com.saab.tv.R
 import com.saab.tv.data.trailer.*
+import com.saab.tv.ui.components.SetupButton
 import com.saab.tv.ui.player.PlayerScreen
 import com.saab.tv.ui.player.base.PlaybackSettings
 import com.saab.tv.ui.theme.SaabTvTheme
@@ -29,7 +31,7 @@ import javax.inject.Inject
 
 /** Trailer route uses the same Saab TV controls/rendering backend as full playback. */
 @AndroidEntryPoint
-class YouTubeTrailerActivity : ComponentActivity() {
+class YouTubeTrailerActivity : LocalizedComponentActivity() {
     @Inject lateinit var extractor: YouTubeExtractor
     @Inject lateinit var dao: com.saab.tv.data.local.AddonDao
     companion object {
@@ -58,7 +60,7 @@ class YouTubeTrailerActivity : ComponentActivity() {
                             resolved.qualityLabel, requestHeaders = resolved.requestHeaders,
                             formatId = resolved.formatId, codec = resolved.codec, bitrate = resolved.bitrate,
                             fps = resolved.fps, width = resolved.width, hardwareDecoder = resolved.hardwareDecoder)) + resolved.fallbackVariants,
-                        title = intent.getStringExtra(TITLE).orEmpty().ifBlank { "Trailer" },
+                        title = intent.getStringExtra(TITLE).orEmpty().ifBlank { getString(R.string.trailer_default_title) },
                         poster = "", movieId = "trailer_$videoId", mediaType = "movie",
                         playbackSettings = PlaybackSettings(seekThumbnailsEnabled = false),
                         onBack = { finish() }
@@ -67,11 +69,20 @@ class YouTubeTrailerActivity : ComponentActivity() {
                     BackHandler { finish() }
                     Column(Modifier.fillMaxSize().background(Color.Black), horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically)) {
-                        if (!failed) { CircularProgressIndicator(); Text("Loading Trailer", color = Color.White) }
+                        if (!failed) { CircularProgressIndicator(); Text(stringResource(R.string.trailer_loading), color = Color.White) }
                         else {
-                            Text("Trailer Unavailable", color = Color.White)
-                            Button(onClick = { load() }) { Text("Try Again") }
-                            Button(onClick = { finish() }) { Text("Back") }
+                            Text(stringResource(R.string.trailer_unavailable), color = Color.White)
+                            SetupButton(
+                                text = stringResource(R.string.common_try_again),
+                                onClick = { load() },
+                                primary = true,
+                                modifier = Modifier.widthIn(min = 240.dp, max = 360.dp)
+                            )
+                            SetupButton(
+                                text = stringResource(R.string.common_back),
+                                onClick = { finish() },
+                                modifier = Modifier.widthIn(min = 240.dp, max = 360.dp)
+                            )
                         }
                     }
                 }

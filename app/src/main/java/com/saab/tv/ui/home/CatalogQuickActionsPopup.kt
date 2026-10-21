@@ -24,24 +24,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.MaterialTheme
+import com.saab.tv.R
 import com.saab.tv.data.model.stremio.MetaItem
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.withFrameNanos
 
 /** A focusable, card-centered action strip shared by grid and search cards. */
 @Composable
@@ -51,6 +48,7 @@ fun CatalogQuickActionsPopup(
     profileId: Int,
     onDismiss: () -> Unit,
     onTrailerClick: (String, String) -> Unit,
+    onLibraryMutationComplete: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
@@ -58,7 +56,14 @@ fun CatalogQuickActionsPopup(
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
+    val watchTrailerLabel = stringResource(R.string.quick_action_watch_trailer)
+    val markWatchedLabel = stringResource(R.string.episode_mark_watched)
+    val markUnwatchedLabel = stringResource(R.string.quick_action_mark_unwatched)
+    val addWatchlistLabel = stringResource(R.string.details_action_add_watchlist)
+    val removeWatchlistLabel = stringResource(R.string.quick_action_remove_watchlist)
+    val noTrailerMessage = stringResource(R.string.quick_action_no_trailer)
     val scope = rememberCoroutineScope()
+    val localWatchlistIds = com.saab.tv.ui.components.LocalWatchlistIds.current
     val widthPx = with(density) { 180.dp.roundToPx() }
     val heightPx = with(density) { 60.dp.roundToPx() }
     val marginPx = with(density) { 12.dp.roundToPx() }
@@ -69,73 +74,92 @@ fun CatalogQuickActionsPopup(
     val y = (bounds.center.y.toInt() - heightPx / 2)
         .coerceIn(marginPx, (screenHeightPx - heightPx - marginPx).coerceAtLeast(marginPx))
 
-    var watchlisted by remember(item.id, profileId) { mutableStateOf(false) }
+    var watchlisted by remember(item.id, profileId) {
+        mutableStateOf(item.id in localWatchlistIds)
+    }
     var watched by remember(item.id, profileId) { mutableStateOf(item.id in locallyWatchedIds) }
-    var actionsArmed by remember(item.id) { mutableStateOf(false) }
-    var suppressOpeningKeyUp by remember(item.id) { mutableStateOf(true) }
+    var watchlistStateLoaded by remember(item.id, profileId) { mutableStateOf(false) }
+    var watchedStateLoaded by remember(item.id, profileId) { mutableStateOf(false) }
     val firstActionRequester = remember(item.id) { FocusRequester() }
-    LaunchedEffect(item.id, profileId, locallyWatchedIds) {
-        watchlisted = try {
-            viewModel.isWatchlisted(profileId, item.id)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            false
-        }
-        watched = item.id in locallyWatchedIds || try {
-            viewModel.isTitleWatched(profileId, item)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            false
-        }
-        delay(80)
-        runCatching { firstActionRequester.requestFocus() }
-        delay(420)
+    var actionsArmed by remember(item.id, profileId) { mutableStateOf(false) }
+    LaunchedEffect(item.id, profileId) {
         actionsArmed = true
+        withFrameNanos { }
+        runCatching { firstActionRequester.requestFocus() }
+    }
+    LaunchedEffect(item.id in localWatchlistIds) {
+        // Positive local membership is safe to render immediately. Absence is not
+        // authoritative until the profile-scoped database query has completed.
+        if (item.id in localWatchlistIds) watchlisted = true
+    }
+    LaunchedEffect(item.id, profileId) {
+        try {
+            watchlisted = viewModel.isWatchlisted(profileId, item.id)
+            watchlistStateLoaded = true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Keep the mutating action disabled rather than risk toggling the
+            // wrong state when membership could not be read.
+        }
+    }
+    LaunchedEffect(item.id, profileId, locallyWatchedIds) {
+        try {
+            watched = item.id in locallyWatchedIds || viewModel.isTitleWatched(profileId, item)
+            watchedStateLoaded = true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Marking/unmarking is stateful too; fail closed until a later retry.
+        }
     }
 
     Popup(alignment = Alignment.TopStart, offset = IntOffset(x, y),
         onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
-        Row(Modifier.width(180.dp)
-            .onPreviewKeyEvent { event ->
-                if (suppressOpeningKeyUp && event.type == KeyEventType.KeyUp &&
-                    (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
-                    suppressOpeningKeyUp = false
-                    actionsArmed = true
-                    true
-                } else false
-            }
+        androidx.compose.foundation.layout.Column(Modifier.width(180.dp)
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
             .border(1.dp, Color.White.copy(alpha = 0.42f), RoundedCornerShape(12.dp))
             .padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically
         ) {
-            CardActionIcon(Icons.Default.Videocam, "Watch Trailer", onClick = {
-                onDismiss()
-                if (manualTrailerLauncher != null) {
-                    manualTrailerLauncher(item, null, null)
-                } else scope.launch {
-                    val trailer = try { viewModel.trailerFor(item) }
-                    catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { null }
-                    if (trailer != null) onTrailerClick(trailer.first, trailer.second)
-                    else android.widget.Toast.makeText(context, "No trailer available", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            }, modifier = Modifier.weight(1f), enabled = actionsArmed, focusRequester = firstActionRequester)
-            CardActionIcon(Icons.Default.DoneAll,
-                if (watched) "Mark As Unwatched" else "Mark As Watched", onClick = {
-                    if (watched) viewModel.unmarkTitleWatched(profileId, item)
-                    else viewModel.markTitleWatched(profileId, item)
-                    onDismiss()
-                }, modifier = Modifier.weight(1f), enabled = actionsArmed,
-                destructive = false)
-            CardActionIcon(if (watchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                if (watchlisted) "Remove From Watchlist" else "Add To Watchlist", onClick = {
-                    viewModel.toggleWatchlist(profileId, item)
-                    onDismiss()
-                }, modifier = Modifier.weight(1f), enabled = actionsArmed, destructive = watchlisted)
+            CatalogQuickActionStrip(
+                actions = listOf(
+                    CatalogQuickAction(Icons.Default.Videocam, watchTrailerLabel, onClick = {
+                        onDismiss()
+                        if (manualTrailerLauncher != null) {
+                            manualTrailerLauncher(item, null, null, null)
+                        } else scope.launch {
+                            val trailer = try { viewModel.trailerFor(item) }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { null }
+                            if (trailer != null) onTrailerClick(trailer.first, trailer.second)
+                            else android.widget.Toast.makeText(context, noTrailerMessage, android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }, enabled = actionsArmed, focusRequester = firstActionRequester),
+                    CatalogQuickAction(
+                        Icons.Default.DoneAll,
+                        if (watched) markUnwatchedLabel else markWatchedLabel,
+                        onClick = {
+                            if (watched) viewModel.unmarkTitleWatched(
+                                profileId, item, onLocalMutationCommitted = onLibraryMutationComplete
+                            ) else viewModel.markTitleWatched(
+                                profileId, item, onLocalMutationCommitted = onLibraryMutationComplete
+                            )
+                            onDismiss()
+                        },
+                        enabled = actionsArmed && watchedStateLoaded
+                    ),
+                    CatalogQuickAction(
+                        if (watchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                        if (watchlisted) removeWatchlistLabel else addWatchlistLabel,
+                        onClick = {
+                            viewModel.toggleWatchlist(profileId, item, onLibraryMutationComplete)
+                            onDismiss()
+                        },
+                        enabled = actionsArmed && watchlistStateLoaded,
+                        destructive = watchlisted
+                    )
+                )
+            )
         }
     }
 }

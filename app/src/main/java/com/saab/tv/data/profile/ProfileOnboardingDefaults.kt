@@ -8,6 +8,8 @@ internal fun ProfileEntity.withOnboardingPreferences(languages: List<String>): P
     return copy(
         sourceLanguagePriority1 = languages[0],
         sourceLanguagePriority2 = languages[1],
-        sourceLanguagePriority3 = languages[2]
+        sourceLanguagePriority3 = languages[2],
+        preferredAudioLanguage = languages[0],
+        preferredAudioLanguageSecondary = languages[1]
     )
 }

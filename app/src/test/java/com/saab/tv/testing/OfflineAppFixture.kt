@@ -3,6 +3,8 @@ package com.saab.tv.testing
 import android.content.Context
 import androidx.room.Room
 import com.saab.tv.data.auth.StremioAuthManager
+import com.saab.tv.data.account.AccountAuthManager
+import com.saab.tv.data.account.UserStateCommandRepository
 import com.saab.tv.data.local.SaabTvDatabase
 import com.saab.tv.data.model.stremio.*
 import com.saab.tv.data.profile.DeviceDisplayPreferences
@@ -17,6 +19,8 @@ import org.robolectric.shadows.ShadowLooper
 class OfflineAppFixture(context: Context, apiOverride: StremioApiService? = null) : AutoCloseable {
     val db = Room.inMemoryDatabaseBuilder(context, SaabTvDatabase::class.java).allowMainThreadQueries().build()
     val dao = db.addonDao()
+    val accountAuth = AccountAuthManager(context)
+    val userStateCommands = UserStateCommandRepository(db, accountAuth)
     val display = DeviceDisplayPreferences(context)
     private val api = apiOverride ?: object : StremioApiService {
         override suspend fun getManifest(url: String): Manifest = error("Unexpected network: $url")
@@ -27,7 +31,7 @@ class OfflineAppFixture(context: Context, apiOverride: StremioApiService? = null
     }
     val repository = AddonRepository(api, dao, TorBoxAvailabilityService(context))
     val configuration = ProfileConfigurationManager(context, dao,
-        StremioAuthManager(context, StremioAuthService()), repository, display)
+        StremioAuthManager(context, StremioAuthService()), repository, display, userStateCommands)
     override fun close() = db.close()
 }
 

@@ -49,6 +49,34 @@ class RoomPersistenceRegressionTest {
         dao.deleteProfile(2); assertNull(dao.getProfileById(2))
     }
 
+    @Test fun profileWritesKeepLegacyDuplicatePreferencesDerivedFromCanonicalValues() = runBlocking {
+        val insertedId = dao.insertProfile(ProfileEntity(
+            id = 1,
+            name = "Canonical",
+            seekTimeIntervalSeconds = 20,
+            seekThumbnailIntervalSeconds = 30,
+            autoSkipIntro = true,
+            introSkipCountdownSeconds = 10,
+            outroSkipCountdownSeconds = 5
+        )).toInt()
+
+        val inserted = dao.getProfileById(insertedId)!!
+        assertEquals(20, inserted.seekThumbnailIntervalSeconds)
+        assertEquals(10, inserted.outroSkipCountdownSeconds)
+
+        dao.updateProfile(inserted.copy(
+            seekTimeIntervalSeconds = 30,
+            seekThumbnailIntervalSeconds = 10,
+            autoSkipIntro = false,
+            introSkipCountdownSeconds = 10,
+            outroSkipCountdownSeconds = 5
+        ))
+
+        val updated = dao.getProfileById(insertedId)!!
+        assertEquals(30, updated.seekThumbnailIntervalSeconds)
+        assertEquals(0, updated.outroSkipCountdownSeconds)
+    }
+
     @Test fun zeroPositionAndLargeTimestampsSurviveDatabaseRoundTrip() = runBlocking {
         dao.insertProfile(ProfileEntity(id = 1, name = "One", isActive = true))
         val item = history(time = 9_007_199_254_740_993L)
@@ -71,6 +99,76 @@ class RoomPersistenceRegressionTest {
         dao.clearWatchHistory()
         assertNull(dao.getHistoryItem("tt1:1:1"))
         assertNotNull(dao.getHistoryItemForProfile(1, "tt1:1:1"))
+    }
+
+    @Test fun addonCatalogAndDashboardRowsAreOwnedByPortableProfile() = runBlocking {
+        val first = ProfileEntity(id = 1, name = "One", portableId = "profile-one", isActive = true)
+        val second = ProfileEntity(id = 2, name = "Two", portableId = "profile-two")
+        dao.insertProfile(first)
+        dao.insertProfile(second)
+
+        dao.insertAddon(addon("https://addon.invalid").copy(name = "One Addon"))
+        dao.saveCatalogConfig(config("movie:top").copy(customTitle = "One Catalog"))
+        dao.insertHubRowWithItems(HubRowEntity("one-hub", "One Hub", "poster"),
+            listOf(HubRowItemEntity("one-hub", "movie:top", "One Item")))
+        val profileOneAddon = dao.getAddonsForProfile("profile-one").single()
+        val profileOneConfig = dao.getCatalogConfigsForProfile("profile-one").single()
+
+        dao.activateProfile(2)
+        dao.insertAddon(addon("https://addon.invalid").copy(name = "Two Addon"))
+        dao.saveCatalogConfig(config("movie:top").copy(customTitle = "Two Catalog"))
+        dao.insertHubRowWithItems(HubRowEntity("one-hub", "Two Hub", "poster"),
+            listOf(HubRowItemEntity("one-hub", "movie:top", "Two Item")))
+        dao.insertAddon(profileOneAddon.copy(name = "Stale Overwrite"))
+        dao.saveCatalogConfig(profileOneConfig.copy(customTitle = "Stale Overwrite"))
+        dao.insertHubRowWithItems(
+            dao.getHubRowsForProfile("profile-one").single().copy(title = "Stale Overwrite"),
+            dao.getHubRowItemsForProfile("profile-one")
+        )
+
+        assertEquals("Two Addon", dao.getAllAddons().first().single().name)
+        assertEquals("Two Catalog", dao.getAllCatalogConfigs().first().single().customTitle)
+        assertEquals("Two Hub", dao.getHubRowsWithItems().first().single().hub.title)
+        assertEquals("Two Item", dao.getHubRowsWithItems().first().single().items.single().title)
+
+        dao.activateProfile(1)
+        assertEquals("One Addon", dao.getAllAddons().first().single().name)
+        assertEquals("One Catalog", dao.getAllCatalogConfigs().first().single().customTitle)
+        val oneHub = dao.getHubRowsWithItems().first().single()
+        assertEquals("One Hub", oneHub.hub.title)
+        assertEquals("One Item", oneHub.items.single().title)
+
+        dao.clearAddons()
+        assertTrue(dao.getAddonsForProfile("profile-one").isEmpty())
+        assertEquals("Two Addon", dao.getAddonsForProfile("profile-two").single().name)
+    }
+
+    @Test fun staleHubEditsCannotMoveOrMutateRowsOwnedByAnotherProfile() = runBlocking {
+        dao.insertProfile(ProfileEntity(id = 1, name = "One", portableId = "profile-one", isActive = true))
+        dao.insertProfile(ProfileEntity(id = 2, name = "Two", portableId = "profile-two"))
+        dao.insertHubRowWithItems(HubRowEntity("shared-hub", "One Hub", "poster"),
+            listOf(HubRowItemEntity("shared-hub", "movie:top", "One Item")))
+        val profileOneRow = dao.getHubRowsForProfile("profile-one").single()
+        val profileOneItem = dao.getHubRowItemsForProfile("profile-one").single()
+
+        dao.activateProfile(2)
+        dao.insertHubRowWithItems(HubRowEntity("shared-hub", "Two Hub", "landscape"),
+            listOf(HubRowItemEntity("shared-hub", "movie:top", "Two Item", itemOrder = 7)))
+
+        dao.updateHubRow(profileOneRow.copy(title = "Hijacked Hub"))
+        dao.updateHubRows(listOf(profileOneRow.copy(title = "Hijacked In Bulk")))
+        dao.updateHubRowItem(profileOneItem.copy(title = "Hijacked Item"))
+        dao.updateHubRowItems(listOf(profileOneItem.copy(title = "Hijacked In Bulk")))
+
+        assertEquals("Two Hub", dao.getAllHubRows().first().single().title)
+        assertEquals("Two Item", dao.getAllHubRowItems().first().single().title)
+        assertEquals("One Hub", dao.getHubRowsForProfile("profile-one").single().title)
+        assertEquals("One Item", dao.getHubRowItemsForProfile("profile-one").single().title)
+
+        // Active-profile order and image updates must also remain scoped.
+        assertEquals(7, dao.getMaxHubItemOrder("profile-two", "shared-hub"))
+        dao.updateHubItemImage("profile-one", "shared-hub", "movie:top", "wrong-profile.png")
+        assertNull(dao.getHubRowItemsForProfile("profile-one").single().customImageUrl)
     }
 
     @Test fun latestSeriesEpisodeUsesLastWatchedRatherThanFurthestEpisodeOrPosition() = runBlocking {
@@ -121,6 +219,15 @@ class RoomPersistenceRegressionTest {
         assertNull(dao.getHistoryItemForProfile(2, "first"))
     }
 
+    @Test fun bulkUpsertWithoutActiveProfilePreservesExplicitProfileOwner() = runBlocking {
+        dao.insertProfile(ProfileEntity(id = 1, name = "One", isActive = false))
+        dao.insertProfile(ProfileEntity(id = 2, name = "Two", isActive = false))
+        dao.upsertHistoryItems(listOf(history(profile = 2, id = "explicit-owner")))
+
+        assertNull(dao.getHistoryItemForProfile(1, "explicit-owner"))
+        assertNotNull(dao.getHistoryItemForProfile(2, "explicit-owner"))
+    }
+
     @Test fun watchlistIsProfileScopedOrderedAndRemovableByTypeAndIdentity() = runBlocking {
         val movie = WatchlistEntity(1, "tt1", "movie", "Movie", "poster", 100)
         val series = WatchlistEntity(1, "tt2", "series", "Series", null, 200)
@@ -158,14 +265,14 @@ class RoomPersistenceRegressionTest {
         assertEquals(listOf(row), dao.getAllHubRows().first()); assertEquals(listOf(item), dao.getAllHubRowItems().first())
         assertEquals(1, dao.getHubRowsWithItems().first().single().items.size)
         assertEquals(2, dao.getMaxHubHomeOrder()); assertEquals(3, dao.getMaxHubMoviesOrder()); assertEquals(4, dao.getMaxHubSeriesOrder())
-        assertEquals(5, dao.getMaxHubItemOrder("hub"))
-        dao.updateHubItemImage("hub", "catalog", "new-image")
+        assertEquals(5, dao.getMaxHubItemOrder("legacy-default", "hub"))
+        dao.updateHubItemImage("legacy-default", "hub", "catalog", "new-image")
         assertEquals("new-image", dao.getAllHubRowItems().first().single().customImageUrl)
         dao.updateHubRow(row.copy(title = "Updated")); assertEquals("Updated", dao.getAllHubRows().first().single().title)
         dao.updateHubRows(listOf(row)); dao.updateHubRowItem(item); dao.updateHubRowItems(listOf(item.copy(title = "Changed")))
         assertEquals("Changed", dao.getAllHubRowItems().first().single().title)
-        dao.deleteHubRowItem("hub", "catalog"); assertTrue(dao.getAllHubRowItems().first().isEmpty())
-        dao.insertHubRowItem(item); dao.deleteHubRowWithItems("hub")
+        dao.deleteHubRowItem("legacy-default", "hub", "catalog"); assertTrue(dao.getAllHubRowItems().first().isEmpty())
+        dao.insertHubRowItem(item, "legacy-default"); dao.deleteHubRowWithItems("legacy-default", "hub")
         assertTrue(dao.getAllHubRows().first().isEmpty()); assertTrue(dao.getAllHubRowItems().first().isEmpty())
         assertNull(dao.getMaxHubHomeOrder())
     }

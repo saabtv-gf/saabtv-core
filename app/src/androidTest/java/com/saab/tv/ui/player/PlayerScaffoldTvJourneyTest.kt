@@ -7,15 +7,17 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.hasClickAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.input.key.Key
@@ -36,6 +38,7 @@ import com.saab.tv.ui.details.GlassSidebar
 import com.saab.tv.ui.details.SidebarState
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -83,6 +86,85 @@ class PlayerScaffoldTvJourneyTest {
         assertEquals(1, playback.pauseCalls)
     }
 
+    @Test fun dpadSeekingCommitsInBothDirectionsAndClampsToTheMediaRange() {
+        render()
+
+        compose.onNodeWithContentDescription("Pause")
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+            .performKeyInput { pressKey(Key.DirectionUp) }
+
+        fun seek(direction: Key) {
+            compose.onNodeWithContentDescription("Pause")
+                .performKeyInput {
+                    pressKey(direction)
+                    pressKey(Key.DirectionCenter)
+                }
+        }
+
+        seek(Key.DirectionRight)
+        compose.waitUntil(2_000) { playback.uiState.value.positionMs == 30_000L }
+        seek(Key.DirectionLeft)
+        compose.waitUntil(2_000) { playback.uiState.value.positionMs == 0L }
+        seek(Key.DirectionLeft)
+        compose.waitForIdle()
+        assertEquals("Seeking backward at the start must clamp to zero", 0L, playback.uiState.value.positionMs)
+
+        compose.runOnIdle {
+            playback.uiState.value = playback.uiState.value.copy(positionMs = 590_000L)
+        }
+        seek(Key.DirectionRight)
+        compose.waitUntil(2_000) { playback.uiState.value.positionMs == 600_000L }
+        assertEquals("Seeking past duration must clamp to the media end", 600_000L, playback.uiState.value.positionMs)
+    }
+
+    @Test fun accessibleSeekSliderAnnouncesPositionAndSeeksToRequestedFraction() {
+        render()
+
+        val seekBar = compose.onNodeWithContentDescription("Playback progress")
+        val initialSemantics = seekBar.fetchSemanticsNode().config
+        assertEquals(
+            ProgressBarRangeInfo(0f, 0f..1f),
+            initialSemantics[SemanticsProperties.ProgressBarRangeInfo]
+        )
+        assertEquals("0:00 of 10:00", initialSemantics[SemanticsProperties.StateDescription])
+
+        seekBar
+            .performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
+                assertEquals(true, setProgress(0.5f))
+            }
+        compose.waitUntil(2_000) { playback.uiState.value.positionMs == 300_000L }
+        assertEquals(
+            ProgressBarRangeInfo(0.5f, 0f..1f),
+            compose.onNodeWithContentDescription("Playback progress")
+                .fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
+        )
+        assertEquals(300_000L, playback.uiState.value.positionMs)
+    }
+
+    @Test fun playbackProgressFillMovesLinearlyBetweenBackendSnapshots() {
+        playback.uiState.value = playback.uiState.value.copy(positionMs = 60_000L)
+        render()
+        compose.mainClock.autoAdvance = false
+        val fill = compose.onNodeWithTag("player-progress-fill")
+        val initialWidth = fill.fetchSemanticsNode().boundsInRoot.width
+
+        compose.runOnIdle {
+            playback.uiState.value = playback.uiState.value.copy(positionMs = 180_000L)
+        }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(500L)
+        compose.waitForIdle()
+        val halfwayWidth = fill.fetchSemanticsNode().boundsInRoot.width
+
+        compose.mainClock.advanceTimeBy(500L)
+        compose.waitForIdle()
+        val finalWidth = fill.fetchSemanticsNode().boundsInRoot.width
+
+        assertTrue(halfwayWidth > initialWidth)
+        assertTrue(finalWidth > halfwayWidth)
+        assertEquals((initialWidth + finalWidth) / 2f, halfwayWidth, 3f)
+    }
+
     @Test fun subtitlePanelChangesToAnAvailableLanguageTrack() {
         val tracks = listOf(
             PlayerTrackOption("en", "English SDH", "en", selected = true),
@@ -128,7 +210,8 @@ class PlayerScaffoldTvJourneyTest {
             } }
         }
         compose.onNodeWithText("More Episodes").assertExists()
-        compose.onNode(hasClickAction() and hasText("S1 : E2", substring = true)).performClick()
+        compose.onNodeWithTag("episodes-list").performScrollToIndex(1)
+        compose.onNodeWithTag("episode-thumbnail-${episodes[1].id}").performClick()
         compose.waitUntil(2_000) { selectedEpisodes.isNotEmpty() }
         assertEquals(listOf(episodes[1]), selectedEpisodes)
     }

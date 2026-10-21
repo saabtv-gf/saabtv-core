@@ -26,6 +26,10 @@ class AccountSnapshotStoreTest {
     }
 
     @Test fun roundTripKeepsSettingsHistoryAndPortableAvatarWithoutLosingLongPrecision() = runBlocking {
+        assertFalse(AccountSnapshotStore.TABLES.contains("canonical_titles"))
+        assertFalse(AccountSnapshotStore.TABLES.contains("canonical_identity_aliases"))
+        assertFalse(AccountSnapshotStore.TABLES.contains("canonical_episode_lists"))
+        assertFalse(AccountSnapshotStore.TABLES.contains("canonical_episodes"))
         val context = TestContext(ApplicationProvider.getApplicationContext(), "qa_snapshot_${UUID.randomUUID()}_")
         AccountStorage.setUserId(context, UUID.randomUUID().toString())
         val db = Room.inMemoryDatabaseBuilder(context, SaabTvDatabase::class.java).allowMainThreadQueries().build()

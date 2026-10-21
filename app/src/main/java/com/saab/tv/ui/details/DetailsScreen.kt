@@ -2,13 +2,10 @@ package com.saab.tv.ui.details
 
 import com.saab.tv.ui.trailer.titleTrailerFocus
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,6 +31,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.RectangleShape
 import com.saab.tv.ui.theme.LocalRoundCorners
 import com.saab.tv.ui.components.cardFocusSound
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.components.scrollToItemUsingSaabMotion
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Add
@@ -44,6 +43,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +53,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
@@ -70,14 +71,15 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,16 +90,17 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
-import coil.compose.SubcomposeAsyncImage
 import com.saab.tv.domain.AddonSubtitle
 import com.saab.tv.domain.episodePlaybackId
 import com.saab.tv.domain.episodeStreamId
 import com.saab.tv.domain.episodeDisplayTitle
+import com.saab.tv.domain.schema.canonicalPresentationKey
+import com.saab.tv.domain.schema.toCanonicalProjection
+import com.saab.tv.domain.schema.ArtworkRole
 import com.saab.tv.data.model.stremio.MetaVideo
 import com.saab.tv.data.model.stremio.Stream
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
@@ -108,18 +111,51 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import com.saab.tv.R
 import com.saab.tv.ui.home.DpadRepeatGate
-import com.saab.tv.ui.home.FocusPivotSpec
+import com.saab.tv.ui.components.FocusPivotSpec
+import com.saab.tv.ui.utils.requestFocusOrFallback
+import com.saab.tv.ui.utils.requestFocusSafely
+import com.saab.tv.ui.utils.requestFocusWhenAttached
+import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
+import com.saab.tv.ui.navigation.handoffNavigationFocus
 import com.saab.tv.data.tmdb.TmdbCastInfo
 import com.saab.tv.data.tmdb.TmdbCompanyInfo
-import com.saab.tv.data.tmdb.TmdbMetaPreview
+import com.saab.tv.domain.schema.TitleCardProjection
 import com.saab.tv.data.tmdb.TmdbVideoInfo
 import kotlinx.coroutines.launch
+import com.saab.tv.ui.utils.ArtworkCacheRole
+import com.saab.tv.ui.utils.artworkDecodeSizePx
+import com.saab.tv.ui.utils.artworkImageRequest
+
+internal fun detailsBackdropCandidates(
+    tmdbBackdrop: String?,
+    canonicalBackdrop: String?,
+    providerBackdrop: String?,
+    canonicalPoster: String?,
+    providerPoster: String?
+): List<String> = sequenceOf(canonicalBackdrop, providerBackdrop, tmdbBackdrop, canonicalPoster, providerPoster)
+    .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
+    .distinct()
+    .toList()
+
+internal fun resolveDetailsBackdropUrl(
+    tmdbBackdrop: String?,
+    canonicalBackdrop: String?,
+    providerBackdrop: String?,
+    canonicalPoster: String?,
+    providerPoster: String?
+): String? = detailsBackdropCandidates(
+    tmdbBackdrop, canonicalBackdrop, providerBackdrop, canonicalPoster, providerPoster
+).firstOrNull()
+
+internal fun nextDetailsBackdropIndex(currentIndex: Int, candidateCount: Int): Int? =
+    (currentIndex + 1).takeIf { it in 0 until candidateCount }
 
 @Composable
 fun DetailsScreen(
@@ -131,8 +167,9 @@ fun DetailsScreen(
     onAutoResumeNeedsSelection: () -> Unit = {},
     autoSelectSource: Boolean = false,
     rememberSourceSelection: Boolean = true,
-    onPlayClick: (String, String, String, String, String, String, Stream, List<AddonSubtitle>, List<Stream>, List<MetaVideo>) -> Unit,
+    onPlayClick: (String, String, String, String, String, String, Stream, List<AddonSubtitle>, List<Stream>, List<MetaVideo>, String, String, String) -> Unit,
     onNavigateToDetails: (type: String, id: String) -> Unit = { _, _ -> },
+    onStartWatching: ((com.saab.tv.data.model.stremio.MetaItem) -> Unit)? = null,
     onNavigateToCastDetail: (personId: Int, personName: String) -> Unit = { _, _ -> },
     onNavigateToStudioDetail: (entityId: Int, entityKind: String, entityName: String, sourceType: String) -> Unit = { _, _, _, _ -> },
     onPosterResolved: (poster: String) -> Unit = {},
@@ -160,12 +197,17 @@ fun DetailsScreen(
         defaultItem = state.meta.takeIf { !state.isLoading && state.contentKey == "$type:$id" },
         onEpisodes = { viewModel.openEpisodes() },
         defaultEnabled = !state.isLoadingStreams && state.sidebarState is SidebarState.Closed && !autoStartPlayback && quickActionTarget == null,
-        model = quickActionViewModel) {
+        model = quickActionViewModel,
+        onStartWatching = onStartWatching) {
 
     LaunchedEffect(type, id, autoStartPlayback) { viewModel.loadDetails(type, id, addonBaseUrl, playbackOnly = autoStartPlayback) }
 
+    val content = state.contentProjection
+    // MetaItem is materialized only for the existing playback/action contracts below.
     val movie = state.meta
     val streamId = state.resolvedId ?: movie?.id ?: id // Resolved IMDb ID for stream/subtitle requests
+    val detailPoster = content?.artwork(ArtworkRole.POSTER)?.locator?.takeIf { it.isNotBlank() }
+        ?: movie?.poster.orEmpty()
     // Check contentKey to prevent stale content from the previous item flashing for one frame.
     // contentKey is set when meta loads and matches "$type:$id" of the navigation params.
     val isCurrentMovie = movie != null && !state.isLoading && state.contentKey == "$type:$id"
@@ -173,7 +215,7 @@ fun DetailsScreen(
 
     LaunchedEffect(showMovieContent) {
         if (showMovieContent) {
-            movie?.poster?.let { onPosterResolved(it) }
+            (content?.artwork(ArtworkRole.POSTER)?.locator ?: movie?.poster)?.let(onPosterResolved)
         }
     }
     val sidebarState = if (isCurrentMovie) state.sidebarState else SidebarState.Closed
@@ -182,6 +224,7 @@ fun DetailsScreen(
     val bg = MaterialTheme.colorScheme.background
     val textColor = MaterialTheme.colorScheme.onBackground
     val lifecycleOwner = LocalLifecycleOwner.current
+    var routeResumeEpoch by remember { mutableStateOf(0) }
 
     var showClearProgressDialog by remember { mutableStateOf(false) }
     var pendingPlaybackId by remember(type, id) { mutableStateOf(id) }
@@ -208,7 +251,10 @@ fun DetailsScreen(
                 stream,
                 addonSubtitles,
                 availableStreams,
-                movie?.videos ?: emptyList()
+                movie?.videos ?: emptyList(),
+                id,
+                type,
+                detailPoster
             )
         }
         viewModel.consumeAutoPlayStream()
@@ -217,6 +263,7 @@ fun DetailsScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                routeResumeEpoch++
                 viewModel.refreshResumeState()
             }
         }
@@ -226,7 +273,10 @@ fun DetailsScreen(
         }
     }
 
-    BackHandler(enabled = sidebarState !is SidebarState.Closed) {
+    com.saab.tv.ui.navigation.AppBackHandler(
+        enabled = sidebarState !is SidebarState.Closed,
+        priority = com.saab.tv.ui.navigation.AppBackPriority.Modal
+    ) {
         viewModel.goBackInSidebar()
     }
 
@@ -239,14 +289,59 @@ fun DetailsScreen(
     var previousSidebarState by remember { mutableStateOf<SidebarState>(SidebarState.Closed) }
     LaunchedEffect(sidebarState) {
         if (sidebarState is SidebarState.Closed && previousSidebarState is SidebarState.Episodes) {
-            kotlinx.coroutines.delay(50)
-            runCatching { episodesButtonFocusRequester.requestFocus() }
+            if (!episodesButtonFocusRequester.requestFocusWhenAttached()) {
+                firstButtonFocusRequester.requestFocusSafely()
+            }
         }
         previousSidebarState = sidebarState
     }
     var restoreRowKey by rememberSaveable { mutableStateOf<String?>(null) }
     var restoreIndex by rememberSaveable { mutableStateOf(-1) }
+    var restoreItemKey by rememberSaveable { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+
+    val restoreRows = remember(state.tmdbEnrichment, state.tmdbRecommendations, state.tmdbCollection) {
+        val enrichment = state.tmdbEnrichment
+        val crew = enrichment?.directorMembers.orEmpty() + enrichment?.writerMembers.orEmpty()
+        val cast = enrichment?.castMembers.orEmpty()
+        val castKeys = buildList<String?> {
+            crew.forEachIndexed { index, member -> add("crew_${member.tmdbId ?: index}") }
+            if (crew.isNotEmpty() && cast.isNotEmpty()) add(null)
+            cast.take(20).forEachIndexed { index, member -> add("cast_${member.tmdbId ?: index}") }
+        }
+        buildMap {
+            if (castKeys.any { it != null }) put("tmdb_cast", castKeys)
+            if (state.tmdbRecommendations.isNotEmpty()) {
+                put("tmdb_recs", state.tmdbRecommendations.map { it.presentationKey })
+            }
+            if (state.tmdbCollection.isNotEmpty()) {
+                put("tmdb_collection", state.tmdbCollection.map { it.presentationKey })
+            }
+        }
+    }
+    val restoreRowOrder = remember(state.tmdbEnrichment, state.tmdbRecommendations, state.tmdbCollection) {
+        buildList {
+            add("hero")
+            if (restoreRows.containsKey("tmdb_cast")) add("tmdb_cast")
+            if (restoreRows.containsKey("tmdb_recs")) add("tmdb_recs")
+            if (restoreRows.containsKey("tmdb_collection")) add("tmdb_collection")
+            if (state.tmdbEnrichment != null || state.tmdbRecommendations.isNotEmpty() || state.tmdbCollection.isNotEmpty()) {
+                add("tmdb_spacer")
+            }
+        }
+    }
+    val restoreTarget = remember(
+        restoreRowKey, restoreItemKey, restoreIndex, state.tmdbLoading, restoreRowOrder, restoreRows
+    ) {
+        resolveDetailsFocusRestoreTarget(
+            rowKey = restoreRowKey,
+            itemKey = restoreItemKey,
+            fallbackIndex = restoreIndex,
+            metadataPending = state.tmdbLoading,
+            rowKeys = restoreRowOrder,
+            itemsByRow = restoreRows
+        )
+    }
 
     // TMDB enrichment is supplemental: render addon details immediately and patch
     // localized metadata/recommendations into the screen as they arrive.
@@ -316,44 +411,45 @@ fun DetailsScreen(
         FocusPivotSpec(
             customOffset = pivotPx,
             skipScrollProvider = { heroHasFocus },
-            stiffnessProvider = { Spring.StiffnessMediumLow }
         )
     }
 
     // When focus returns to the hero from a row, animate back to the top
     LaunchedEffect(heroHasFocus) {
         if (heroHasFocus && (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0)) {
-            listState.animateScrollToItem(0)
+            listState.scrollToItemUsingSaabMotion(0)
         }
     }
 
-    LaunchedEffect(contentReady) {
-        if (contentReady) {
-            if (restoreRowKey != null) {
-                // Back navigation from Jetpack Nav: restore focus
-                runCatching { restoreFocusRequester.requestFocus() }
+    LaunchedEffect(contentReady, routeResumeEpoch, trailerReturnToken, restoreTarget) {
+        if (!contentReady) return@LaunchedEffect
+        when (val target = restoreTarget) {
+            DetailsFocusRestoreTarget.Pending -> Unit
+            DetailsFocusRestoreTarget.Hero -> {
+                firstButtonFocusRequester.requestFocusWhenAttached()
                 restoreRowKey = null
+                restoreItemKey = null
                 restoreIndex = -1
-            } else {
-                // First load: focus hero button
-                runCatching { firstButtonFocusRequester.requestFocus() }
+            }
+            is DetailsFocusRestoreTarget.RowItem -> {
+                listState.scrollToItem(target.rowIndex)
+                val restored = restoreFocusRequester.requestFocusWhenAttached(maxFrameAttempts = 48)
+                if (!restored) firstButtonFocusRequester.requestFocusWhenAttached()
+                restoreRowKey = null
+                restoreItemKey = null
+                restoreIndex = -1
             }
         }
     }
 
-    // Restore focus when returning from trailer playback
-    LaunchedEffect(trailerReturnToken) {
-        if (trailerReturnToken > 0 && restoreRowKey != null) {
-            runCatching { restoreFocusRequester.requestFocus() }
-            restoreRowKey = null
-            restoreIndex = -1
-        }
+    LaunchedEffect(state.detailsLoadFailed) {
+        if (state.detailsLoadFailed) firstButtonFocusRequester.requestFocusWhenAttached()
     }
 
     // Smooth content reveal: animate alpha from 0→1 when content becomes ready
     val contentAlpha by animateFloatAsState(
         targetValue = if (contentReady) 1f else 0f,
-        animationSpec = tween(durationMillis = 220),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "content_reveal"
     )
 
@@ -362,8 +458,38 @@ fun DetailsScreen(
         if (!contentReady || (autoStartPlayback && sidebarState is SidebarState.Closed)) {
             com.saab.tv.ui.components.DetailsLoadingSweep()
         }
+        if (!state.isLoading && state.detailsLoadFailed && !contentReady) {
+            Column(
+                modifier = Modifier.align(Alignment.Center).widthIn(max = 520.dp).padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.details_load_error_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = textColor
+                )
+                Text(
+                    text = stringResource(R.string.details_load_error_message),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = textColor.copy(alpha = 0.8f)
+                )
+                com.saab.tv.ui.components.SetupButton(
+                    text = stringResource(R.string.common_retry),
+                    primary = true,
+                    modifier = Modifier.focusRequester(firstButtonFocusRequester),
+                    onClick = {
+                        viewModel.loadDetails(type, id, addonBaseUrl, playbackOnly = autoStartPlayback)
+                    }
+                )
+            }
+        }
         if (showMovieContent && (!autoStartPlayback || sidebarState !is SidebarState.Closed)) {
             val currentMovie = requireNotNull(movie)
+            // Verified content uses canonical fields; opaque provider-only IDs retain
+            // their display metadata without being promoted into a false identity.
+            val currentContent = content ?: currentMovie.toCanonicalProjection()
+            val displayTitle = currentContent?.title ?: currentMovie.name
             var seriesWatched by remember(type, id, quickActionProfileId) { mutableStateOf(false) }
             var seriesMarkRequested by remember(type, id, quickActionProfileId) { mutableStateOf(false) }
             LaunchedEffect(type, id, quickActionProfileId) {
@@ -380,13 +506,55 @@ fun DetailsScreen(
                     }
                 }
             }
-            val bgImage = currentMovie.background ?: currentMovie.poster
+            val backdropCandidates = remember(
+                state.tmdbEnrichment?.backdrop,
+                currentContent?.artwork(ArtworkRole.BACKDROP)?.locator,
+                currentMovie.background,
+                currentContent?.artwork(ArtworkRole.POSTER)?.locator,
+                currentMovie.poster
+            ) {
+                detailsBackdropCandidates(
+                    tmdbBackdrop = state.tmdbEnrichment?.backdrop,
+                    canonicalBackdrop = currentContent?.artwork(ArtworkRole.BACKDROP)?.locator,
+                    providerBackdrop = currentMovie.background,
+                    canonicalPoster = currentContent?.artwork(ArtworkRole.POSTER)?.locator,
+                    providerPoster = currentMovie.poster
+                )
+            }
+            var backdropCandidateIndex by remember(type, id) { mutableIntStateOf(0) }
+            LaunchedEffect(type, id, backdropCandidates) { backdropCandidateIndex = 0 }
+            val bgImage = backdropCandidates.getOrNull(backdropCandidateIndex)
+            val context = LocalContext.current
+            val configuration = LocalConfiguration.current
+            val density = LocalDensity.current
+            val backdropDecodeSize = remember(
+                configuration.screenWidthDp,
+                configuration.screenHeightDp,
+                density.density
+            ) {
+                artworkDecodeSizePx(
+                    configuration.screenWidthDp.dp,
+                    configuration.screenHeightDp.dp,
+                    density
+                )
+            }
+            val backdropRequest = remember(context, bgImage, backdropDecodeSize) {
+                bgImage?.let {
+                    artworkImageRequest(context, it, ArtworkCacheRole.Landscape, backdropDecodeSize)
+                }
+            }
             Box(modifier = Modifier.alpha(contentAlpha)) {
-            AsyncImage(
-                model = bgImage,
-                contentDescription = null,
+            com.saab.tv.ui.components.RetainedArtworkImage(
+                model = backdropRequest,
+                contentDescription = "",
+                contentIdentityKey = state.canonicalIdentityKey ?: "$type:$id",
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize().alpha(0.6f)
+                modifier = Modifier.fillMaxSize().alpha(0.6f),
+                onLoadError = {
+                    nextDetailsBackdropIndex(backdropCandidateIndex, backdropCandidates.size)
+                        ?.let { backdropCandidateIndex = it }
+                },
+                unavailable = {}
             )
 
             Box(
@@ -442,18 +610,20 @@ fun DetailsScreen(
                     lineHeight = 34.sp
                 )
 
-                if (!currentMovie.logo.isNullOrEmpty()) {
-                    SubcomposeAsyncImage(
-                        model = currentMovie.logo,
-                        contentDescription = currentMovie.name,
+                val titleLogo = currentContent?.artwork(ArtworkRole.LOGO)?.locator ?: currentMovie.logo
+                if (!titleLogo.isNullOrEmpty()) {
+                    com.saab.tv.ui.components.RetainedArtworkImage(
+                        model = titleLogo,
+                        contentDescription = displayTitle,
                         contentScale = ContentScale.Fit,
                         alignment = Alignment.BottomStart,
                         modifier = Modifier
                             .widthIn(max = 450.dp)
                             .heightIn(max = 90.dp),
-                        error = {
+                        contentIdentityKey = state.canonicalIdentityKey ?: "$type:$id",
+                        unavailable = {
                             Text(
-                                text = currentMovie.name,
+                                text = displayTitle,
                                 style = titleStyle,
                                 color = textColor,
                                 maxLines = 2,
@@ -464,7 +634,7 @@ fun DetailsScreen(
                     )
                 } else {
                     Text(
-                        text = currentMovie.name,
+                        text = displayTitle,
                         style = titleStyle,
                         color = textColor,
                         maxLines = 2,
@@ -475,15 +645,18 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                val typeLabel = currentMovie.type.replaceFirstChar { it.uppercase() }
-                val genreLabel = currentMovie.genres
-                    ?.firstOrNull()
+                val localizedTypeLabel = com.saab.tv.ui.components.localizedTitleType(
+                    currentContent?.kind?.keyPart ?: currentMovie.type
+                )
+                val genreLabel = (currentContent?.genres ?: currentMovie.genres.orEmpty())
+                    .firstOrNull()
                     ?.replaceFirstChar { it.uppercase() }
-                    ?: "Unknown"
-                val yearLabel = extractPrimaryYear(currentMovie.releaseInfo)
+                    ?: stringResource(R.string.sort_filter_unknown)
+                val yearLabel = currentContent?.year ?: extractPrimaryYear(currentMovie.releaseInfo)
 
                 val ageRating = enrichment?.ageRating
                 val runtimeMin = enrichment?.runtimeMinutes
+                    ?: currentContent?.runtimeEstimateMillis?.div(60_000L)?.toInt()
                     ?: currentMovie.runtime?.filter { it.isDigit() }?.toIntOrNull()
 
                 Row(
@@ -491,7 +664,7 @@ fun DetailsScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = typeLabel,
+                        text = localizedTypeLabel,
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                         color = textColor.copy(alpha = 0.95f)
                     )
@@ -522,9 +695,7 @@ fun DetailsScreen(
 
                     runtimeMin?.let {
                         MetaDot(textColor)
-                        val hours = it / 60
-                        val mins = it % 60
-                        val display = if (hours > 0) "${hours}h ${mins}m" else "${mins}m"
+                        val display = com.saab.tv.ui.components.localizedRuntimeLabel(it)
                         Text(
                             text = display,
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
@@ -532,7 +703,10 @@ fun DetailsScreen(
                         )
                     }
 
-                    currentMovie.imdbRating?.takeIf { it.isNotBlank() }?.let { rating ->
+                    (currentContent?.rating
+                        ?.takeIf { it.source == "imdb" && it.scale == "0-10" }
+                        ?.value?.toString() ?: currentMovie.imdbRating?.takeIf(String::isNotBlank))
+                        ?.let { rating ->
                         Spacer(modifier = Modifier.width(4.dp))
                         ImdbBadge()
                         Text(
@@ -545,7 +719,7 @@ fun DetailsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(
-                    text = currentMovie.description ?: "",
+                    text = currentContent?.synopsis ?: currentMovie.description.orEmpty(),
                     style = MaterialTheme.typography.bodyLarge,
                     color = textColor,
                     maxLines = 5
@@ -589,13 +763,70 @@ fun DetailsScreen(
 
                 val isInWatchlist by viewModel.isInWatchlist.collectAsStateWithLifecycle()
 
-                if (type == "series") {
-                    val playLabel = if (resumePlaybackId != null) {
-                        val resumeSeason = resumeEpisode?.season?.takeIf { it > 0 } ?: parsedResumeSeasonEpisode?.first
-                        val resumeNumber = resumeEpisode?.episode?.takeIf { it > 0 } ?: parsedResumeSeasonEpisode?.second
-                        seriesResumeActionLabel(resumeSeason, resumeNumber, state.resumeIsNextEpisode && hintedResumePlaybackId == null)
+                fun openSourcePicker() {
+                    if (type == "series") {
+                        val episode = resumeEpisode ?: firstEpisode ?: return
+                        val selectionId = resumePlaybackId ?: episodePlaybackId(streamId, episode)
+                        val episodeStreamId = episodeStreamId(streamId, episode)
+                        val episodeTitle = when {
+                            resumePlaybackId != null && resumeEpisode != null -> episodeDisplayTitle(resumeEpisode)
+                            resumePlaybackId != null && parsedResumeSeasonEpisode != null ->
+                                "S${parsedResumeSeasonEpisode.first}:E${parsedResumeSeasonEpisode.second} - ${currentMovie.name}"
+                            resumePlaybackId != null -> currentMovie.name
+                            else -> episodeDisplayTitle(episode)
+                        }
+                        pendingPlaybackId = selectionId
+                        pendingPlaybackType = type
+                        pendingPlaybackTitle = episodeTitle
+                        viewModel.loadStreams(
+                            type,
+                            episodeStreamId,
+                            episodeTitle,
+                            sourceSelectionId = selectionId,
+                            fallbackStreamId = selectionId,
+                            forceSourcePicker = true,
+                            autoSelectSource = false,
+                            rememberSourceSelection = false
+                        )
                     } else {
-                        "Play S${firstEpisodeSeason} E${firstEpisodeNumber}"
+                        pendingPlaybackId = streamId
+                        pendingPlaybackType = type
+                        pendingPlaybackTitle = currentMovie.name
+                        viewModel.loadStreams(
+                            type,
+                            streamId,
+                            currentMovie.name,
+                            forceSourcePicker = true,
+                            autoSelectSource = false,
+                            rememberSourceSelection = false
+                        )
+                    }
+                }
+
+                if (type == "series") {
+                    val resumeSeason = resumeEpisode?.season?.takeIf { it > 0 } ?: parsedResumeSeasonEpisode?.first
+                    val resumeNumber = resumeEpisode?.episode?.takeIf { it > 0 } ?: parsedResumeSeasonEpisode?.second
+                    val playNextEpisode = state.resumeIsNextEpisode && hintedResumePlaybackId == null
+                    val playLabel = when {
+                        resumePlaybackId == null -> stringResource(
+                            R.string.details_action_play_episode,
+                            firstEpisodeSeason,
+                            firstEpisodeNumber
+                        )
+                        else -> when (seriesResumeActionKind(resumeSeason, resumeNumber, playNextEpisode)) {
+                            SeriesResumeActionKind.PLAY_NEXT_EPISODE -> stringResource(
+                                R.string.details_action_play_next_episode_numbered,
+                                requireNotNull(resumeSeason),
+                                requireNotNull(resumeNumber)
+                            )
+                            SeriesResumeActionKind.PLAY_NEXT -> stringResource(R.string.details_action_play_next_episode)
+                            SeriesResumeActionKind.RESUME_EPISODE -> stringResource(
+                                R.string.details_action_resume_episode_numbered,
+                                requireNotNull(resumeSeason),
+                                requireNotNull(resumeNumber)
+                            )
+                            SeriesResumeActionKind.RESUME -> stringResource(R.string.details_action_resume)
+                        }
                     }
 
                     Row(
@@ -606,7 +837,7 @@ fun DetailsScreen(
                                 // Redirect focus to the Play button before the system
                                 // resolves the Down target, so the below-hero content
                                 // always receives focus from the same horizontal position.
-                                firstButtonFocusRequester.requestFocus()
+                                firstButtonFocusRequester.requestFocusSafely()
                             }
                             false
                         }
@@ -637,7 +868,13 @@ fun DetailsScreen(
                         )
 
                         com.saab.tv.ui.components.DetailActionButton(
-                            label = "Episodes",
+                            label = stringResource(R.string.details_action_sources),
+                            icon = Icons.Default.SwapHoriz,
+                            onClick = ::openSourcePicker
+                        )
+
+                        com.saab.tv.ui.components.DetailActionButton(
+                            label = stringResource(R.string.details_action_episodes),
                             icon = Icons.AutoMirrored.Filled.List,
                             modifier = Modifier.focusRequester(episodesButtonFocusRequester),
                             onClick = { viewModel.openEpisodes() }
@@ -646,15 +883,17 @@ fun DetailsScreen(
                         val seriesTrailer = state.trailer
                         if (seriesTrailer != null) {
                             com.saab.tv.ui.components.DetailActionButton(
-                                label = "Trailer",
+                                label = stringResource(R.string.details_action_trailer),
                                 icon = Icons.Default.Videocam,
-                                onClick = { manualTrailerLauncher?.invoke(currentMovie, seriesTrailer.key to seriesTrailer.name, { viewModel.openEpisodes() })
+                                onClick = { manualTrailerLauncher?.invoke(currentMovie, seriesTrailer.key to seriesTrailer.name, { viewModel.openEpisodes() }, onStartWatching)
                                     ?: onTrailerClick(seriesTrailer.key, seriesTrailer.name) }
                             )
                         }
 
                         com.saab.tv.ui.components.DetailActionButton(
-                            label = if (seriesWatched) "Watched" else "Mark as watched",
+                            label = stringResource(
+                                if (seriesWatched) R.string.episode_watched else R.string.episode_mark_watched
+                            ),
                             icon = if (seriesWatched) Icons.Default.Check else Icons.Default.Add,
                             isActive = seriesWatched,
                             onClick = {
@@ -667,7 +906,9 @@ fun DetailsScreen(
                         )
 
                         com.saab.tv.ui.components.DetailActionButton(
-                            label = if (isInWatchlist) "Watchlisted" else "Add to watchlist",
+                            label = stringResource(
+                                if (isInWatchlist) R.string.details_action_watchlisted else R.string.details_action_add_watchlist
+                            ),
                             icon = if (isInWatchlist) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             isActive = isInWatchlist,
                             onClick = { viewModel.toggleWatchlist() }
@@ -675,7 +916,7 @@ fun DetailsScreen(
 
                         if (resumePlaybackId != null) {
                             com.saab.tv.ui.components.DetailActionButton(
-                                label = "Clear Progress",
+                                label = stringResource(R.string.details_action_clear_progress),
                                 icon = Icons.Default.Close,
                                 onClick = { showClearProgressDialog = true }
                             )
@@ -687,13 +928,15 @@ fun DetailsScreen(
                         modifier = Modifier.onPreviewKeyEvent { event ->
                             if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                             if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
-                                firstButtonFocusRequester.requestFocus()
+                                firstButtonFocusRequester.requestFocusSafely()
                             }
                             false
                         }
                     ) {
                         com.saab.tv.ui.components.DetailActionButton(
-                            label = if (resumePlaybackId != null) "Resume" else "Play Movie",
+                            label = stringResource(
+                                if (resumePlaybackId != null) R.string.details_action_resume else R.string.details_action_play_movie
+                            ),
                             icon = Icons.Default.PlayArrow,
                             modifier = Modifier.focusRequester(firstButtonFocusRequester),
                             onClick = {
@@ -704,25 +947,35 @@ fun DetailsScreen(
                             }
                         )
 
+                        com.saab.tv.ui.components.DetailActionButton(
+                            label = stringResource(R.string.details_action_sources),
+                            icon = Icons.Default.SwapHoriz,
+                            onClick = ::openSourcePicker
+                        )
+
                         val movieTrailer = state.trailer
                         if (movieTrailer != null) {
                             com.saab.tv.ui.components.DetailActionButton(
-                                label = "Trailer",
+                                label = stringResource(R.string.details_action_trailer),
                                 icon = Icons.Default.Videocam,
-                                onClick = { manualTrailerLauncher?.invoke(currentMovie, movieTrailer.key to movieTrailer.name, null)
+                                onClick = { manualTrailerLauncher?.invoke(currentMovie, movieTrailer.key to movieTrailer.name, null, onStartWatching)
                                     ?: onTrailerClick(movieTrailer.key, movieTrailer.name) }
                             )
                         }
 
                         com.saab.tv.ui.components.DetailActionButton(
-                            label = if (state.isMovieWatched) "Watched" else "Mark as watched",
+                            label = stringResource(
+                                if (state.isMovieWatched) R.string.episode_watched else R.string.episode_mark_watched
+                            ),
                             icon = if (state.isMovieWatched) Icons.Default.Check else Icons.Default.Add,
                             isActive = state.isMovieWatched,
                             onClick = { viewModel.toggleMovieWatched() }
                         )
 
                         com.saab.tv.ui.components.DetailActionButton(
-                            label = if (isInWatchlist) "Watchlisted" else "Add to watchlist",
+                            label = stringResource(
+                                if (isInWatchlist) R.string.details_action_watchlisted else R.string.details_action_add_watchlist
+                            ),
                             icon = if (isInWatchlist) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                             isActive = isInWatchlist,
                             onClick = { viewModel.toggleWatchlist() }
@@ -730,7 +983,7 @@ fun DetailsScreen(
 
                         if (resumePlaybackId != null) {
                             com.saab.tv.ui.components.DetailActionButton(
-                                label = "Clear Progress",
+                                label = stringResource(R.string.details_action_clear_progress),
                                 icon = Icons.Default.Close,
                                 onClick = { showClearProgressDialog = true }
                             )
@@ -742,7 +995,7 @@ fun DetailsScreen(
                             Spacer(modifier = Modifier
                                 .size(0.dp)
                                 .onFocusChanged {
-                                    if (it.isFocused) firstButtonFocusRequester.requestFocus()
+                                    if (it.isFocused) firstButtonFocusRequester.requestFocusSafely()
                                 }
                                 .focusable()
                             )
@@ -769,7 +1022,7 @@ fun DetailsScreen(
                     return Modifier.onPreviewKeyEvent { event ->
                     if (com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) return@onPreviewKeyEvent false
                         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
-                            firstButtonFocusRequester.requestFocus()
+                            firstButtonFocusRequester.requestFocusSafely()
                             true
                         } else false
                     }
@@ -777,20 +1030,22 @@ fun DetailsScreen(
 
                 if (castMembers.isNotEmpty() || leadingCrew.isNotEmpty()) {
                     item(key = "tmdb_cast") {
-                        val title = if (leadingCrew.isNotEmpty() && castMembers.isNotEmpty()) "Cast & Crew"
-                            else if (leadingCrew.isNotEmpty()) "Crew"
-                            else "Cast"
+                        val titleRes = if (leadingCrew.isNotEmpty() && castMembers.isNotEmpty()) R.string.details_cast_and_crew
+                            else if (leadingCrew.isNotEmpty()) R.string.details_crew
+                            else R.string.details_cast
                         Column(modifier = firstSectionModifier().padding(top = 28.dp)) {
-                            SectionHeader(title, textColor, Modifier.padding(start = 48.dp))
+                            SectionHeader(stringResource(titleRes), textColor, Modifier.padding(start = 48.dp))
                             Spacer(modifier = Modifier.height(10.dp))
                             CastRow(
-                                leadingCrew, castMembers, accentColor, textColor,
-                                onPersonClick = { personId, personName, rowIndex ->
+                                leadingCrew, castMembers, textColor,
+                                onPersonClick = { personId, personName, rowIndex, itemKey ->
                                     restoreRowKey = "tmdb_cast"
                                     restoreIndex = rowIndex
+                                    restoreItemKey = itemKey
                                     onNavigateToCastDetail(personId, personName)
                                 },
-                                restoreIndex = if (restoreRowKey == "tmdb_cast") restoreIndex else -1,
+                                restoreIndex = (restoreTarget as? DetailsFocusRestoreTarget.RowItem)
+                                    ?.takeIf { restoreRowKey == "tmdb_cast" }?.itemIndex ?: -1,
                                 restoreFocusRequester = if (restoreRowKey == "tmdb_cast") restoreFocusRequester else null
                             )
                         }
@@ -802,20 +1057,22 @@ fun DetailsScreen(
                 if (tmdbRecommendations.isNotEmpty()) {
                     item(key = "tmdb_recs") {
                         Column(modifier = Modifier.padding(top = 28.dp)) {
-                            SectionHeader("More Like This", textColor, Modifier.padding(start = 48.dp))
+                            SectionHeader(stringResource(R.string.details_more_like_this), textColor, Modifier.padding(start = 48.dp))
                             Spacer(modifier = Modifier.height(10.dp))
                                             RecommendationRow(
                                         tmdbRecommendations, accentColor,
                                         rowKey = "tmdb_recs",
                                         profileId = quickActionProfileId,
                                         watchedViewModel = quickActionViewModel,
-                            onItemClick = { navType, navId, rowKey, index ->
+                            onItemClick = { navType, navId, rowKey, itemKey, index ->
                                 restoreRowKey = rowKey
                                 restoreIndex = index
+                                restoreItemKey = itemKey
                                 onNavigateToDetails(navType, navId)
                             },
                             onLongClick = { item, bounds -> quickActionTarget = item to bounds },
-                            restoreIndex = if (restoreRowKey == "tmdb_recs") restoreIndex else -1,
+                            restoreIndex = (restoreTarget as? DetailsFocusRestoreTarget.RowItem)
+                                ?.takeIf { restoreRowKey == "tmdb_recs" }?.itemIndex ?: -1,
                                         restoreFocusRequester = if (restoreRowKey == "tmdb_recs") restoreFocusRequester else null
                                     )
                         }
@@ -833,13 +1090,15 @@ fun DetailsScreen(
                                             rowKey = "tmdb_collection",
                                             profileId = quickActionProfileId,
                                             watchedViewModel = quickActionViewModel,
-                                            onItemClick = { navType, navId, rowKey, index ->
+                                            onItemClick = { navType, navId, rowKey, itemKey, index ->
                                                 restoreRowKey = rowKey
                                                 restoreIndex = index
+                                                restoreItemKey = itemKey
                                                 onNavigateToDetails(navType, navId)
                                             },
                                             onLongClick = { item, bounds -> quickActionTarget = item to bounds },
-                                            restoreIndex = if (restoreRowKey == "tmdb_collection") restoreIndex else -1,
+                                            restoreIndex = (restoreTarget as? DetailsFocusRestoreTarget.RowItem)
+                                                ?.takeIf { restoreRowKey == "tmdb_collection" }?.itemIndex ?: -1,
                                             restoreFocusRequester = if (restoreRowKey == "tmdb_collection") restoreFocusRequester else null
                                         )
                         }
@@ -856,6 +1115,8 @@ fun DetailsScreen(
 
         GlassSidebar(
             state = sidebarState,
+            isLoadingSources = state.isLoadingStreams,
+            canSelectPartialSources = state.canSelectPartialSources,
             sourceLanguagePreferences = state.sourceLanguagePreferences,
             currentEpisodeId = state.lastPlayedEpisodeId ?: state.resumePlaybackId,
             episodeProgressMap = state.episodeProgressMap,
@@ -893,10 +1154,14 @@ fun DetailsScreen(
                         stream,
                         addonSubtitles,
                         availableStreams,
-                        movie?.videos ?: emptyList()
+                        movie?.videos ?: emptyList(),
+                        id,
+                        type,
+                        detailPoster
                     )
                 }
-            }
+            },
+            onAudioLanguageSelected = viewModel::promoteAudioLanguagePreference
         )
 
         quickActionTarget?.let { (item, bounds) ->
@@ -909,8 +1174,9 @@ fun DetailsScreen(
                 onDismiss = {
                     quickActionTarget = null
                     quickActionScope.launch {
-                        delay(40)
-                        runCatching { quickActionReturnFocus?.requestFocus() }
+                        if (quickActionReturnFocus?.requestFocusWhenAttached() != true) {
+                            firstButtonFocusRequester.requestFocusSafely()
+                        }
                     }
                 }
             )
@@ -940,13 +1206,13 @@ fun DetailsScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            "Clear Progress",
+                            stringResource(R.string.details_clear_progress_title),
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             color = textColor
                         )
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            "This will remove all watch progress for this title, including on Trakt. This action cannot be undone.",
+                            stringResource(R.string.details_clear_progress_message),
                             style = MaterialTheme.typography.bodyMedium,
                             color = textColor.copy(0.7f),
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -959,12 +1225,12 @@ fun DetailsScreen(
                             val cancelFocusRequester = remember { FocusRequester() }
 
                             DialogButton(
-                                text = "Cancel",
+                                text = stringResource(R.string.common_cancel),
                                 modifier = Modifier.width(120.dp).focusRequester(cancelFocusRequester),
                                 onClick = { showClearProgressDialog = false }
                             )
                             DialogButton(
-                                text = "Clear",
+                                text = stringResource(R.string.details_clear_progress_action),
                                 isDestructive = true,
                                 modifier = Modifier.width(120.dp),
                                 onClick = {
@@ -975,7 +1241,7 @@ fun DetailsScreen(
 
                             LaunchedEffect(Unit) {
                                 kotlinx.coroutines.delay(200)
-                                runCatching { cancelFocusRequester.requestFocus() }
+                                cancelFocusRequester.requestFocusSafely()
                             }
                         }
                     }
@@ -1035,33 +1301,38 @@ private fun SectionHeader(title: String, textColor: Color, modifier: Modifier = 
 private fun CastRow(
     leadingCrew: List<TmdbCastInfo>,
     cast: List<TmdbCastInfo>,
-    accentColor: Color,
     textColor: Color,
-    onPersonClick: (personId: Int, personName: String, rowIndex: Int) -> Unit = { _, _, _ -> },
+    onPersonClick: (personId: Int, personName: String, rowIndex: Int, itemKey: String) -> Unit = { _, _, _, _ -> },
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null
 ) {
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val rowState = rememberLazyListState()
-    val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
-    val density = LocalDensity.current
-    val startPad = 48.dp
-    val paddingPx = remember(density) { with(density) { startPad.toPx() } }
-    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val endPadding = (screenWidth - startPad - 96.dp).coerceAtLeast(120.dp)
-
-    val pivotSpec = remember(paddingPx) {
-        FocusPivotSpec(
-            customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessMediumLow }
-        )
+    LaunchedEffect(restoreIndex, leadingCrew, cast) {
+        val hasDivider = leadingCrew.isNotEmpty() && cast.isNotEmpty()
+        val rowItemCount = leadingCrew.size + (if (hasDivider) 1 else 0) + cast.take(20).size
+        if (restoreIndex in 0 until rowItemCount) rowState.scrollToItem(restoreIndex)
     }
+    val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
+    val startPad = 48.dp
+    val rowHasCardFocus = remember { mutableStateOf(false) }
+    var focusedIndex by remember(restoreIndex) { mutableStateOf(restoreIndex.coerceAtLeast(0)) }
 
-    CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-        LazyRow(
-            state = rowState,
-            horizontalArrangement = Arrangement.spacedBy(0.dp),
-            contentPadding = PaddingValues(start = startPad, end = endPadding)
-        ) {
+    com.saab.tv.ui.components.FocusShelf(
+        state = rowState,
+        focused = rowHasCardFocus,
+        width = 96.dp,
+        height = 110.dp,
+        startPadding = startPad,
+        focusedItemIndex = focusedIndex,
+        tag = "details-cast-focus-indicator",
+        modifier = Modifier.onFocusChanged { if (!it.hasFocus) rowHasCardFocus.value = false },
+        viewportHeight = 110.dp,
+        indicatorAlignment = Alignment.TopStart,
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
+        contentPadding = PaddingValues(start = startPad),
+        rowModifier = Modifier.fillMaxWidth().height(110.dp).focusGroup()
+    ) {
             val hasDivider = leadingCrew.isNotEmpty() && cast.isNotEmpty()
             val castOffset = leadingCrew.size + if (hasDivider) 1 else 0
 
@@ -1069,13 +1340,18 @@ private fun CastRow(
             itemsIndexed(leadingCrew, key = { i, it -> "crew_${it.tmdbId ?: i}" }) { index, member ->
                 Box(modifier = Modifier.onPreviewKeyEvent {
                     if (repeatGate.shouldConsume(it)) return@onPreviewKeyEvent true
-                    if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) true else false
+                    if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) {
+                        handoffNavigationFocus(it, authorizeNavigationHandoff)
+                    } else false
                 }) {
                     CastCard(
-                        member, accentColor, textColor,
-                        modifier = if (restoreFocusRequester != null && index == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier
+                        member, textColor,
+                        modifier = if (restoreFocusRequester != null && index == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier,
+                        onFocused = { focusedIndex = index; rowHasCardFocus.value = true }
                     ) {
-                        member.tmdbId?.let { id -> onPersonClick(id, member.name, index) }
+                        member.tmdbId?.let { id ->
+                            onPersonClick(id, member.name, index, "crew_${member.tmdbId ?: index}")
+                        }
                     }
                 }
             }
@@ -1103,26 +1379,35 @@ private fun CastRow(
                 val flatIndex = castOffset + index
                 Box(modifier = Modifier.onPreviewKeyEvent {
                     if (repeatGate.shouldConsume(it)) return@onPreviewKeyEvent true
-                    if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && isFirstOverall) true else false
+                    if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && isFirstOverall) {
+                        handoffNavigationFocus(it, authorizeNavigationHandoff)
+                    } else false
                 }) {
                     CastCard(
-                        member, accentColor, textColor,
-                        modifier = if (restoreFocusRequester != null && flatIndex == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier
+                        member, textColor,
+                        modifier = if (restoreFocusRequester != null && flatIndex == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier,
+                        onFocused = { focusedIndex = flatIndex; rowHasCardFocus.value = true }
                     ) {
-                        member.tmdbId?.let { id -> onPersonClick(id, member.name, flatIndex) }
+                        member.tmdbId?.let { id ->
+                            onPersonClick(id, member.name, flatIndex, "cast_${member.tmdbId ?: index}")
+                        }
                     }
                 }
             }
-        }
     }
 }
 
 
 @Composable
-private fun CastCard(member: TmdbCastInfo, accentColor: Color, textColor: Color, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
+internal fun CastCard(
+    member: TmdbCastInfo,
+    textColor: Color,
+    modifier: Modifier = Modifier,
+    onFocused: (() -> Unit)? = null,
+    onClick: () -> Unit = {}
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.08f else 1f, label = "castScale")
 
     // Wider focusable area (96dp) with 80dp visual content centered within.
     // The extra width replaces LazyRow spacing and shifts focus centers so
@@ -1132,10 +1417,9 @@ private fun CastCard(member: TmdbCastInfo, accentColor: Color, textColor: Color,
         modifier = modifier
             .width(96.dp)
             .height(110.dp)
-            .scale(scale)
             .cardFocusSound()
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusable(interactionSource = interactionSource),
+            .onFocusChanged { if (it.isFocused) onFocused?.invoke() }
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
         contentAlignment = Alignment.TopCenter
     ) {
         Column(
@@ -1147,11 +1431,6 @@ private fun CastCard(member: TmdbCastInfo, accentColor: Color, textColor: Color,
                     .size(72.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(0.08f))
-                    .border(
-                        width = if (isFocused) 2.dp else 0.dp,
-                        color = if (isFocused) accentColor else Color.Transparent,
-                        shape = CircleShape
-                    )
             ) {
                 Text(
                     text = com.saab.tv.ui.components.initialsForPerson(member.name),
@@ -1199,55 +1478,63 @@ private fun StudioRow(
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null
 ) {
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val rowState = rememberLazyListState()
     val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
-    val density = LocalDensity.current
     val startPad = 48.dp
-    val paddingPx = remember(density) { with(density) { startPad.toPx() } }
-    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val endPadding = (screenWidth - startPad - 140.dp).coerceAtLeast(120.dp)
+    val rowHasCardFocus = remember { mutableStateOf(false) }
+    var focusedIndex by remember(restoreIndex) { mutableStateOf(restoreIndex.coerceAtLeast(0)) }
 
-    val pivotSpec = remember(paddingPx) {
-        FocusPivotSpec(
-            customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessMediumLow }
-        )
-    }
-
-    CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-        LazyRow(
-            state = rowState,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(start = startPad, end = endPadding)
-        ) {
+    com.saab.tv.ui.components.FocusShelf(
+        state = rowState,
+        focused = rowHasCardFocus,
+        width = 140.dp,
+        height = 56.dp,
+        startPadding = startPad,
+        focusedItemIndex = focusedIndex,
+        tag = "details-studio-focus-indicator",
+        modifier = Modifier.onFocusChanged { if (!it.hasFocus) rowHasCardFocus.value = false },
+        viewportHeight = 56.dp,
+        indicatorAlignment = Alignment.TopStart,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(start = startPad),
+        rowModifier = Modifier.fillMaxWidth().height(56.dp).focusGroup()
+    ) {
             itemsIndexed(studios, key = { _, it -> "${it.tmdbId}:${it.name}" }) { index, studio ->
                 Box(modifier = Modifier.onPreviewKeyEvent {
                     if (repeatGate.shouldConsume(it)) return@onPreviewKeyEvent true
-                    if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) true else false
+                    if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) {
+                        handoffNavigationFocus(it, authorizeNavigationHandoff)
+                    } else false
                 }) {
                     StudioChip(
                         studio, textColor, accentColor,
-                        modifier = if (restoreFocusRequester != null && index == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier
+                        modifier = if (restoreFocusRequester != null && index == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier,
+                        onFocused = { focusedIndex = index; rowHasCardFocus.value = true }
                     ) {
                         studio.tmdbId?.let { id -> onStudioClick(id, studio.name) }
                     }
                 }
             }
-        }
     }
 }
 
 @Composable
-private fun StudioChip(studio: TmdbCompanyInfo, textColor: Color, accentColor: Color, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
+internal fun StudioChip(
+    studio: TmdbCompanyInfo,
+    textColor: Color,
+    accentColor: Color,
+    modifier: Modifier = Modifier,
+    onFocused: (() -> Unit)? = null,
+    onClick: () -> Unit = {}
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f, label = "studioScale")
 
     Box(
         modifier = modifier
             .width(140.dp)
             .height(56.dp)
-            .scale(scale)
             .cardFocusSound()
             .clip(RoundedCornerShape(12.dp))
             .background(Color.White)
@@ -1256,8 +1543,8 @@ private fun StudioChip(studio: TmdbCompanyInfo, textColor: Color, accentColor: C
                 color = if (isFocused) accentColor else Color.Transparent,
                 shape = RoundedCornerShape(12.dp)
             )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusable(interactionSource = interactionSource),
+            .onFocusChanged { if (it.isFocused) onFocused?.invoke() }
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
         contentAlignment = Alignment.Center
     ) {
         if (studio.logo != null) {
@@ -1284,104 +1571,128 @@ private fun StudioChip(studio: TmdbCompanyInfo, textColor: Color, accentColor: C
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RecommendationRow(
-    items: List<TmdbMetaPreview>,
+internal fun RecommendationRow(
+    items: List<TitleCardProjection>,
     accentColor: Color,
     rowKey: String = "",
     profileId: Int,
     watchedViewModel: com.saab.tv.ui.home.HomeViewModel,
-    onItemClick: (type: String, id: String, rowKey: String, index: Int) -> Unit = { _, _, _, _ -> },
+    onItemClick: (type: String, id: String, rowKey: String, itemKey: String, index: Int) -> Unit = { _, _, _, _, _ -> },
     onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit = { _, _ -> },
     restoreIndex: Int = -1,
-    restoreFocusRequester: FocusRequester? = null
+    restoreFocusRequester: FocusRequester? = null,
+    artworkPrefetchDispatcher: com.saab.tv.ui.components.ArtworkPrefetchDispatcher? = null
 ) {
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val enrichedItems by androidx.compose.runtime.remember(watchedViewModel) {
         watchedViewModel.state.map { it.enrichedMeta }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = emptyMap())
     val rowState = rememberLazyListState()
-    val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
-    val density = LocalDensity.current
-    val startPad = 48.dp
-    val paddingPx = remember(density) { with(density) { startPad.toPx() } }
-    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val endPadding = (screenWidth - startPad - 120.dp).coerceAtLeast(120.dp)
-
-    val pivotSpec = remember(paddingPx) {
-        FocusPivotSpec(
-            customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessMediumLow }
-        )
+    LaunchedEffect(restoreIndex, items) {
+        if (restoreIndex in items.indices) rowState.scrollToItem(restoreIndex)
     }
+    val context = LocalContext.current
+    val artworkPrefetcher = remember(context, artworkPrefetchDispatcher) {
+        artworkPrefetchDispatcher ?: com.saab.tv.ui.components.ArtworkPrefetchDispatcher.forCoil(context)
+    }
+    val artworkItems = remember(items) { items.map { it.asMetaItem() } }
+    val landscapeCards = com.saab.tv.ui.components.LocalTitleCardShape.current == "landscape"
+    val cardWidth = if (landscapeCards) 190.dp else 120.dp
+    val focusFrame = com.saab.tv.ui.components.focusFrameSize(cardWidth, landscapeCards)
+    val rowHasCardFocus = remember(rowKey) { mutableStateOf(false) }
+    var focusedIndex by remember(rowKey) { mutableStateOf(restoreIndex) }
+    val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
+    val startPad = 48.dp
 
-    CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-        LazyRow(
+    com.saab.tv.ui.components.ArtworkPrefetchEffect(
+        items = artworkItems,
+        enrichedItems = enrichedItems,
+        listState = rowState,
+        focusedItemKey = artworkItems.getOrNull(focusedIndex)?.canonicalPresentationKey(),
+        landscapeCards = landscapeCards,
+        dispatcher = artworkPrefetcher,
+        posterSize = if (landscapeCards) null else androidx.compose.ui.unit.DpSize(120.dp, 180.dp),
+        onPrepareItem = { if (landscapeCards) watchedViewModel.ensureTmdbEnrichment(it) }
+    )
+
+    Column(
+        modifier = Modifier.fillMaxWidth().onFocusChanged {
+            if (!it.hasFocus) rowHasCardFocus.value = false
+        }
+    ) {
+        com.saab.tv.ui.components.FocusShelf(
             state = rowState,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(start = startPad, end = endPadding)
+            focused = rowHasCardFocus,
+            width = focusFrame.width,
+            height = focusFrame.height,
+            startPadding = startPad,
+            focusedItemIndex = focusedIndex,
+            tag = "details-recommendation-focus-indicator",
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            itemsIndexed(items, key = { _, it -> it.tmdbId }) { index, item ->
-                Box(modifier = Modifier.onPreviewKeyEvent {
-                    if (repeatGate.shouldConsume(it)) return@onPreviewKeyEvent true
-                    if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) true else false
-                }) {
-                    RecommendationCard(
-                        item, accentColor, profileId, watchedViewModel, enrichedItems,
-                        modifier = if (restoreFocusRequester != null && index == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier,
-                        onClick = {
-                            val stremioType = if (item.type == "tv") "series" else item.type
-                            onItemClick(stremioType, "tmdb:${item.tmdbId}", rowKey, index)
-                        },
-                        onLongClick = onLongClick
-                    )
-                }
-            }
+                    itemsIndexed(items, key = { _, it -> it.presentationKey }) { index, item ->
+                        Box(modifier = Modifier.onPreviewKeyEvent {
+                            if (repeatGate.shouldConsume(it)) return@onPreviewKeyEvent true
+                            if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) {
+                                handoffNavigationFocus(it, authorizeNavigationHandoff)
+                            } else false
+                        }) {
+                            RecommendationCard(
+                                item, accentColor, profileId, watchedViewModel, enrichedItems,
+                                modifier = if (restoreFocusRequester != null && index == restoreIndex) Modifier.focusRequester(restoreFocusRequester) else Modifier,
+                                onFocused = {
+                                    focusedIndex = index
+                                    rowHasCardFocus.value = true
+                                },
+                                onClick = {
+                                    onItemClick(item.kind.keyPart, item.sourceId, rowKey, item.presentationKey, index)
+                                },
+                                onLongClick = onLongClick
+                            )
+                        }
+                    }
         }
     }
 }
 
 @Composable
 private fun RecommendationCard(
-    item: TmdbMetaPreview,
+    projection: TitleCardProjection,
     accentColor: Color,
     profileId: Int,
     watchedViewModel: com.saab.tv.ui.home.HomeViewModel,
     enrichedItems: Map<String, com.saab.tv.data.model.stremio.MetaItem>,
     modifier: Modifier = Modifier,
+    onFocused: () -> Unit = {},
     onClick: () -> Unit = {},
     onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit = { _, _ -> }
 ) {
-    val meta = remember(item) {
-        com.saab.tv.data.model.stremio.MetaItem(
-            id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
-            name = item.name, poster = item.poster, background = item.backdrop,
-            description = item.description, releaseInfo = item.releaseInfo
-        )
-    }
+    val meta = remember(projection) { projection.asMetaItem() }
     val landscapeCards = com.saab.tv.ui.components.LocalTitleCardShape.current == "landscape"
     LaunchedEffect(meta.type, meta.id, landscapeCards, profileId) {
         watchedViewModel.ensureWatchedAlias(profileId, meta)
-        if (landscapeCards) watchedViewModel.ensureTmdbEnrichment(meta)
     }
     val watchedIds = com.saab.tv.ui.components.LocalWatchedIds.current
-    val previewItem = enrichedItems["${meta.type}:${meta.id}"] ?: meta
-    var isWatched by remember(meta.id, profileId) { mutableStateOf(meta.id in watchedIds) }
-    LaunchedEffect(meta.id, profileId, watchedIds) {
-        isWatched = meta.id in watchedIds || (profileId > 0 && try {
-            watchedViewModel.isTitleWatched(profileId, meta)
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            false
-        })
+    val previewItem = enrichedItems[meta.canonicalPresentationKey()] ?: meta
+    val cardProjection = remember(previewItem, projection) {
+        previewItem.toCanonicalProjection() ?: projection
     }
+    // Watched IDs are already observed once by the screen host and delivered to
+    // all cards through the composition local. Re-querying Room here once per
+    // card (and again on every badge-flow update) made large recommendation rows
+    // generate an N+1 database-read burst during Details composition.
+    val isWatched = meta.id in watchedIds
     com.saab.tv.ui.components.SaabTvCard(
-        title = item.name,
-        posterUrl = item.poster,
+        title = projection.title,
+        posterUrl = projection.artwork(com.saab.tv.domain.schema.ArtworkRole.POSTER)?.locator,
         previewItem = previewItem,
+        canonicalProjection = cardProjection,
         isWatched = isWatched,
         normalWidth = 120.dp,
         normalHeight = 180.dp,
+        showFocusOutline = false,
         modifier = modifier.titleTrailerFocus(meta),
+        onFocused = onFocused,
         onClick = onClick,
         onLongClick = { bounds -> onLongClick(meta, bounds) }
     )

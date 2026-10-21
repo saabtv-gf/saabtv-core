@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
+
+private const val MAX_DISCOVER_PAGES = 3
 
 sealed class StudioDetailState {
     data object Loading : StudioDetailState()
@@ -23,6 +26,24 @@ sealed class StudioDetailState {
     ) : StudioDetailState()
     data class Error(val message: String) : StudioDetailState()
 }
+
+internal fun StudioDetailState.Success.appendDiscoverPage(
+    mediaType: String,
+    railType: String,
+    page: Int,
+    pageItems: List<com.saab.tv.domain.schema.TitleCardProjection>,
+    totalPages: Int
+): StudioDetailState.Success = copy(rails = rails.map { rail ->
+    if (rail.mediaType != mediaType || rail.railType != railType) return@map rail
+
+    val seenIds = rail.items.mapTo(mutableSetOf()) { it.identity.externalId }
+    val newItems = pageItems.filter { seenIds.add(it.identity.externalId) }
+    rail.copy(
+        items = rail.items + newItems,
+        currentPage = page,
+        hasMore = page < totalPages && page < MAX_DISCOVER_PAGES
+    )
+})
 
 @HiltViewModel
 class StudioDetailViewModel @Inject constructor(
@@ -51,7 +72,7 @@ class StudioDetailViewModel @Inject constructor(
     fun loadMoreRail(mediaType: String, railType: String) {
         val currentState = _state.value as? StudioDetailState.Success ?: return
         val rail = currentState.rails.find { it.mediaType == mediaType && it.railType == railType } ?: return
-        if (!rail.hasMore || rail.currentPage >= 3) return
+        if (!rail.hasMore || rail.currentPage >= MAX_DISCOVER_PAGES) return
 
         val loadKey = "$mediaType:$railType"
         if (!inFlightLoads.add(loadKey)) return
@@ -63,24 +84,28 @@ class StudioDetailViewModel @Inject constructor(
                 "recent" -> if (mediaType == "movie") "primary_release_date.desc" else "first_air_date.desc"
                 else -> "popularity.desc"
             }
-            val (items, totalPages) = tmdbMetadataService.fetchDiscover(
-                entityId = entityId, kind = entityKind, mediaType = mediaType,
-                sortBy = sortBy, page = nextPage,
-                voteCountGte = if (railType == "top_rated") 200 else null,
-                dateLte = if (railType == "recent") LocalDate.now().toString() else null
-            )
-            val existingIds = rail.items.map { it.tmdbId }.toSet()
-            val newItems = items.filter { it.tmdbId !in existingIds }
-            val updatedRail = rail.copy(
-                items = rail.items + newItems,
-                currentPage = nextPage,
-                hasMore = nextPage < totalPages
-            )
-            val updatedRails = currentState.rails.map {
-                if (it.mediaType == mediaType && it.railType == railType) updatedRail else it
+            try {
+                val (items, totalPages) = tmdbMetadataService.fetchDiscover(
+                    entityId = entityId, kind = entityKind, mediaType = mediaType,
+                    sortBy = sortBy, page = nextPage,
+                    voteCountGte = if (railType == "top_rated") 200 else null,
+                    dateLte = if (railType == "recent") LocalDate.now().toString() else null
+                )
+                val latestState = _state.value as? StudioDetailState.Success ?: return@launch
+                _state.value = latestState.appendDiscoverPage(
+                    mediaType = mediaType,
+                    railType = railType,
+                    page = nextPage,
+                    pageItems = items,
+                    totalPages = totalPages
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                com.saab.tv.AppDiagnostics.failure("TMDB", "Studio Rail Pagination Failed", failure)
+            } finally {
+                inFlightLoads.remove(loadKey)
             }
-            _state.value = currentState.copy(rails = updatedRails)
-            inFlightLoads.remove(loadKey)
         }
     }
 
@@ -115,7 +140,8 @@ class StudioDetailViewModel @Inject constructor(
                     )
                     TmdbDiscoverRail(
                         mediaType = mediaType, railType = railType,
-                        items = items, currentPage = 1, hasMore = totalPages > 1
+                        items = items, currentPage = 1,
+                        hasMore = totalPages > 1
                     )
                 }
             }.awaitAll()

@@ -2,7 +2,6 @@ package com.saab.tv.ui.player.base
 
 import android.graphics.Bitmap
 import android.view.KeyEvent
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.animateColorAsState
@@ -24,6 +23,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -43,6 +44,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -61,12 +63,15 @@ import androidx.compose.material.icons.filled.VerticalAlignCenter
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.saab.tv.R
+import com.saab.tv.ui.components.SaabMotion
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -90,6 +95,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -102,6 +108,15 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -113,11 +128,15 @@ import androidx.tv.material3.IconButtonDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.saab.tv.data.model.stremio.MetaVideo
+import com.saab.tv.data.tmdb.TmdbCastInfo
+import com.saab.tv.ui.components.FocusShelf
 import com.saab.tv.domain.episodeMatchesPlaybackId
 import com.saab.tv.data.torrent.TorrentProgress
 import com.saab.tv.ui.details.GlassSidebar
 import com.saab.tv.ui.details.GlassSidebarScaffold
 import com.saab.tv.ui.details.SidebarState
+import com.saab.tv.ui.navigation.isBackOrEscape
+import com.saab.tv.ui.navigation.isInitialBackPress
 import java.text.Collator
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -136,7 +155,8 @@ private enum class PlayerPanel {
     SOURCES,
     AUDIO,
     SUBTITLES,
-    EPISODES
+    EPISODES,
+    CAST
 }
 
 private data class PanelItem(
@@ -150,7 +170,7 @@ private data class PlayerHeaderInfo(
     val secondaryText: String?
 )
 
-private data class SeekPreviewFrame(
+internal data class SeekPreviewFrame(
     val positionMs: Long?,
     val bitmap: Bitmap?,
     val cacheKey: String = ""
@@ -163,7 +183,7 @@ private data class SubtitleLanguageGroup(
     val isOffGroup: Boolean = false
 )
 
-private data class AudioLanguageGroup(
+internal data class AudioLanguageGroup(
     val key: String,
     val displayName: String,
     val tracks: List<PlayerTrackOption>
@@ -181,16 +201,19 @@ fun BasePlayerScaffold(
     seekThumbnailProvider: (suspend (positionMs: Long) -> Bitmap?)? = null,
     seekThumbnailCacheKey: String = "",
     seekTimeIntervalSeconds: Int = 30,
-    seekThumbnailIntervalSeconds: Int = 30,
     seekThumbnailCachePercent: Int? = null,
     seekThumbnailCachedFrames: Int? = null,
     seekThumbnailTotalFrames: Int? = null,
     smartFallbackFrameProvider: (suspend (Long) -> Bitmap?)? = null,
     title: String,
     mediaType: String,
+    castMembers: List<TmdbCastInfo> = emptyList(),
+    isLoadingCast: Boolean = false,
+    onLoadCast: () -> Unit = {},
     seriesTitle: String? = null,
     logoUrl: String? = null,
     onBack: () -> Unit,
+    preferredAudioLanguages: List<String> = emptyList(),
     skipSegmentInfo: SkipSegmentInfo? = null,
     nextEpisodeInfo: NextEpisodeInfo? = null,
     onAutoplayNextEpisode: ((currentSourceUrl: String?, positionMs: Long, durationMs: Long?) -> Unit)? = null,
@@ -226,6 +249,9 @@ fun BasePlayerScaffold(
     val subtitleTracks by playbackController.subtitleTracks.collectAsStateWithLifecycle()
 
     val currentSourceUrl = sources.firstOrNull { it.id == uiState.currentSourceId }?.url
+    val nextSource = remember(sources, uiState.currentSourceId) {
+        nextSourceAfter(sources, uiState.currentSourceId)
+    }
 
     val containerFocusRequester = remember { FocusRequester() }
     val playPauseFocusRequester = remember { FocusRequester() }
@@ -233,6 +259,8 @@ fun BasePlayerScaffold(
     val nextEpisodeFocusRequester = remember { FocusRequester() }
     val skipIntroFocusRequester = remember { FocusRequester() }
     val playNextFocusRequester = remember { FocusRequester() }
+    val castBackFocusRequester = remember { FocusRequester() }
+    val firstCastFocusRequester = remember { FocusRequester() }
 
     var activePanel by remember { mutableStateOf(PlayerPanel.NONE) }
     var showControls by remember { mutableStateOf(true) }
@@ -252,8 +280,6 @@ fun BasePlayerScaffold(
     var hideControlsSignal by remember { mutableIntStateOf(0) }
     var hideSeekOverlaySignal by remember { mutableIntStateOf(0) }
     var interactionSignal by remember { mutableIntStateOf(0) }
-
-    var consumeNextBackHandler by remember { mutableStateOf(false) }
 
     LaunchedEffect(seekThumbnailProvider) {
         if (seekThumbnailProvider == null) {
@@ -319,7 +345,7 @@ fun BasePlayerScaffold(
         enabled = smartFallbackEnabled,
         cacheKey = seekThumbnailCacheKey,
         durationMs = uiState.durationMs,
-        intervalSeconds = seekThumbnailIntervalSeconds,
+        intervalSeconds = seekTimeIntervalSeconds,
         provider = seekThumbnailProvider,
         cachedFrames = seekThumbnailCachedFrames,
         totalFrames = seekThumbnailTotalFrames,
@@ -330,13 +356,13 @@ fun BasePlayerScaffold(
         diagnosticsSessionId,
         smartFallbackEnabled,
         smartFallbackGateReason,
-        seekThumbnailIntervalSeconds,
+        seekTimeIntervalSeconds,
         uiState.durationMs,
         nextEpisodeInfo != null
     ) {
         if (autoplayThresholdMode != "smart") return@LaunchedEffect
         val details = "eligible=$smartFallbackEnabled reason=$smartFallbackGateReason " +
-            "durationMs=${uiState.durationMs} intervalSeconds=$seekThumbnailIntervalSeconds " +
+            "durationMs=${uiState.durationMs} intervalSeconds=$seekTimeIntervalSeconds " +
             "frameProvider=${seekThumbnailProvider != null} nextEpisode=${nextEpisodeInfo != null} " +
             "transitionCallback=${onAutoplayNextEpisode != null}"
         com.saab.tv.AppDiagnostics.event("Smart Next Episode", "Fallback Gate", details)
@@ -538,7 +564,7 @@ fun BasePlayerScaffold(
         !showSubtitleColorBar &&
         uiState.errorMessage.isNullOrBlank()
 
-    LaunchedEffect(pendingPreviewSeekPosition, seekThumbnailCacheKey, seekThumbnailIntervalSeconds) {
+    LaunchedEffect(pendingPreviewSeekPosition, seekThumbnailCacheKey, seekTimeIntervalSeconds) {
         val targetPosition = pendingPreviewSeekPosition
         val provider = latestSeekThumbnailProvider
         if (targetPosition == null) return@LaunchedEffect
@@ -547,10 +573,10 @@ fun BasePlayerScaffold(
             seekPreviewFrames = emptyList()
             return@LaunchedEffect
         }
-        // Debounce remote-key repeats so disk decoding never competes with UI input.
-        delay(70L)
+        // Resolve immediately: a cached thumbnail should appear on the first seek frame,
+        // not after a debounce timer has already made the preview feel laggy.
         val positions = SeekThumbnailCarouselPolicy.positions(
-            targetPosition, uiState.durationMs, seekThumbnailIntervalSeconds
+            targetPosition, uiState.durationMs, seekTimeIntervalSeconds
         )
         if (positions.isEmpty()) {
             seekPreviewFrames.forEach { it.bitmap?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() } }
@@ -711,9 +737,9 @@ fun BasePlayerScaffold(
             .coerceAtLeast(0L)
             .coerceAtMost(maxDuration)
         val target = if (latestSeekThumbnailProvider != null) {
-            com.saab.tv.data.cache.ThumbnailTimelinePolicy.gridPosition(requestedTarget, seekThumbnailIntervalSeconds)
+            com.saab.tv.data.cache.ThumbnailTimelinePolicy.gridPosition(requestedTarget, seekTimeIntervalSeconds)
                 .coerceAtMost(if (uiState.durationMs > 0) {
-                    val step = seekThumbnailIntervalSeconds.coerceAtLeast(1) * 1_000L
+                    val step = seekTimeIntervalSeconds.coerceAtLeast(1) * 1_000L
                     (uiState.durationMs - 1).coerceAtLeast(0) / step * step
                 } else maxDuration)
         } else requestedTarget
@@ -738,12 +764,9 @@ fun BasePlayerScaffold(
         showSeekOverlayTemporarily()
     }
 
-    BackHandler {
-        if (consumeNextBackHandler) {
-            consumeNextBackHandler = false
-        } else {
-            handleBackAction()
-        }
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction { handleBackAction() }
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Player) {
+        handleBackAction()
     }
 
     val episodeSwitchOpen = episodeSwitchSources != null || isEpisodeSwitchLoading
@@ -811,15 +834,14 @@ fun BasePlayerScaffold(
             .focusRequester(containerFocusRequester)
             .focusable()
             .onPreviewKeyEvent { keyEvent ->
-                if (isBackKey(keyEvent.nativeKeyEvent.keyCode)) {
-                    if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) {
-                        handleBackAction()
-                        consumeNextBackHandler = true
+                if (keyEvent.isBackOrEscape()) {
+                    if (keyEvent.isInitialBackPress()) {
+                        dispatchBackFromKey()
                     }
                     return@onPreviewKeyEvent true
                 }
 
-                if (!isBackKey(keyEvent.nativeKeyEvent.keyCode) &&
+                if (!keyEvent.isBackOrEscape() &&
                     (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN ||
                         keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_UP)
                 ) {
@@ -841,7 +863,7 @@ fun BasePlayerScaffold(
                 true
             }
             .onKeyEvent { keyEvent ->
-                if (!isBackKey(keyEvent.nativeKeyEvent.keyCode) &&
+                if (!keyEvent.isBackOrEscape() &&
                     (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN ||
                         keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_UP)
                 ) {
@@ -939,8 +961,8 @@ fun BasePlayerScaffold(
 
         AnimatedVisibility(
             visible = showPauseOverlay,
-            enter = fadeIn(animationSpec = tween(320)),
-            exit = fadeOut(animationSpec = tween(220))
+            enter = fadeIn(animationSpec = tween(SaabMotion.duration(320))),
+            exit = fadeOut(animationSpec = tween(SaabMotion.duration(220)))
         ) {
             PauseBrandOverlay(
                 logoUrl = logoUrl,
@@ -950,8 +972,8 @@ fun BasePlayerScaffold(
 
         AnimatedVisibility(
             visible = showLoadingOverlay,
-            enter = fadeIn(animationSpec = tween(150)),
-            exit = fadeOut(animationSpec = tween(120))
+            enter = fadeIn(animationSpec = tween(SaabMotion.duration(150))),
+            exit = fadeOut(animationSpec = tween(SaabMotion.duration(120)))
         ) {
             LoadingOverlay(
                 torrentProgress = torrentProgress,
@@ -962,8 +984,8 @@ fun BasePlayerScaffold(
 
         AnimatedVisibility(
             visible = !isTrailer && showControls && !panelOpen && !showSubtitleOffsetBar && !showSubtitleSizeBar && !showSubtitleDelayBar && !showSubtitleColorBar && uiState.errorMessage.isNullOrBlank(),
-            enter = slideInVertically(animationSpec = tween(200)) { -it } + fadeIn(animationSpec = tween(200)),
-            exit = slideOutVertically(animationSpec = tween(200)) { -it } + fadeOut(animationSpec = tween(200)),
+            enter = slideInVertically(animationSpec = tween(SaabMotion.duration(200))) { -it } + fadeIn(animationSpec = tween(SaabMotion.duration(200))),
+            exit = slideOutVertically(animationSpec = tween(SaabMotion.duration(200))) { -it } + fadeOut(animationSpec = tween(SaabMotion.duration(200))),
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 74.dp, end = 36.dp)
@@ -981,20 +1003,30 @@ fun BasePlayerScaffold(
 
         AnimatedVisibility(
             visible = showControls && !panelOpen && !showSubtitleOffsetBar && !showSubtitleSizeBar && !showSubtitleDelayBar && !showSubtitleColorBar && uiState.errorMessage.isNullOrBlank(),
-            enter = slideInVertically(animationSpec = tween(200)) { it } + fadeIn(animationSpec = tween(200)),
-            exit = slideOutVertically(animationSpec = tween(200)) { it } + fadeOut(animationSpec = tween(200))
+            enter = slideInVertically(animationSpec = tween(SaabMotion.duration(200))) { it } + fadeIn(animationSpec = tween(SaabMotion.duration(200))),
+            exit = slideOutVertically(animationSpec = tween(SaabMotion.duration(200))) { it } + fadeOut(animationSpec = tween(SaabMotion.duration(200)))
         ) {
             PlayerControlsOverlay(
                 currentPositionMs = displayPositionMs,
                 durationMs = uiState.durationMs,
                 isPlaying = isPlaybackIntended,
+                isPlaybackAdvancing = uiState.isPlaying && !uiState.isBuffering && !uiState.isSeeking &&
+                    pendingPreviewSeekPosition == null,
                 showSourceControl = !isTrailer && sources.size > 1,
                 showAudioControl = !isTrailer && audioTracks.isNotEmpty(),
                 showSubtitleControl = !isTrailer && subtitleTracks.isNotEmpty(),
+                showCastControl = !isTrailer,
                 showNextEpisodeControl = !isTrailer && nextEpisodeInfo != null &&
                     onAutoplayNextEpisode != null,
                 playPauseFocusRequester = playPauseFocusRequester,
                 seekBarFocusRequester = seekBarFocusRequester,
+                onShowCastPanel = {
+                    markInteraction()
+                    activePanel = PlayerPanel.CAST
+                    showControls = true
+                    showSeekOverlay = false
+                    onLoadCast()
+                },
                 onPlayPause = {
                     markInteraction()
                     playbackController.togglePlayPause()
@@ -1049,21 +1081,23 @@ fun BasePlayerScaffold(
 
         AnimatedVisibility(
             visible = showSeekOverlay && !showControls && !panelOpen && uiState.errorMessage.isNullOrBlank(),
-            enter = fadeIn(animationSpec = tween(150)),
-            exit = fadeOut(animationSpec = tween(150)),
+            enter = fadeIn(animationSpec = tween(SaabMotion.duration(150))),
+            exit = fadeOut(animationSpec = tween(SaabMotion.duration(150))),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             SeekOverlay(
                 currentPositionMs = displayPositionMs,
-                durationMs = uiState.durationMs
+                durationMs = uiState.durationMs,
+                isPlaybackAdvancing = uiState.isPlaying && !uiState.isBuffering && !uiState.isSeeking &&
+                    pendingPreviewSeekPosition == null
             )
         }
 
         AnimatedVisibility(
             visible = pendingPreviewSeekPosition != null && seekThumbnailProvider != null &&
                 !panelOpen && uiState.errorMessage.isNullOrBlank(),
-            enter = fadeIn(animationSpec = tween(120)),
-            exit = fadeOut(animationSpec = tween(100)),
+            enter = fadeIn(animationSpec = tween(SaabMotion.duration(120))),
+            exit = fadeOut(animationSpec = tween(SaabMotion.duration(100))),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = if (showControls) 142.dp else 82.dp)
@@ -1072,7 +1106,8 @@ fun BasePlayerScaffold(
                 frames = seekPreviewFrames,
                 selectedPositionMs = displayPositionMs,
                 durationMs = uiState.durationMs,
-                intervalSeconds = seekThumbnailIntervalSeconds
+                intervalSeconds = seekTimeIntervalSeconds,
+                cacheKey = seekThumbnailCacheKey
             )
         }
 
@@ -1080,6 +1115,13 @@ fun BasePlayerScaffold(
             PlayerErrorOverlay(
                 errorMessage = uiState.errorMessage.orEmpty(),
                 onBack = onBack,
+                onNextSource = nextSource?.let { source ->
+                    {
+                        markInteraction()
+                        onSourceChosen(source)
+                        playbackController.selectSource(source.id)
+                    }
+                },
                 onSwitchSource = if (sources.size > 1) {
                     {
                         markInteraction()
@@ -1096,6 +1138,7 @@ fun BasePlayerScaffold(
             title = headerInfo.primaryText,
             onClose = { closePanel() },
             sources = sources,
+            sourceLanguagePreferences = preferredAudioLanguages,
             currentSourceId = uiState.currentSourceId,
             onLanguageSelectSource = { sourceId ->
                 sources.firstOrNull { it.id == sourceId }?.let(onSourceChosen)
@@ -1159,19 +1202,27 @@ fun BasePlayerScaffold(
 
         AudioSelectionSidePanel(
             visible = activePanel == PlayerPanel.AUDIO,
-            title = "Audio Tracks",
+            title = stringResource(R.string.player_audio_tracks_title),
             audioTracks = audioTracks,
+            sources = sources,
+            currentSourceId = uiState.currentSourceId,
             selectedAudioId = uiState.selectedAudioTrackId,
+            preferredAudioLanguages = preferredAudioLanguages,
             onClose = { closePanel() },
             onSelectTrack = { trackId ->
                 markInteraction()
                 playbackController.selectAudioTrack(trackId)
+            },
+            onSelectSourceForLanguage = { sourceId, language ->
+                markInteraction()
+                sources.firstOrNull { it.id == sourceId }?.let(onSourceChosen)
+                playbackController.selectSourceForAudioLanguage(sourceId, language)
             }
         )
 
         SubtitleSelectionSidePanel(
             visible = activePanel == PlayerPanel.SUBTITLES,
-            title = "Subtitles",
+            title = stringResource(R.string.player_subtitles_title),
             subtitleTracks = subtitleTracks,
             selectedSubtitleId = uiState.selectedSubtitleTrackId,
             onClose = { closePanel() },
@@ -1195,6 +1246,15 @@ fun BasePlayerScaffold(
                 closePanel()
                 showSubtitleColorBar = true
             }
+        )
+
+        PlaybackCastPanel(
+            visible = activePanel == PlayerPanel.CAST,
+            castMembers = castMembers,
+            isLoading = isLoadingCast,
+            onClose = { closePanel() },
+            backFocusRequester = castBackFocusRequester,
+            firstCastFocusRequester = firstCastFocusRequester
         )
 
         SubtitleOffsetTopBar(
@@ -1302,15 +1362,15 @@ fun BasePlayerScaffold(
         val controlsVisible = showControls && !panelOpen && !showSubtitleOffsetBar && !showSubtitleSizeBar && !showSubtitleDelayBar && !showSubtitleColorBar && uiState.errorMessage.isNullOrBlank()
         val buttonBottomPadding by animateDpAsState(
             targetValue = if (controlsVisible) 120.dp else 32.dp,
-            animationSpec = tween(200),
+            animationSpec = tween(SaabMotion.duration(200)),
             label = "buttonBottomPadding"
         )
 
         // Skip intro button
         AnimatedVisibility(
             visible = (showSkipIntro || showSkipRecap) && !overlayVisible,
-            enter = fadeIn(animationSpec = tween(300)),
-            exit = fadeOut(animationSpec = tween(200)),
+            enter = fadeIn(animationSpec = tween(SaabMotion.duration(300))),
+            exit = fadeOut(animationSpec = tween(SaabMotion.duration(200))),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = buttonBottomPadding)
@@ -1337,8 +1397,8 @@ fun BasePlayerScaffold(
         // Next episode countdown button
         AnimatedVisibility(
             visible = countdownActive && nextEpisodeInfo != null && !autoplayCancelled,
-            enter = fadeIn(animationSpec = tween(300)),
-            exit = fadeOut(animationSpec = tween(200)),
+            enter = fadeIn(animationSpec = tween(SaabMotion.duration(300))),
+            exit = fadeOut(animationSpec = tween(SaabMotion.duration(200))),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = buttonBottomPadding)
@@ -1355,15 +1415,15 @@ fun BasePlayerScaffold(
         // Manual outro skip / next-episode action.
         AnimatedVisibility(
             visible = showPlayNextButton,
-            enter = fadeIn(animationSpec = tween(300)),
-            exit = fadeOut(animationSpec = tween(200)),
+            enter = fadeIn(animationSpec = tween(SaabMotion.duration(300))),
+            exit = fadeOut(animationSpec = tween(SaabMotion.duration(200))),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = buttonBottomPadding)
         ) {
             PlayNextEpisodeButton(
                 onPlayNext = triggerNextEpisode,
-                label = "Play Next Episode",
+                label = stringResource(R.string.player_play_next_episode),
                 focusRequester = playNextFocusRequester
             )
         }
@@ -1376,7 +1436,7 @@ private fun NextEpisodeButton(
     onPlayNow: () -> Unit,
     focusRequester: FocusRequester = remember { FocusRequester() }
 ) {
-    PlayerActionButton("Play Next Episode", progress, onPlayNow, focusRequester)
+    PlayerActionButton(stringResource(R.string.player_play_next_episode), progress, onPlayNow, focusRequester)
 }
 
 @Composable
@@ -1405,9 +1465,9 @@ private fun PlayerActionButton(
     onClick: () -> Unit,
     focusRequester: FocusRequester
 ) {
+    val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.03f else 1f, label = "playerActionScale")
     val accentColor = MaterialTheme.colorScheme.primary
 
     LaunchedEffect(focusRequester) {
@@ -1418,7 +1478,6 @@ private fun PlayerActionButton(
         modifier = Modifier
             .padding(end = 24.dp)
             .height(38.dp)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(0.07f))
             .drawBehind {
@@ -1462,12 +1521,15 @@ private fun PlayerControlsOverlay(
     currentPositionMs: Long,
     durationMs: Long,
     isPlaying: Boolean,
+    isPlaybackAdvancing: Boolean,
     showSourceControl: Boolean,
     showAudioControl: Boolean,
     showSubtitleControl: Boolean,
+    showCastControl: Boolean,
     showNextEpisodeControl: Boolean,
     playPauseFocusRequester: FocusRequester,
     seekBarFocusRequester: FocusRequester,
+    onShowCastPanel: () -> Unit,
     onPlayPause: () -> Unit,
     onSeekBy: (Long) -> Unit,
     onSeekCommit: () -> Unit,
@@ -1511,6 +1573,7 @@ private fun PlayerControlsOverlay(
             FocusableSeekBar(
                 currentPosition = currentPositionMs,
                 duration = durationMs,
+                isPlaybackAdvancing = isPlaybackAdvancing,
                 onSeekBy = onSeekBy,
                 onSeekCommit = onSeekCommit,
                 seekTimeIntervalMs = seekTimeIntervalMs,
@@ -1532,7 +1595,9 @@ private fun PlayerControlsOverlay(
                 ) {
                     ControlButton(
                         icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        contentDescription = stringResource(
+                            if (isPlaying) R.string.player_pause else R.string.player_play
+                        ),
                         onClick = onPlayPause,
                         focusRequester = playPauseFocusRequester,
                         onFocused = onResetHideTimer,
@@ -1544,7 +1609,7 @@ private fun PlayerControlsOverlay(
                     if (showSubtitleControl) {
                         ControlButton(
                             icon = Icons.Default.ClosedCaption,
-                            contentDescription = "Subtitles",
+                            contentDescription = stringResource(R.string.player_subtitles_control),
                             onClick = onShowSubtitlePanel,
                             onFocused = onResetHideTimer,
                             buttonSize = 36.dp,
@@ -1555,7 +1620,7 @@ private fun PlayerControlsOverlay(
                     if (showAudioControl) {
                         ControlButton(
                             icon = Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = "Audio tracks",
+                            contentDescription = stringResource(R.string.player_audio_tracks_control),
                             onClick = onShowAudioPanel,
                             onFocused = onResetHideTimer,
                             buttonSize = 36.dp,
@@ -1566,7 +1631,7 @@ private fun PlayerControlsOverlay(
                     if (showNextEpisodeControl) {
                         ControlButton(
                             icon = Icons.Default.SkipNext,
-                            contentDescription = "Next Episode",
+                            contentDescription = stringResource(R.string.player_next_episode_control),
                             onClick = onPlayNextEpisode,
                             onFocused = onResetHideTimer,
                             buttonSize = 36.dp,
@@ -1577,7 +1642,7 @@ private fun PlayerControlsOverlay(
                     if (showEpisodesControl) {
                         ControlButton(
                             icon = Icons.Default.VideoLibrary,
-                            contentDescription = "Episodes",
+                            contentDescription = stringResource(R.string.player_episodes_control),
                             onClick = onShowEpisodesPanel,
                             onFocused = onResetHideTimer,
                             buttonSize = 36.dp,
@@ -1585,10 +1650,22 @@ private fun PlayerControlsOverlay(
                         )
                     }
 
+                    if (showCastControl) {
+                        ControlButton(
+                            icon = Icons.Default.People,
+                            contentDescription = stringResource(R.string.player_cast_control),
+                            onClick = onShowCastPanel,
+                            testTag = "player-cast-control",
+                            onFocused = onResetHideTimer,
+                            buttonSize = 36.dp,
+                            iconSize = 20.dp
+                        )
+                    }
+
                     if (showSourceControl || showAudioControl || showSubtitleControl) {
                         ControlButton(
                             icon = Icons.Default.SwapHoriz,
-                            contentDescription = "More sources",
+                            contentDescription = stringResource(R.string.player_more_sources_control),
                             onClick = onShowSourcesPanel,
                             onFocused = onResetHideTimer,
                             buttonSize = 36.dp,
@@ -1616,6 +1693,7 @@ private fun ControlButton(
     onFocused: (() -> Unit)? = null,
     upFocusRequester: FocusRequester? = null,
     downFocusRequester: FocusRequester? = null,
+    testTag: String? = null,
     buttonSize: Dp = 40.dp,
     iconSize: Dp = 20.dp
 ) {
@@ -1633,13 +1711,9 @@ private fun ControlButton(
             }
             .onFocusChanged {
                 if (it.isFocused) onFocused?.invoke()
-            },
-        colors = IconButtonDefaults.colors(
-            containerColor = Color.Transparent,
-            focusedContainerColor = Color.White,
-            contentColor = Color.White,
-            focusedContentColor = Color.Black
-        ),
+            }
+            .then(if (testTag == null) Modifier else Modifier.testTag(testTag)),
+        colors = playerIconButtonColors(Color.Transparent),
         shape = IconButtonDefaults.shape(shape = CircleShape)
     ) {
         Icon(
@@ -1650,10 +1724,35 @@ private fun ControlButton(
     }
 }
 
+internal data class PlayerIconButtonPalette(
+    val containerColor: Color,
+    val focusedContainerColor: Color,
+    val contentColor: Color,
+    val focusedContentColor: Color
+)
+
+internal fun playerIconButtonPalette(containerColor: Color) = PlayerIconButtonPalette(
+    containerColor = containerColor,
+    focusedContainerColor = Color.White,
+    contentColor = Color.White,
+    focusedContentColor = Color.Black
+)
+
+@Composable
+private fun playerIconButtonColors(containerColor: Color) = playerIconButtonPalette(containerColor).let { palette ->
+    IconButtonDefaults.colors(
+        containerColor = palette.containerColor,
+        focusedContainerColor = palette.focusedContainerColor,
+        contentColor = palette.contentColor,
+        focusedContentColor = palette.focusedContentColor
+    )
+}
+
 @Composable
 private fun FocusableSeekBar(
     currentPosition: Long,
     duration: Long,
+    isPlaybackAdvancing: Boolean,
     onSeekBy: (Long) -> Unit,
     onSeekCommit: () -> Unit,
     seekTimeIntervalMs: Long,
@@ -1661,8 +1760,16 @@ private fun FocusableSeekBar(
     focusRequester: FocusRequester? = null,
     downFocusRequester: FocusRequester? = null
 ) {
+    val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
+    val safeDurationMs = duration.coerceAtLeast(0L)
+    val safePositionMs = currentPosition.coerceIn(0L, safeDurationMs)
+    val progress = if (safeDurationMs > 0L) {
+        safePositionMs.toFloat() / safeDurationMs.toFloat()
+    } else {
+        0f
+    }
 
     Box(
         modifier = Modifier
@@ -1674,6 +1781,26 @@ private fun FocusableSeekBar(
             )
             .focusProperties {
                 if (downFocusRequester != null) down = downFocusRequester
+            }
+            .semantics {
+                contentDescription = context.getString(R.string.player_seek_progress)
+                stateDescription = context.getString(
+                    R.string.player_seek_position,
+                    formatTime(safePositionMs),
+                    formatTime(safeDurationMs)
+                )
+                progressBarRangeInfo = ProgressBarRangeInfo(progress, 0f..1f)
+                setProgress { requestedProgress ->
+                    if (safeDurationMs <= 0L) {
+                        false
+                    } else {
+                        val targetPositionMs =
+                            (requestedProgress.coerceIn(0f, 1f) * safeDurationMs).toLong()
+                        onSeekBy(targetPositionMs - safePositionMs)
+                        onSeekCommit()
+                        true
+                    }
+                }
             }
             .onFocusChanged {
                 if (it.isFocused) onFocused()
@@ -1706,7 +1833,8 @@ private fun FocusableSeekBar(
         ProgressBar(
             currentPosition = currentPosition,
             duration = duration,
-            isFocused = isFocused
+            isFocused = isFocused,
+            isPlaybackAdvancing = isPlaybackAdvancing
         )
     }
 }
@@ -1716,12 +1844,27 @@ private fun SeekThumbnailCarousel(
     frames: List<SeekPreviewFrame>,
     selectedPositionMs: Long,
     durationMs: Long,
-    intervalSeconds: Int
+    intervalSeconds: Int,
+    cacheKey: String
 ) {
     val positions = SeekThumbnailCarouselPolicy.positions(selectedPositionMs, durationMs, intervalSeconds)
     val selectedIndex = SeekThumbnailCarouselPolicy.selectedIndex(positions, selectedPositionMs)
-    val visibleFrames = if (frames.size == positions.size && frames.map { it.positionMs } == positions) frames
-    else positions.map { position -> SeekPreviewFrame(positionMs = position, bitmap = null) }
+    val visibleFrames = if (SeekThumbnailCarouselPolicy.hasCurrentFrames(
+            framePositions = frames.map { it.positionMs },
+            frameCacheKeys = frames.map { it.cacheKey },
+            requestedPositions = positions,
+            cacheKey = cacheKey
+        )) frames
+    else {
+        val reusableIndices = SeekThumbnailCarouselPolicy.retainedFrameIndices(
+            previous = frames.map { frame -> frame.positionMs.takeIf { frame.cacheKey == cacheKey } },
+            requested = positions
+        )
+        positions.mapIndexed { index, position ->
+            reusableIndices[index]?.let { frames[it].copy(positionMs = position) }
+                ?: SeekPreviewFrame(positionMs = position, bitmap = null, cacheKey = cacheKey)
+        }
+    }
     Row(
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1737,18 +1880,18 @@ private fun SeekThumbnailCarousel(
 }
 
 @Composable
-private fun SeekThumbnailTile(
+internal fun SeekThumbnailTile(
     frame: SeekPreviewFrame,
     isSelected: Boolean
 ) {
     val width by animateDpAsState(
         targetValue = if (isSelected) 256.dp else 176.dp,
-        animationSpec = tween(170),
+        animationSpec = tween(SaabMotion.duration(170)),
         label = "seekThumbnailWidth"
     )
     val height by animateDpAsState(
         targetValue = if (isSelected) 144.dp else 99.dp,
-        animationSpec = tween(170),
+        animationSpec = tween(SaabMotion.duration(170)),
         label = "seekThumbnailHeight"
     )
     val shape = RoundedCornerShape(if (isSelected) 10.dp else 7.dp)
@@ -1769,15 +1912,11 @@ private fun SeekThumbnailTile(
         if (bitmap != null && !bitmap.isRecycled) {
             Image(
                 bitmap = bitmap.asImageBitmap(),
-                contentDescription = frame.positionMs?.let { "Scene preview at ${formatTime(it)}" },
+                contentDescription = frame.positionMs?.let {
+                    stringResource(R.string.player_scene_preview_at, formatTime(it))
+                },
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
-            )
-        } else if (frame.positionMs != null) {
-            CircularProgressIndicator(
-                color = Color.White.copy(alpha = if (isSelected) 0.9f else 0.45f),
-                strokeWidth = if (isSelected) 3.dp else 2.dp,
-                modifier = Modifier.align(Alignment.Center).size(if (isSelected) 30.dp else 20.dp)
             )
         }
 
@@ -1801,18 +1940,17 @@ private fun SeekThumbnailTile(
 private fun ProgressBar(
     currentPosition: Long,
     duration: Long,
-    isFocused: Boolean = false
+    isFocused: Boolean = false,
+    isPlaybackAdvancing: Boolean = false
 ) {
-    val progress = if (duration > 0) {
-        (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-
+    val progress = PlaybackProgressAnimationPolicy.fraction(currentPosition, duration)
     val animatedProgress by animateFloatAsState(
         targetValue = progress,
-        animationSpec = tween(100),
-        label = "progress"
+        animationSpec = tween(
+            durationMillis = PlaybackProgressAnimationPolicy.interpolationDurationMs(isPlaybackAdvancing),
+            easing = LinearEasing
+        ),
+        label = "playbackProgress"
     )
 
     BoxWithConstraints(
@@ -1841,6 +1979,7 @@ private fun ProgressBar(
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(clampedProgress)
                 .height(trackHeight)
+                .testTag("player-progress-fill")
                 .clip(RoundedCornerShape(999.dp))
                 .background(primaryColor)
         )
@@ -1859,7 +1998,8 @@ private fun ProgressBar(
 @Composable
 private fun SeekOverlay(
     currentPositionMs: Long,
-    durationMs: Long
+    durationMs: Long,
+    isPlaybackAdvancing: Boolean
 ) {
     Column(
         modifier = Modifier
@@ -1868,7 +2008,8 @@ private fun SeekOverlay(
     ) {
         ProgressBar(
             currentPosition = currentPositionMs,
-            duration = durationMs
+            duration = durationMs,
+            isPlaybackAdvancing = isPlaybackAdvancing
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -1924,7 +2065,7 @@ private fun PlayerHeader(
                 formatter.format(java.util.Date(System.currentTimeMillis() + remainingMs))
             }
             Text(
-                text = "Ends at $endTime",
+                text = stringResource(R.string.player_ends_at, endTime),
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.White.copy(alpha = 0.7f)
             )
@@ -1936,7 +2077,11 @@ private fun PlayerHeader(
                     " (${seekThumbnailCachedFrames.coerceAtLeast(0)}/${seekThumbnailTotalFrames})"
                 } else ""
                 Text(
-                    text = "Thumbnail Cache: ${percent.coerceIn(0, 100)}%$frameProgress",
+                    text = stringResource(
+                        R.string.player_thumbnail_cache,
+                        percent.coerceIn(0, 100),
+                        frameProgress
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.7f)
                 )
@@ -1987,6 +2132,7 @@ private fun PauseBrandOverlay(
 private fun PlayerErrorOverlay(
     errorMessage: String,
     onBack: () -> Unit,
+    onNextSource: (() -> Unit)? = null,
     onSwitchSource: (() -> Unit)? = null
 ) {
     val backFocusRequester = remember { FocusRequester() }
@@ -2017,14 +2163,21 @@ private fun PlayerErrorOverlay(
             ) {
                 PlayerErrorButton(
                     icon = Icons.AutoMirrored.Filled.ArrowBack,
-                    label = "Back",
+                    label = stringResource(R.string.common_back),
                     onClick = onBack,
                     focusRequester = backFocusRequester
                 )
+                if (onNextSource != null) {
+                    PlayerErrorButton(
+                        icon = Icons.Default.SkipNext,
+                        label = stringResource(R.string.player_next_source),
+                        onClick = onNextSource
+                    )
+                }
                 if (onSwitchSource != null) {
                     PlayerErrorButton(
                         icon = Icons.Default.SwapHoriz,
-                        label = "Switch Source",
+                        label = stringResource(R.string.player_switch_source),
                         onClick = onSwitchSource
                     )
                 }
@@ -2042,13 +2195,11 @@ private fun PlayerErrorButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f, label = "errorBtnScale")
     val accentColor = MaterialTheme.colorScheme.primary
 
     Row(
         modifier = Modifier
             .height(40.dp)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(0.07f))
             .border(
@@ -2106,34 +2257,46 @@ private fun LoadingOverlay(
     logoUrl: String? = null,
     primaryText: String
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "videoLoader")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 850, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "videoLoaderRotation"
-    )
-    val pulse by infiniteTransition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.03f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 850),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "videoLoaderPulse"
-    )
-    val brandAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.38f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 850),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "videoLoaderBrandAlpha"
-    )
+    val rotation: Float
+    val pulse: Float
+    val brandAlpha: Float
+    if (!SaabMotion.animationsEnabled) {
+        rotation = 0f
+        pulse = 1f
+        brandAlpha = 1f
+    } else {
+        val infiniteTransition = rememberInfiniteTransition(label = "videoLoader")
+        val animatedRotation by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 850, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "videoLoaderRotation"
+        )
+        val animatedPulse by infiniteTransition.animateFloat(
+            initialValue = 0.96f,
+            targetValue = 1.03f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 850),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "videoLoaderPulse"
+        )
+        val animatedBrandAlpha by infiniteTransition.animateFloat(
+            initialValue = 0.38f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 850),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "videoLoaderBrandAlpha"
+        )
+        rotation = animatedRotation
+        pulse = animatedPulse
+        brandAlpha = animatedBrandAlpha
+    }
 
     Box(
         modifier = Modifier
@@ -2144,7 +2307,7 @@ private fun LoadingOverlay(
         val progress = torrentProgress?.progress
         val animatedProgress by animateFloatAsState(
             targetValue = progress ?: 0.72f,
-            animationSpec = tween(durationMillis = 300),
+            animationSpec = tween(SaabMotion.duration(300)),
             label = "preload"
         )
 
@@ -2256,19 +2419,43 @@ internal fun BoxScope.AudioSelectionSidePanel(
     visible: Boolean,
     title: String,
     audioTracks: List<PlayerTrackOption>,
+    sources: List<PlayerSourceOption> = emptyList(),
+    currentSourceId: String? = null,
     selectedAudioId: String?,
+    preferredAudioLanguages: List<String> = emptyList(),
     onClose: () -> Unit,
-    onSelectTrack: (String?) -> Unit
+    onSelectTrack: (String?) -> Unit,
+    onSelectSource: (String) -> Unit = {},
+    onSelectSourceForLanguage: (sourceId: String, language: String) -> Unit = { sourceId, _ -> onSelectSource(sourceId) }
 ) {
     if (!visible) return
 
-    val languageGroups = remember(audioTracks) {
-        buildAudioLanguageGroups(audioTracks)
+    val sourceAudioOptions = remember(sources) {
+        buildSourceAudioOptions(sources)
     }
-    val selectedGroupKeyFromTrack = remember(languageGroups, selectedAudioId) {
+    val selectionOptions = remember(audioTracks, sourceAudioOptions) {
+        audioTracks + sourceAudioOptions
+    }
+    val selectedAudioOptionId = remember(selectedAudioId, currentSourceId, sourceAudioOptions, audioTracks) {
+        selectedAudioId?.takeIf { id -> audioTracks.any { it.id == id } }
+            ?: sourceAudioOptions.firstOrNull { it.sourceId == currentSourceId }?.id
+            ?: audioTracks.firstOrNull { it.selected }?.id
+    }
+    val languageGroups = remember(audioTracks, sourceAudioOptions, preferredAudioLanguages) {
+        buildAudioLanguageGroups(selectionOptions, preferredAudioLanguages)
+    }
+    val preferredLanguageGroups = remember(languageGroups, preferredAudioLanguages) {
+        languageGroups.filter { group ->
+            AudioTrackPreferencePolicy.languageRank(group.key, preferredAudioLanguages) != Int.MAX_VALUE
+        }
+    }
+    val otherLanguageGroups = remember(languageGroups, preferredLanguageGroups) {
+        languageGroups.filterNot { group -> group in preferredLanguageGroups }
+    }
+    val selectedGroupKeyFromTrack = remember(languageGroups, selectedAudioOptionId) {
         resolveSelectedAudioLanguageKey(
             groups = languageGroups,
-            selectedAudioId = selectedAudioId
+            selectedAudioId = selectedAudioOptionId
         )
     }
 
@@ -2280,7 +2467,7 @@ internal fun BoxScope.AudioSelectionSidePanel(
     var optimisticSelectedAudioId by remember(visible) {
         mutableStateOf<String?>(null)
     }
-    val effectiveSelectedAudioId = optimisticSelectedAudioId ?: selectedAudioId
+    val effectiveSelectedAudioId = optimisticSelectedAudioId ?: selectedAudioOptionId
 
     val selectedLanguageGroup = languageGroups.firstOrNull { it.key == selectedLanguageKey }
         ?: languageGroups.firstOrNull()
@@ -2309,17 +2496,38 @@ internal fun BoxScope.AudioSelectionSidePanel(
     val panelScope = rememberCoroutineScope()
     val languageListState = rememberLazyListState()
     val trackListState = rememberLazyListState()
-    val selectedTrack = remember(audioTracks, effectiveSelectedAudioId) {
-        audioTracks.firstOrNull { track -> track.id == effectiveSelectedAudioId }
-            ?: audioTracks.firstOrNull { track -> track.selected }
+    val selectedTrack = remember(selectionOptions, effectiveSelectedAudioId) {
+        selectionOptions.firstOrNull { track -> track.id == effectiveSelectedAudioId }
+            ?: selectionOptions.firstOrNull { track -> track.selected }
     }
-    val currentSelectionText = remember(selectedTrack, selectedLanguageGroup) {
+    val preferenceSummary = remember(preferredAudioLanguages) {
+        AudioTrackPreferencePolicy.normalizePreferences(preferredAudioLanguages)
+            .map { language -> subtitleLanguageDisplayName(language, language) }
+            .joinToString(" › ")
+    }
+    val currentTrackFormat = stringResource(R.string.player_current_track)
+    val noTrackLabel = stringResource(R.string.common_none)
+    val unknownLanguageLabel = stringResource(R.string.sort_filter_unknown)
+    val offLanguageLabel = stringResource(R.string.common_off)
+    val currentSelectionText = remember(
+        selectedTrack,
+        selectedLanguageGroup,
+        currentTrackFormat,
+        noTrackLabel,
+        unknownLanguageLabel,
+        offLanguageLabel
+    ) {
         when {
-            selectedTrack == null -> "Current: None"
+            selectedTrack == null -> currentTrackFormat.format(noTrackLabel)
             else -> {
-                val language = selectedLanguageGroup?.displayName?.takeIf { it.isNotBlank() } ?: "Unknown"
+                val language = localizedTrackLanguageLabel(
+                    selectedLanguageGroup?.displayName,
+                    unknownLanguageLabel,
+                    offLanguageLabel
+                )
                 val format = selectedTrack.audioFormat
-                if (format != null) "Current: $language - $format" else "Current: $language"
+                val currentTrack = if (format != null) "$language - $format" else language
+                currentTrackFormat.format(currentTrack)
             }
         }
     }
@@ -2341,20 +2549,28 @@ internal fun BoxScope.AudioSelectionSidePanel(
             ?: 0
         lastFocusedLanguageIndex = targetIndex
 
-        runCatching { languageListState.scrollToItem(targetIndex) }
+        val targetListIndex = if (preferredLanguageGroups.any { it.key == targetKey }) {
+            targetIndex + 1 // Preferred section heading precedes preferred entries.
+        } else {
+            val otherIndex = otherLanguageGroups.indexOfFirst { it.key == targetKey }.coerceAtLeast(0)
+            otherIndex + preferredLanguageGroups.size +
+                (if (preferredLanguageGroups.isNotEmpty()) 2 else 1)
+        }
+        runCatching { languageListState.scrollToItem(targetListIndex) }
         withFrameNanos { }
         runCatching { languageFocusRequesters[targetIndex].requestFocus() }
     }
 
-    LaunchedEffect(selectedAudioId, languageGroups) {
-        val key = resolveSelectedAudioLanguageKey(languageGroups, selectedAudioId) ?: return@LaunchedEffect
+    LaunchedEffect(selectedAudioOptionId, languageGroups) {
+        val key = resolveSelectedAudioLanguageKey(languageGroups, selectedAudioOptionId) ?: return@LaunchedEffect
         selectedLanguageKey = key
     }
-    LaunchedEffect(selectedAudioId) {
-        if (
-            selectedAudioId != null &&
-            optimisticSelectedAudioId != null &&
-            selectedAudioId == optimisticSelectedAudioId
+    LaunchedEffect(selectedAudioOptionId, languageGroups, optimisticSelectedAudioId) {
+        val optimisticId = optimisticSelectedAudioId ?: return@LaunchedEffect
+        val selectedLanguage = resolveSelectedAudioLanguageKey(languageGroups, selectedAudioOptionId)
+        val requestedLanguage = resolveSelectedAudioLanguageKey(languageGroups, optimisticId)
+        if (selectedAudioOptionId == optimisticId ||
+            (selectedLanguage != null && selectedLanguage == requestedLanguage)
         ) {
             optimisticSelectedAudioId = null
         }
@@ -2381,13 +2597,22 @@ internal fun BoxScope.AudioSelectionSidePanel(
     val requestAudioSelection: (String?) -> Unit = remember(
         panelScope,
         effectiveSelectedAudioId,
-        onSelectTrack
+        onSelectTrack,
+        selectionOptions,
+        onSelectSource,
+        onSelectSourceForLanguage
     ) {
         { targetTrackId ->
             if (targetTrackId != null && targetTrackId != effectiveSelectedAudioId) {
                 optimisticSelectedAudioId = targetTrackId
                 panelScope.launch {
-                    onSelectTrack(targetTrackId)
+                    selectionOptions.firstOrNull { it.id == targetTrackId }?.let { option ->
+                        if (option.sourceId != null) {
+                            onSelectSourceForLanguage(option.sourceId, option.language.orEmpty())
+                        } else {
+                            onSelectTrack(option.id)
+                        }
+                    }
                 }
             }
         }
@@ -2398,12 +2623,7 @@ internal fun BoxScope.AudioSelectionSidePanel(
         onDismiss = onClose,
         panelWidth = 500.dp,
         panelPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 14.dp),
-        overlayAlpha = 0.45f,
-        enter = EnterTransition.None,
-        exit = slideOutHorizontally(
-            targetOffsetX = { it },
-            animationSpec = tween(durationMillis = 180)
-        ) + fadeOut(animationSpec = tween(durationMillis = 120))
+        overlayAlpha = 0.45f
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -2426,6 +2646,15 @@ internal fun BoxScope.AudioSelectionSidePanel(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    if (preferenceSummary.isNotBlank()) {
+                        Text(
+                            text = stringResource(R.string.player_audio_preference_order, preferenceSummary),
+                            color = Color.White.copy(alpha = 0.62f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
 
@@ -2433,14 +2662,14 @@ internal fun BoxScope.AudioSelectionSidePanel(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = "Languages",
+                    text = stringResource(R.string.playback_languages),
                     color = Color.White.copy(alpha = 0.85f),
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.weight(0.46f)
                 )
                 Spacer(modifier = Modifier.width(16.dp))
                 Text(
-                    text = "Tracks",
+                    text = stringResource(R.string.player_tracks),
                     color = Color.White.copy(alpha = 0.85f),
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.weight(0.54f)
@@ -2460,20 +2689,55 @@ internal fun BoxScope.AudioSelectionSidePanel(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxHeight()
                     ) {
+                        if (preferredLanguageGroups.isNotEmpty()) {
+                            item(key = "preferred-audio-language-heading") {
+                                AudioLanguageSectionHeading(
+                                    text = stringResource(R.string.player_preferred_languages)
+                                )
+                            }
+                        }
                         itemsIndexed(
-                            items = languageGroups,
+                            items = preferredLanguageGroups,
                             key = { _, group -> group.key }
                         ) { index, group ->
+                            val groupIndex = languageGroups.indexOfFirst { it.key == group.key }
                             AudioLanguageListItem(
                                 group = group,
                                 selectedLanguage = group.key == selectedLanguageGroup?.key,
                                 activeTrackInGroup = group.tracks.any { it.id == effectiveSelectedAudioId },
                                 rightFocusRequester = selectedTrackFocusRequester,
                                 onMoveRight = moveFocusToSelectedTrack,
-                                focusRequester = languageFocusRequesters[index],
+                                focusRequester = languageFocusRequesters[groupIndex],
                                 onFocused = {
-                                    lastFocusedLanguageIndex = index
+                                    lastFocusedLanguageIndex = groupIndex
                                 },
+                                onClick = {
+                                    selectedLanguageKey = group.key
+                                    val topTrack = group.tracks.firstOrNull() ?: return@AudioLanguageListItem
+                                    requestAudioSelection(topTrack.id)
+                                }
+                            )
+                        }
+                        if (otherLanguageGroups.isNotEmpty()) {
+                            item(key = "other-audio-language-heading") {
+                                AudioLanguageSectionHeading(
+                                    text = stringResource(R.string.player_other_languages)
+                                )
+                            }
+                        }
+                        itemsIndexed(
+                            items = otherLanguageGroups,
+                            key = { _, group -> group.key }
+                        ) { _, group ->
+                            val groupIndex = languageGroups.indexOfFirst { it.key == group.key }
+                            AudioLanguageListItem(
+                                group = group,
+                                selectedLanguage = group.key == selectedLanguageGroup?.key,
+                                activeTrackInGroup = group.tracks.any { it.id == effectiveSelectedAudioId },
+                                rightFocusRequester = selectedTrackFocusRequester,
+                                onMoveRight = moveFocusToSelectedTrack,
+                                focusRequester = languageFocusRequesters[groupIndex],
+                                onFocused = { lastFocusedLanguageIndex = groupIndex },
                                 onClick = {
                                     selectedLanguageKey = group.key
                                     val topTrack = group.tracks.firstOrNull() ?: return@AudioLanguageListItem
@@ -2502,7 +2766,7 @@ internal fun BoxScope.AudioSelectionSidePanel(
                 ) {
                     if (selectedLanguageTracks.isEmpty()) {
                         Text(
-                            text = "No audio tracks available",
+                            text = stringResource(R.string.player_no_audio_tracks),
                             color = Color.White.copy(alpha = 0.75f),
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.align(Alignment.TopStart)
@@ -2537,6 +2801,17 @@ internal fun BoxScope.AudioSelectionSidePanel(
 }
 
 @Composable
+private fun AudioLanguageSectionHeading(text: String) {
+    Text(
+        text = text,
+        color = Color.White.copy(alpha = 0.68f),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 10.dp, top = 6.dp, bottom = 2.dp)
+    )
+}
+
+@Composable
 private fun AudioLanguageListItem(
     group: AudioLanguageGroup,
     selectedLanguage: Boolean,
@@ -2558,33 +2833,32 @@ private fun AudioLanguageListItem(
 
     val background by animateColorAsState(
         targetValue = targetBackground,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "audioLanguageBackground"
     )
     val textColor by animateColorAsState(
         targetValue = if (isFocused) Color.Black else Color.White.copy(alpha = 0.98f),
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "audioLanguageText"
     )
     val borderColor by animateColorAsState(
         targetValue = if (selectedLanguage && !isFocused) Color.White.copy(alpha = 0.38f) else Color.Transparent,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "audioLanguageBorder"
     )
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.01f else 1f,
-        animationSpec = tween(durationMillis = 120),
-        label = "audioLanguageScale"
-    )
 
+    val languageLabel = localizedTrackLanguageLabel(
+        group.displayName,
+        stringResource(R.string.sort_filter_unknown),
+        stringResource(R.string.common_off)
+    )
     val labelText = buildString {
         if (activeTrackInGroup) append("\u2022 ")
-        append(group.displayName)
+        append(languageLabel)
     }
 
     Box(
         modifier = Modifier
-            .scale(scale)
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
             .background(background)
@@ -2643,7 +2917,7 @@ private fun AudioVariantListItem(
 
     val background by animateColorAsState(
         targetValue = targetBackground,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "audioVariantBackground"
     )
     val textColor by animateColorAsState(
@@ -2651,7 +2925,7 @@ private fun AudioVariantListItem(
             isFocused -> Color.Black
             else -> Color.White.copy(alpha = if (selected) 1f else 0.92f)
         },
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "audioVariantText"
     )
     val borderColor by animateColorAsState(
@@ -2660,13 +2934,8 @@ private fun AudioVariantListItem(
             selected -> Color.White.copy(alpha = 0.3f)
             else -> Color.Transparent
         },
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "audioVariantBorder"
-    )
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.01f else 1f,
-        animationSpec = tween(durationMillis = 120),
-        label = "audioVariantScale"
     )
 
     val formatChip = remember(track.audioFormat) {
@@ -2682,7 +2951,6 @@ private fun AudioVariantListItem(
 
     Box(
         modifier = Modifier
-            .scale(scale)
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
             .background(background)
@@ -2792,12 +3060,26 @@ internal fun BoxScope.SubtitleSelectionSidePanel(
         subtitleTracks.firstOrNull { track -> track.id == effectiveSelectedSubtitleId }
             ?: subtitleTracks.firstOrNull { track -> track.selected }
     }
-    val currentSelectionText = remember(selectedTrack, selectedLanguageGroup) {
+    val offLabel = stringResource(R.string.common_off)
+    val currentTrackFormat = stringResource(R.string.player_current_track)
+    val unknownLanguageLabel = stringResource(R.string.sort_filter_unknown)
+    val currentSelectionText = remember(
+        selectedTrack,
+        selectedLanguageGroup,
+        offLabel,
+        currentTrackFormat,
+        unknownLanguageLabel
+    ) {
         when {
-            selectedTrack == null || isSubtitleOffTrack(selectedTrack) -> "Current: Off"
+            selectedTrack == null || isSubtitleOffTrack(selectedTrack) ->
+                currentTrackFormat.format(offLabel)
             else -> {
-                val language = selectedLanguageGroup?.displayName?.takeIf { it.isNotBlank() } ?: "Unknown"
-                "Current: $language - ${selectedTrack.label}"
+                val language = localizedTrackLanguageLabel(
+                    selectedLanguageGroup?.displayName,
+                    unknownLanguageLabel,
+                    offLabel
+                )
+                currentTrackFormat.format("$language - ${selectedTrack.label}")
             }
         }
     }
@@ -2877,12 +3159,7 @@ internal fun BoxScope.SubtitleSelectionSidePanel(
         onDismiss = onClose,
         panelWidth = 500.dp,
         panelPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 14.dp),
-        overlayAlpha = 0.45f,
-        enter = EnterTransition.None,
-        exit = slideOutHorizontally(
-            targetOffsetX = { it },
-            animationSpec = tween(durationMillis = 180)
-        ) + fadeOut(animationSpec = tween(durationMillis = 120))
+        overlayAlpha = 0.45f
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -2894,60 +3171,48 @@ internal fun BoxScope.SubtitleSelectionSidePanel(
             ) {
                 IconButton(
                     onClick = onShowOffsetBar,
-                    colors = IconButtonDefaults.colors(
-                        containerColor = Color.White.copy(alpha = 0.12f),
-                        contentColor = Color.White
-                    ),
+                    colors = playerIconButtonColors(Color.White.copy(alpha = 0.12f)),
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.VerticalAlignCenter,
-                        contentDescription = "Subtitle offset",
+                        contentDescription = stringResource(R.string.player_subtitle_offset),
                         modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
                 IconButton(
                     onClick = onShowSizeBar,
-                    colors = IconButtonDefaults.colors(
-                        containerColor = Color.White.copy(alpha = 0.12f),
-                        contentColor = Color.White
-                    ),
+                    colors = playerIconButtonColors(Color.White.copy(alpha = 0.12f)),
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.FormatSize,
-                        contentDescription = "Subtitle size",
+                        contentDescription = stringResource(R.string.player_subtitle_size),
                         modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
                 IconButton(
                     onClick = onShowDelayBar,
-                    colors = IconButtonDefaults.colors(
-                        containerColor = Color.White.copy(alpha = 0.12f),
-                        contentColor = Color.White
-                    ),
+                    colors = playerIconButtonColors(Color.White.copy(alpha = 0.12f)),
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Timer,
-                        contentDescription = "Subtitle delay",
+                        contentDescription = stringResource(R.string.player_subtitle_delay),
                         modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
                 IconButton(
                     onClick = onShowColorBar,
-                    colors = IconButtonDefaults.colors(
-                        containerColor = Color.White.copy(alpha = 0.12f),
-                        contentColor = Color.White
-                    ),
+                    colors = playerIconButtonColors(Color.White.copy(alpha = 0.12f)),
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.palette_icon),
-                        contentDescription = "Subtitle color",
+                        contentDescription = stringResource(R.string.player_subtitle_color),
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -2976,14 +3241,14 @@ internal fun BoxScope.SubtitleSelectionSidePanel(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = "Languages",
+                    text = stringResource(R.string.playback_languages),
                     color = Color.White.copy(alpha = 0.85f),
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.weight(0.46f)
                 )
                 Spacer(modifier = Modifier.width(16.dp))
                 Text(
-                    text = "Subtitles",
+                    text = stringResource(R.string.player_subtitles_control),
                     color = Color.White.copy(alpha = 0.85f),
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.weight(0.54f)
@@ -3045,14 +3310,14 @@ internal fun BoxScope.SubtitleSelectionSidePanel(
                 ) {
                     if (selectedLanguageGroup?.isOffGroup == true) {
                         Text(
-                            text = "Subtitles are off",
+                            text = stringResource(R.string.player_subtitles_off),
                             color = Color.White.copy(alpha = 0.78f),
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.align(Alignment.TopStart)
                         )
                     } else if (selectedLanguageTracks.isEmpty()) {
                         Text(
-                            text = "No subtitles available",
+                            text = stringResource(R.string.player_no_subtitles),
                             color = Color.White.copy(alpha = 0.75f),
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.align(Alignment.TopStart)
@@ -3098,6 +3363,16 @@ private fun SubtitleLanguageListItem(
     onFocused: () -> Unit = {},
     focusRequester: FocusRequester? = null
 ) {
+    val unknownLanguageLabel = stringResource(R.string.sort_filter_unknown)
+    val displayName = if (group.isOffGroup) {
+        stringResource(R.string.common_off)
+    } else {
+        localizedTrackLanguageLabel(
+            group.displayName,
+            unknownLanguageLabel,
+            stringResource(R.string.common_off)
+        )
+    }
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
@@ -3109,33 +3384,27 @@ private fun SubtitleLanguageListItem(
 
     val background by animateColorAsState(
         targetValue = targetBackground,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "subtitleLanguageBackground"
     )
     val textColor by animateColorAsState(
         targetValue = if (isFocused) Color.Black else Color.White.copy(alpha = 0.98f),
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "subtitleLanguageText"
     )
     val borderColor by animateColorAsState(
         targetValue = if (selectedLanguage && !isFocused) Color.White.copy(alpha = 0.38f) else Color.Transparent,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "subtitleLanguageBorder"
-    )
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.01f else 1f,
-        animationSpec = tween(durationMillis = 120),
-        label = "subtitleLanguageScale"
     )
 
     val labelText = buildString {
         if (activeTrackInGroup) append("\u2022 ")
-        append(group.displayName)
+        append(displayName)
     }
 
     Box(
         modifier = Modifier
-            .scale(scale)
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
             .background(background)
@@ -3196,7 +3465,7 @@ private fun SubtitleVariantListItem(
 
     val background by animateColorAsState(
         targetValue = targetBackground,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "subtitleVariantBackground"
     )
     val textColor by animateColorAsState(
@@ -3205,7 +3474,7 @@ private fun SubtitleVariantListItem(
             isFocused -> Color.Black
             else -> Color.White.copy(alpha = if (selected) 1f else 0.92f)
         },
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "subtitleVariantText"
     )
     val borderColor by animateColorAsState(
@@ -3214,13 +3483,8 @@ private fun SubtitleVariantListItem(
             selected -> Color.White.copy(alpha = 0.3f)
             else -> Color.Transparent
         },
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "subtitleVariantBorder"
-    )
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused && enabled) 1.01f else 1f,
-        animationSpec = tween(durationMillis = 120),
-        label = "subtitleVariantScale"
     )
     val formatChip = remember(track.subtitleFormat) {
         track.subtitleFormat
@@ -3228,9 +3492,23 @@ private fun SubtitleVariantListItem(
             ?.takeIf { it.isNotEmpty() }
             ?.uppercase(Locale.ROOT)
     }
-    val chips = remember(track) { buildSubtitleTrackChips(track) }
-    val displayLabel = remember(track.label, track.language, track.id) {
-        buildSubtitleVariantDisplayLabel(track)
+    val embeddedLabel = stringResource(R.string.player_subtitle_embedded)
+    val streamLabel = stringResource(R.string.player_subtitle_stream)
+    val addonLabel = stringResource(R.string.player_subtitle_addon)
+    val unsupportedLabel = stringResource(R.string.player_subtitle_unsupported)
+    val subtitleFallbackLabel = stringResource(R.string.player_subtitle_track)
+    val offLabel = stringResource(R.string.common_off)
+    val chips = remember(track, embeddedLabel, streamLabel, addonLabel, unsupportedLabel) {
+        buildSubtitleTrackChips(
+            track,
+            embeddedLabel,
+            streamLabel,
+            addonLabel,
+            unsupportedLabel
+        )
+    }
+    val displayLabel = remember(track.label, track.language, track.id, subtitleFallbackLabel, offLabel) {
+        buildSubtitleVariantDisplayLabel(track, subtitleFallbackLabel, offLabel)
     }
 
     val labelText = buildString {
@@ -3240,7 +3518,6 @@ private fun SubtitleVariantListItem(
 
     Box(
         modifier = Modifier
-            .scale(scale)
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
             .background(background)
@@ -3295,43 +3572,40 @@ private fun SubtitleVariantListItem(
 
 // --- SUBTITLE COLOR PRESETS FOR PLAYER ---
 
+private data class PlayerColorPreset(val labelResource: Int, val colorValue: Int)
+
 private val PLAYER_TEXT_COLORS = listOf(
-    "White" to 0xFFFFFFFF.toInt(),
-    "Gray" to 0xFFBDBDBD.toInt(),
-    "Yellow" to 0xFFFFEB3B.toInt(),
-    "Cyan" to 0xFF00BCD4.toInt(),
-    "Red" to 0xFFF44336.toInt(),
-    "Orange" to 0xFFFF9800.toInt(),
-    "Green" to 0xFF8BC34A.toInt()
+    PlayerColorPreset(R.string.subtitle_color_white, 0xFFFFFFFF.toInt()),
+    PlayerColorPreset(R.string.subtitle_color_gray, 0xFFBDBDBD.toInt()),
+    PlayerColorPreset(R.string.subtitle_color_yellow, 0xFFFFEB3B.toInt()),
+    PlayerColorPreset(R.string.subtitle_color_cyan, 0xFF00BCD4.toInt()),
+    PlayerColorPreset(R.string.subtitle_color_red, 0xFFF44336.toInt()),
+    PlayerColorPreset(R.string.subtitle_color_orange, 0xFFFF9800.toInt()),
+    PlayerColorPreset(R.string.subtitle_color_green, 0xFF8BC34A.toInt())
 )
 
 private val PLAYER_BACKGROUND_COLORS = listOf(
-    "None" to 0x00000000,
-    "Black" to 0xFF000000.toInt(),
-    "Semi" to 0x80000000.toInt(),
-    "Dark" to 0xFF212121.toInt()
+    PlayerColorPreset(R.string.subtitle_background_none, 0x00000000),
+    PlayerColorPreset(R.string.subtitle_background_black, 0xFF000000.toInt()),
+    PlayerColorPreset(R.string.subtitle_background_semi, 0x80000000.toInt()),
+    PlayerColorPreset(R.string.subtitle_background_dark, 0xFF212121.toInt())
 )
 
 @Composable
-private fun PlayerSubtitleColorChip(
+internal fun PlayerSubtitleColorChip(
     color: Color,
     isSelected: Boolean,
+    contentDescription: String,
     isTransparent: Boolean = false,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.15f else 1f,
-        animationSpec = tween(durationMillis = 120),
-        label = "subtitleColorChipScale"
-    )
 
     Box(
         modifier = modifier
             .size(24.dp)
-            .scale(scale)
             .clip(CircleShape)
             .then(
                 if (isTransparent) {
@@ -3349,6 +3623,10 @@ private fun PlayerSubtitleColorChip(
             )
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
             .focusable(interactionSource = interactionSource)
+            .semantics {
+                this.contentDescription = contentDescription
+                selected = isSelected
+            }
     )
 }
 
@@ -3374,10 +3652,11 @@ private fun SubtitleMetaChip(
 }
 
 @Composable
-private fun BoxScope.PlayerSourceSidebar(
+internal fun BoxScope.PlayerSourceSidebar(
     visible: Boolean,
     title: String,
     sources: List<PlayerSourceOption>,
+    sourceLanguagePreferences: List<String> = emptyList(),
     currentSourceId: String?,
     onClose: () -> Unit,
     onLanguageSelectSource: (String) -> Unit,
@@ -3398,6 +3677,7 @@ private fun BoxScope.PlayerSourceSidebar(
 
     GlassSidebar(
         state = sidebarState,
+        sourceLanguagePreferences = sourceLanguagePreferences,
         onEpisodeSelected = {},
         onSourceSelected = { stream ->
             val url = stream.url ?: return@GlassSidebar
@@ -3495,14 +3775,7 @@ private fun BoxScope.SelectionSidePanel(
         onDismiss = onClose,
         panelWidth = 500.dp,
         overlayAlpha = 0.45f,
-        enter = slideInHorizontally(
-            initialOffsetX = { it },
-            animationSpec = tween(durationMillis = 220)
-        ) + fadeIn(animationSpec = tween(durationMillis = 180)),
-        exit = slideOutHorizontally(
-            targetOffsetX = { it },
-            animationSpec = tween(durationMillis = 180)
-        ) + fadeOut(animationSpec = tween(durationMillis = 120))
+        panelAlignment = Alignment.CenterEnd
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -3557,23 +3830,17 @@ private fun PanelListItem(
 
     val background by animateColorAsState(
         targetValue = targetBackground,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "panelItemBackground"
     )
     val borderColor by animateColorAsState(
         targetValue = if (isFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
-        animationSpec = tween(durationMillis = 120),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "panelItemBorder"
-    )
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.02f else 1f,
-        animationSpec = tween(durationMillis = 120),
-        label = "panelItemScale"
     )
 
     Box(
         modifier = Modifier
-            .scale(scale)
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(background)
@@ -3624,26 +3891,245 @@ private fun PanelListItem(
     }
 }
 
-private fun buildSubtitleTrackChips(track: PlayerTrackOption): List<String> {
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BoxScope.PlaybackCastPanel(
+    visible: Boolean,
+    castMembers: List<TmdbCastInfo>,
+    isLoading: Boolean,
+    onClose: () -> Unit,
+    backFocusRequester: FocusRequester,
+    firstCastFocusRequester: FocusRequester
+) {
+    if (!visible) return
+
+    val backInteraction = remember { MutableInteractionSource() }
+    val backFocused by backInteraction.collectIsFocusedAsState()
+    val backLabel = stringResource(R.string.player_back_to_playback)
+    val listState = rememberLazyListState()
+    val castFocusRequesters = remember(castMembers, firstCastFocusRequester) {
+        List(castMembers.size) { index ->
+            if (index == 0) firstCastFocusRequester else FocusRequester()
+        }
+    }
+    LaunchedEffect(visible) {
+        delay(120)
+        runCatching { backFocusRequester.requestFocus() }
+    }
+
+    GlassSidebarScaffold(
+        visible = visible,
+        onDismiss = onClose,
+        panelWidth = 360.dp,
+        panelPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 14.dp),
+        overlayAlpha = 0.45f,
+        panelAlignment = Alignment.CenterEnd
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("playback-cast-panel"),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(if (backFocused) Color.White else Color.White.copy(alpha = 0.12f))
+                        .border(
+                            1.dp,
+                            if (backFocused) Color.White else Color.White.copy(alpha = 0.35f),
+                            RoundedCornerShape(999.dp)
+                        )
+                        .focusRequester(backFocusRequester)
+                        .focusProperties { down = firstCastFocusRequester }
+                        .clickable(
+                            interactionSource = backInteraction,
+                            indication = null,
+                            onClick = onClose
+                        )
+                        .focusable(interactionSource = backInteraction)
+                        .semantics {
+                            contentDescription = backLabel
+                            role = Role.Button
+                        }
+                        .padding(horizontal = 16.dp, vertical = 9.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = null,
+                        tint = if (backFocused) Color.Black else Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = backLabel,
+                        color = if (backFocused) Color.Black else Color.White,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+
+                Text(
+                    text = stringResource(R.string.player_cast_title),
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            when {
+                isLoading -> CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(20.dp)
+                )
+                castMembers.isEmpty() -> Text(
+                    text = stringResource(R.string.player_no_cast_available),
+                    color = Color.White.copy(alpha = 0.78f),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(vertical = 18.dp)
+                )
+                else -> LazyColumn(
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 6.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .focusGroup()
+                        .testTag("playback-cast")
+                ) {
+                    itemsIndexed(castMembers, key = { index, person -> person.tmdbId ?: "cast-$index" }) { index, member ->
+                        val castFocusRequester = castFocusRequesters[index]
+                        val nextCastFocusRequester = castFocusRequesters.getOrNull(index + 1)
+                        PlaybackCastMemberRow(
+                            member = member,
+                            modifier = Modifier
+                                .focusRequester(castFocusRequester)
+                                .focusProperties {
+                                    up = if (index == 0) backFocusRequester else castFocusRequesters[index - 1]
+                                    if (nextCastFocusRequester != null) down = nextCastFocusRequester
+                                },
+                            avatarTestTag = "playback-cast-avatar-$index"
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaybackCastMemberRow(
+    member: TmdbCastInfo,
+    modifier: Modifier = Modifier,
+    avatarTestTag: String
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(76.dp)
+            .clickable(interactionSource = interactionSource, indication = null) { }
+            .focusable(interactionSource = interactionSource)
+            .semantics(mergeDescendants = true) {
+                contentDescription = member.name
+                role = Role.Button
+            }
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(60.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.08f))
+                .testTag(avatarTestTag),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = com.saab.tv.ui.components.initialsForPerson(member.name),
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = Color.White.copy(alpha = 0.78f)
+            )
+            member.photo?.let { photo ->
+                AsyncImage(
+                    model = photo,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(CircleShape)
+                )
+            }
+            if (isFocused) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .border(2.dp, Color.White, CircleShape)
+                )
+            }
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = member.name,
+                color = Color.White,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (isFocused) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            member.character?.takeIf(String::isNotBlank)?.let { character ->
+                Text(
+                    text = character,
+                    color = Color.White.copy(alpha = 0.68f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+private fun buildSubtitleTrackChips(
+    track: PlayerTrackOption,
+    embeddedLabel: String,
+    streamLabel: String,
+    addonLabel: String,
+    unsupportedLabel: String
+): List<String> {
     if (isSubtitleOffTrack(track)) return emptyList()
 
     val chips = mutableListOf<String>()
     chips += when {
-        !track.isExternal -> "Embedded"
-        track.subtitleSourcePriority == SubtitleSourcePriority.STREAM_PROVIDED -> "Stream"
-        else -> "Add-on"
+        !track.isExternal -> embeddedLabel
+        track.subtitleSourcePriority == SubtitleSourcePriority.STREAM_PROVIDED -> streamLabel
+        else -> addonLabel
     }
 
     if (!track.supported) {
-        chips += "Unsupported"
+        chips += unsupportedLabel
     }
 
     return chips.distinct()
 }
 
-private fun buildSubtitleVariantDisplayLabel(track: PlayerTrackOption): String {
-    val baseLabel = track.label.trim().ifBlank { "Subtitle" }
-    if (isSubtitleOffTrack(track)) return baseLabel
+private fun buildSubtitleVariantDisplayLabel(
+    track: PlayerTrackOption,
+    subtitleFallbackLabel: String,
+    offLabel: String
+): String {
+    val baseLabel = track.label.trim().ifBlank { subtitleFallbackLabel }
+    if (isSubtitleOffTrack(track)) return offLabel
 
     if (!isGenericSubtitleDescriptorLabel(baseLabel)) return baseLabel
 
@@ -3782,6 +4268,16 @@ private fun resolveSelectedSubtitleLanguageKey(
 
 private fun subtitleLanguageKey(language: String?): String = normalizeLanguageToIso2(language)
 
+private fun localizedTrackLanguageLabel(
+    value: String?,
+    unknownLabel: String,
+    offLabel: String
+): String = when {
+    value.isNullOrBlank() || value.equals("unknown", ignoreCase = true) -> unknownLabel
+    value.equals("off", ignoreCase = true) -> offLabel
+    else -> value
+}
+
 private fun subtitleLanguageDisplayName(groupKey: String, rawLanguage: String?): String {
     if (groupKey == "__off__") return "Off"
     if (groupKey == "und") return "Unknown"
@@ -3821,8 +4317,9 @@ private fun isSubtitleOffTrack(track: PlayerTrackOption): Boolean {
         (track.language.isNullOrBlank() && track.label.equals("off", ignoreCase = true))
 }
 
-private fun buildAudioLanguageGroups(
-    audioTracks: List<PlayerTrackOption>
+internal fun buildAudioLanguageGroups(
+    audioTracks: List<PlayerTrackOption>,
+    preferredAudioLanguages: List<String> = emptyList()
 ): List<AudioLanguageGroup> {
     if (audioTracks.isEmpty()) return emptyList()
 
@@ -3846,6 +4343,11 @@ private fun buildAudioLanguageGroups(
             strength = Collator.PRIMARY
         }
         groupsToSort.sortedWith { a, b ->
+            val aPreferenceRank = AudioTrackPreferencePolicy.languageRank(a.key, preferredAudioLanguages)
+            val bPreferenceRank = AudioTrackPreferencePolicy.languageRank(b.key, preferredAudioLanguages)
+            if (aPreferenceRank != bPreferenceRank) {
+                return@sortedWith aPreferenceRank.compareTo(bPreferenceRank)
+            }
             val aUnknown = a.key == "und"
             val bUnknown = b.key == "und"
             if (aUnknown != bUnknown) {
@@ -3856,6 +4358,24 @@ private fun buildAudioLanguageGroups(
         }
     }
 }
+
+internal fun buildSourceAudioOptions(sources: List<PlayerSourceOption>): List<PlayerTrackOption> =
+    sources.flatMap { source ->
+        source.audioLanguages
+            .map(::subtitleLanguageKey)
+            .filter { it != "und" }
+            .distinct()
+            .map { language ->
+                PlayerTrackOption(
+                    id = "source-language:${source.id}:$language",
+                    label = source.label,
+                    language = language,
+                    selected = false,
+                    audioFormat = "Source",
+                    sourceId = source.id
+                )
+            }
+    }
 
 private fun resolveSelectedAudioLanguageKey(
     groups: List<AudioLanguageGroup>,
@@ -3932,10 +4452,6 @@ private fun normalizeEpisodeLine(rawTitle: String): String? {
     return "S$season E$episode - $episodeTitle"
 }
 
-private fun isBackKey(keyCode: Int): Boolean {
-    return keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE
-}
-
 @Composable
 private fun BoxScope.SubtitleOffsetTopBar(
     visible: Boolean,
@@ -3960,8 +4476,8 @@ private fun BoxScope.SubtitleOffsetTopBar(
 
     AnimatedVisibility(
         visible = true,
-        enter = fadeIn(animationSpec = tween(180)),
-        exit = fadeOut(animationSpec = tween(140)),
+        enter = fadeIn(animationSpec = tween(SaabMotion.duration(180))),
+        exit = fadeOut(animationSpec = tween(SaabMotion.duration(140))),
         modifier = Modifier
             .align(Alignment.TopCenter)
             .padding(top = 32.dp)
@@ -3978,10 +4494,7 @@ private fun BoxScope.SubtitleOffsetTopBar(
         ) {
             IconButton(
                 onClick = onPlayPause,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.White.copy(alpha = 0.15f),
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.White.copy(alpha = 0.15f)),
                 modifier = Modifier
                     .size(44.dp)
                     .focusRequester(playPauseFocus)
@@ -3994,17 +4507,16 @@ private fun BoxScope.SubtitleOffsetTopBar(
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    contentDescription = stringResource(
+                        if (isPlaying) R.string.player_pause else R.string.player_play
+                    ),
                     modifier = Modifier.size(26.dp)
                 )
             }
 
             IconButton(
                 onClick = onDecrement,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(decrementFocus)
@@ -4017,7 +4529,10 @@ private fun BoxScope.SubtitleOffsetTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Remove,
-                    contentDescription = "Decrease offset",
+                    contentDescription = stringResource(
+                        R.string.player_decrease_control,
+                        stringResource(R.string.player_offset_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -4035,10 +4550,7 @@ private fun BoxScope.SubtitleOffsetTopBar(
 
             IconButton(
                 onClick = onIncrement,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(incrementFocus)
@@ -4051,17 +4563,17 @@ private fun BoxScope.SubtitleOffsetTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Add,
-                    contentDescription = "Increase offset",
+                    contentDescription = stringResource(
+                        R.string.player_increase_control,
+                        stringResource(R.string.player_offset_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
 
             IconButton(
                 onClick = onClose,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(closeFocus)
@@ -4074,7 +4586,10 @@ private fun BoxScope.SubtitleOffsetTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
-                    contentDescription = "Close offset bar",
+                    contentDescription = stringResource(
+                        R.string.player_close_control,
+                        stringResource(R.string.player_offset_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -4106,8 +4621,8 @@ private fun BoxScope.SubtitleSizeTopBar(
 
     AnimatedVisibility(
         visible = true,
-        enter = fadeIn(animationSpec = tween(180)),
-        exit = fadeOut(animationSpec = tween(140)),
+        enter = fadeIn(animationSpec = tween(SaabMotion.duration(180))),
+        exit = fadeOut(animationSpec = tween(SaabMotion.duration(140))),
         modifier = Modifier
             .align(Alignment.TopCenter)
             .padding(top = 32.dp)
@@ -4124,10 +4639,7 @@ private fun BoxScope.SubtitleSizeTopBar(
         ) {
             IconButton(
                 onClick = onPlayPause,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.White.copy(alpha = 0.15f),
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.White.copy(alpha = 0.15f)),
                 modifier = Modifier
                     .size(44.dp)
                     .focusRequester(playPauseFocus)
@@ -4140,17 +4652,16 @@ private fun BoxScope.SubtitleSizeTopBar(
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    contentDescription = stringResource(
+                        if (isPlaying) R.string.player_pause else R.string.player_play
+                    ),
                     modifier = Modifier.size(26.dp)
                 )
             }
 
             IconButton(
                 onClick = onDecrement,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(decrementFocus)
@@ -4163,7 +4674,10 @@ private fun BoxScope.SubtitleSizeTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Remove,
-                    contentDescription = "Decrease size",
+                    contentDescription = stringResource(
+                        R.string.player_decrease_control,
+                        stringResource(R.string.player_size_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -4181,10 +4695,7 @@ private fun BoxScope.SubtitleSizeTopBar(
 
             IconButton(
                 onClick = onIncrement,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(incrementFocus)
@@ -4197,17 +4708,17 @@ private fun BoxScope.SubtitleSizeTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Add,
-                    contentDescription = "Increase size",
+                    contentDescription = stringResource(
+                        R.string.player_increase_control,
+                        stringResource(R.string.player_size_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
 
             IconButton(
                 onClick = onClose,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(closeFocus)
@@ -4220,7 +4731,10 @@ private fun BoxScope.SubtitleSizeTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
-                    contentDescription = "Close size bar",
+                    contentDescription = stringResource(
+                        R.string.player_close_control,
+                        stringResource(R.string.player_size_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -4261,8 +4775,8 @@ private fun BoxScope.SubtitleDelayTopBar(
 
     AnimatedVisibility(
         visible = true,
-        enter = fadeIn(animationSpec = tween(180)),
-        exit = fadeOut(animationSpec = tween(140)),
+        enter = fadeIn(animationSpec = tween(SaabMotion.duration(180))),
+        exit = fadeOut(animationSpec = tween(SaabMotion.duration(140))),
         modifier = Modifier
             .align(Alignment.TopCenter)
             .padding(top = 32.dp)
@@ -4279,10 +4793,7 @@ private fun BoxScope.SubtitleDelayTopBar(
         ) {
             IconButton(
                 onClick = onPlayPause,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.White.copy(alpha = 0.15f),
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.White.copy(alpha = 0.15f)),
                 modifier = Modifier
                     .size(44.dp)
                     .focusRequester(playPauseFocus)
@@ -4295,17 +4806,16 @@ private fun BoxScope.SubtitleDelayTopBar(
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    contentDescription = stringResource(
+                        if (isPlaying) R.string.player_pause else R.string.player_play
+                    ),
                     modifier = Modifier.size(26.dp)
                 )
             }
 
             IconButton(
                 onClick = onDecrement,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(decrementFocus)
@@ -4318,7 +4828,10 @@ private fun BoxScope.SubtitleDelayTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Remove,
-                    contentDescription = "Decrease delay",
+                    contentDescription = stringResource(
+                        R.string.player_decrease_control,
+                        stringResource(R.string.player_delay_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -4336,10 +4849,7 @@ private fun BoxScope.SubtitleDelayTopBar(
 
             IconButton(
                 onClick = onIncrement,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(incrementFocus)
@@ -4352,17 +4862,17 @@ private fun BoxScope.SubtitleDelayTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Add,
-                    contentDescription = "Increase delay",
+                    contentDescription = stringResource(
+                        R.string.player_increase_control,
+                        stringResource(R.string.player_delay_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
 
             IconButton(
                 onClick = onClose,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(closeFocus)
@@ -4375,7 +4885,10 @@ private fun BoxScope.SubtitleDelayTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
-                    contentDescription = "Close delay bar",
+                    contentDescription = stringResource(
+                        R.string.player_close_control,
+                        stringResource(R.string.player_delay_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -4410,8 +4923,8 @@ private fun BoxScope.SubtitleColorTopBar(
 
     AnimatedVisibility(
         visible = true,
-        enter = fadeIn(animationSpec = tween(180)),
-        exit = fadeOut(animationSpec = tween(140)),
+        enter = fadeIn(animationSpec = tween(SaabMotion.duration(180))),
+        exit = fadeOut(animationSpec = tween(SaabMotion.duration(140))),
         modifier = Modifier
             .align(Alignment.TopCenter)
             .padding(top = 32.dp)
@@ -4429,10 +4942,7 @@ private fun BoxScope.SubtitleColorTopBar(
             // Play/Pause button
             IconButton(
                 onClick = onPlayPause,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.White.copy(alpha = 0.15f),
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.White.copy(alpha = 0.15f)),
                 modifier = Modifier
                     .size(44.dp)
                     .focusRequester(playPauseFocus)
@@ -4445,7 +4955,9 @@ private fun BoxScope.SubtitleColorTopBar(
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    contentDescription = stringResource(
+                        if (isPlaying) R.string.player_pause else R.string.player_play
+                    ),
                     modifier = Modifier.size(26.dp)
                 )
             }
@@ -4466,12 +4978,16 @@ private fun BoxScope.SubtitleColorTopBar(
                     }
                 ) {
                     Text(
-                        text = "Text",
+                        text = stringResource(R.string.player_subtitle_text_short),
                         color = Color.White.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.width(32.dp)
                     )
-                    PLAYER_TEXT_COLORS.forEachIndexed { index, (_, colorValue) ->
+                    PLAYER_TEXT_COLORS.forEachIndexed { index, preset ->
+                        val colorDescription = stringResource(
+                            R.string.player_subtitle_text_color_option,
+                            stringResource(preset.labelResource)
+                        )
                         val chipModifier = when (index) {
                             0 -> Modifier
                                 .focusRequester(firstTextChipFocus)
@@ -4482,9 +4998,10 @@ private fun BoxScope.SubtitleColorTopBar(
                             else -> Modifier
                         }
                         PlayerSubtitleColorChip(
-                            color = Color(colorValue),
-                            isSelected = currentTextColor == colorValue,
-                            onClick = { onSetTextColor(colorValue) },
+                            color = Color(preset.colorValue),
+                            isSelected = currentTextColor == preset.colorValue,
+                            contentDescription = colorDescription,
+                            onClick = { onSetTextColor(preset.colorValue) },
                             modifier = chipModifier
                         )
                     }
@@ -4499,12 +5016,16 @@ private fun BoxScope.SubtitleColorTopBar(
                     }
                 ) {
                     Text(
-                        text = "BG",
+                        text = stringResource(R.string.player_subtitle_background_short),
                         color = Color.White.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.width(32.dp)
                     )
-                    PLAYER_BACKGROUND_COLORS.forEachIndexed { index, (_, colorValue) ->
+                    PLAYER_BACKGROUND_COLORS.forEachIndexed { index, preset ->
+                        val colorDescription = stringResource(
+                            R.string.player_subtitle_background_color_option,
+                            stringResource(preset.labelResource)
+                        )
                         val chipModifier = when (index) {
                             0 -> Modifier
                                 .focusRequester(firstBgChipFocus)
@@ -4515,10 +5036,11 @@ private fun BoxScope.SubtitleColorTopBar(
                             else -> Modifier
                         }
                         PlayerSubtitleColorChip(
-                            color = Color(colorValue),
-                            isSelected = currentBackgroundColor == colorValue,
-                            isTransparent = colorValue == 0x00000000,
-                            onClick = { onSetBackgroundColor(colorValue) },
+                            color = Color(preset.colorValue),
+                            isSelected = currentBackgroundColor == preset.colorValue,
+                            contentDescription = colorDescription,
+                            isTransparent = preset.colorValue == 0x00000000,
+                            onClick = { onSetBackgroundColor(preset.colorValue) },
                             modifier = chipModifier
                         )
                     }
@@ -4528,10 +5050,7 @@ private fun BoxScope.SubtitleColorTopBar(
             // Close button
             IconButton(
                 onClick = onClose,
-                colors = IconButtonDefaults.colors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color.White
-                ),
+                colors = playerIconButtonColors(Color.Transparent),
                 modifier = Modifier
                     .size(40.dp)
                     .focusRequester(closeFocus)
@@ -4544,7 +5063,10 @@ private fun BoxScope.SubtitleColorTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
-                    contentDescription = "Close color bar",
+                    contentDescription = stringResource(
+                        R.string.player_close_control,
+                        stringResource(R.string.player_color_label)
+                    ),
                     modifier = Modifier.size(22.dp)
                 )
             }

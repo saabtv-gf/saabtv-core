@@ -28,6 +28,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,7 +43,12 @@ import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.saab.tv.R
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
+import com.saab.tv.ui.navigation.handoffNavigationFocus
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.schema.canonicalPresentationKey
+import com.saab.tv.ui.utils.requestFocusSafely
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -58,7 +64,6 @@ fun HeroCarousel(
     drawerRequester: FocusRequester? = null,
     isFirstItem: Boolean = false,
     isTopNav: Boolean = false,
-    upKeyDebouncer: UpKeyDebouncer? = null,
     repeatGate: DpadRepeatGate? = null,
     onNavigateDown: (() -> Unit)? = null,
     restoreItemId: String? = null,
@@ -66,6 +71,7 @@ fun HeroCarousel(
     tmdbEnrichedIds: Set<String> = emptySet()
 ) {
     if (items.isEmpty()) return
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
 
     var currentIndex by remember(items) { 
         mutableIntStateOf(
@@ -77,7 +83,6 @@ fun HeroCarousel(
     }
     var hasFocus by remember { mutableStateOf(false) }
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var lastLeftKeyTime by remember { mutableLongStateOf(0L) }
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
@@ -85,7 +90,7 @@ fun HeroCarousel(
     val currentItem = items[safeCurrentIndex]
     val accentColor = MaterialTheme.colorScheme.primary
 
-    LaunchedEffect(currentItem.id, currentItem.type, currentItem.logo) {
+    LaunchedEffect(currentItem.canonicalPresentationKey(), currentItem.logo) {
         onCurrentItemVisible(currentItem)
     }
 
@@ -131,18 +136,8 @@ fun HeroCarousel(
             if (it.key == Key.DirectionUp && it.type == KeyEventType.KeyDown) {
                 if (repeatGate?.shouldConsume(it) == true) return@onPreviewKeyEvent true
                 if (isTopNav && drawerRequester != null) {
-                    if (upKeyDebouncer != null) {
-                        val now = System.currentTimeMillis()
-                        val timeSinceLastUp = now - upKeyDebouncer.lastTime
-                        upKeyDebouncer.lastTime = now
-                        if (timeSinceLastUp > 300L) {
-                            drawerRequester.requestFocus()
-                        }
-                    } else {
-                        drawerRequester.requestFocus()
-                    }
-                }
-                true
+                    handoffNavigationFocus(it, authorizeNavigationHandoff, drawerRequester)
+                } else true
             } else false
         }
     } else Modifier
@@ -159,10 +154,6 @@ fun HeroCarousel(
                 if (event.type == KeyEventType.KeyDown) {
                     when (event.key) {
                         Key.DirectionLeft -> {
-                            val now = System.currentTimeMillis()
-                            val timeSinceLastLeft = now - lastLeftKeyTime
-                            lastLeftKeyTime = now
-                            
                             if (safeCurrentIndex > 0) {
                                 val newIndex = safeCurrentIndex - 1
                                 currentIndex = newIndex
@@ -170,10 +161,8 @@ fun HeroCarousel(
                                 onFocusChange(items[newIndex].id)
                                 true
                             } else {
-                                // Loop significantly improves UX
-                                if (!isTopNav && drawerRequester != null && timeSinceLastLeft > 300L) {
-                                    drawerRequester.requestFocus()
-                                    true
+                                if (!isTopNav && drawerRequester != null) {
+                                    handoffNavigationFocus(event, authorizeNavigationHandoff, drawerRequester)
                                 } else {
                                     // Infinite scroll: loop to last item
                                     val newIndex = items.lastIndex
@@ -215,13 +204,14 @@ fun HeroCarousel(
         AnimatedContent(
             targetState = currentItem,
             transitionSpec = {
-                fadeIn(tween(500)).togetherWith(fadeOut(tween(300)))
+                fadeIn(tween(SaabMotion.duration(SaabMotion.HERO_BACKDROP_IN_MS)))
+                    .togetherWith(fadeOut(tween(SaabMotion.duration(SaabMotion.HERO_BACKDROP_OUT_MS))))
                     .using(androidx.compose.animation.SizeTransform(clip = false))
             },
-            contentKey = { "${it.type}:${it.id}" },
+            contentKey = { it.canonicalPresentationKey() },
             label = "hero_bg"
         ) { item ->
-            val bgReady = !tmdbEnabled || tmdbEnrichedIds.contains("${item.type}:${item.id}")
+            val bgReady = !tmdbEnabled || tmdbEnrichedIds.contains(item.canonicalPresentationKey())
             val imageUrl = item.background ?: item.poster
             if (imageUrl != null && bgReady) {
                 val context = LocalContext.current
@@ -276,12 +266,15 @@ fun HeroCarousel(
         ) {
             AnimatedContent(
                 targetState = currentItem,
-                transitionSpec = { fadeIn(tween(400)).togetherWith(fadeOut(tween(200))) },
-                contentKey = { "${it.type}:${it.id}" },
+                transitionSpec = {
+                    fadeIn(tween(SaabMotion.duration(SaabMotion.HERO_INFO_IN_MS)))
+                        .togetherWith(fadeOut(tween(SaabMotion.duration(SaabMotion.HERO_INFO_OUT_MS))))
+                },
+                contentKey = { it.canonicalPresentationKey() },
                 label = "hero_info"
             ) { item ->
                 // Hide info content while waiting for TMDB enrichment to prevent addon data flash
-                val itemReady = !tmdbEnabled || tmdbEnrichedIds.contains("${item.type}:${item.id}")
+                val itemReady = !tmdbEnabled || tmdbEnrichedIds.contains(item.canonicalPresentationKey())
                 Column(modifier = Modifier.alpha(if (itemReady) 1f else 0f)) {
                     Box(
                         modifier = Modifier
@@ -361,6 +354,7 @@ fun HeroCarousel(
                     val isActive = index == safeCurrentIndex
                     val width by animateDpAsState(
                         targetValue = if (isActive) 24.dp else 8.dp,
+                        animationSpec = SaabMotion.focusFeedbackSpec(),
                         label = "indicator_width"
                     )
                     Box(
@@ -382,11 +376,11 @@ fun HeroCarousel(
 
 @Composable
 private fun HeroMetaStrip(item: MetaItem) {
-    val typeLabel = item.type.replaceFirstChar { it.uppercase() }
+    val typeLabel = com.saab.tv.ui.components.localizedTitleType(item.type)
     val genreLabel = item.genres
         ?.firstOrNull()
         ?.replaceFirstChar { it.uppercase() }
-        ?: "Unknown"
+        ?: stringResource(R.string.sort_filter_unknown)
     val yearLabel = extractHeroPrimaryYear(item.releaseInfo)
     val valueColor = Color.White.copy(alpha = 0.92f)
     val textStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
@@ -403,9 +397,7 @@ private fun HeroMetaStrip(item: MetaItem) {
 
         item.runtime?.filter { it.isDigit() }?.toIntOrNull()?.let { mins ->
             HeroMetaDot()
-            val hours = mins / 60
-            val m = mins % 60
-            val display = if (hours > 0) "${hours}h ${m}m" else "${m}m"
+            val display = com.saab.tv.ui.components.localizedRuntimeLabel(mins)
             Text(text = display, style = textStyle, color = valueColor)
         }
 

@@ -2,6 +2,10 @@ package com.saab.tv.domain
 
 import com.saab.tv.data.model.stremio.MetaItem
 
+/**
+ * Temporary provider-adapter page payload. HomeViewModel converts rows to
+ * [com.saab.tv.domain.schema.CatalogCardProjection] before publishing card UI state.
+ */
 data class HomeRow(
     val configId: String,                        // Unique identifier from CatalogConfigEntity
     val title: String,

@@ -1,11 +1,11 @@
 package com.saab.tv.data.model
 
 import androidx.room.Entity
-import androidx.room.PrimaryKey
+import androidx.room.Index
 
-@Entity(tableName = "addons")
+@Entity(tableName = "addons", primaryKeys = ["profileOwnerId", "transportUrl"], indices = [Index("profileOwnerId")])
 data class AddonEntity(
-    @PrimaryKey val transportUrl: String,
+    val transportUrl: String,
 
     val id: String,
     val name: String,
@@ -23,5 +23,10 @@ data class AddonEntity(
     val typesJson: String = "[]",
     val idPrefixesJson: String = "[]",
 
-    val sortOrder: Int = 999
+    val sortOrder: Int = 999,
+
+    /** Stable profile ownership; unlike the Room profile row ID this survives cloud restore. */
+    val profileOwnerId: String = LEGACY_PROFILE_OWNER_ID
 )
+
+const val LEGACY_PROFILE_OWNER_ID = "legacy-default"

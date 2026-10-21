@@ -2,18 +2,19 @@ package com.saab.tv.ui.profiles
 
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,8 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -37,6 +38,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,6 +61,7 @@ import com.saab.tv.ui.components.SetupHeader
 import com.saab.tv.ui.components.ProfileSetupLayout
 import com.saab.tv.ui.components.CenterCarouselRow
 import com.saab.tv.ui.components.cardFocusSound
+import com.saab.tv.ui.components.SaabMotion
 import com.saab.tv.ui.home.DpadRepeatGate
 import com.saab.tv.ui.theme.DefaultThemes
 import com.saab.tv.ui.theme.SaabTvTheme
@@ -88,7 +96,10 @@ fun ProfileScreen(
         if (!isLoading) {
             AnimatedContent(
                 targetState = wizardStep,
-                transitionSpec = { fadeIn(tween(500)) togetherWith fadeOut(tween(300)) },
+                transitionSpec = {
+                    fadeIn(SaabMotion.navigationRevealSpec()) togetherWith
+                        fadeOut(SaabMotion.navigationRevealSpec())
+                },
                 label = "ProfileFlow"
             ) { step ->
                 when (step) {
@@ -137,7 +148,7 @@ fun ProfileScreen(
         }
 
         if (wizardError != null && wizardStep > 0) {
-            Text(wizardError.orEmpty(), color = MaterialTheme.colorScheme.error,
+            Text(stringResource(R.string.profile_setup_failed), color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp))
         }
         if (isSaving && wizardStep > 0) {
@@ -146,7 +157,7 @@ fun ProfileScreen(
                 Row(Modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp)).padding(32.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     androidx.compose.material3.CircularProgressIndicator()
-                    Text("Setting Up Profile", color = Color.White)
+                    Text(stringResource(R.string.profile_setup_progress), color = Color.White)
                 }
             }
         }
@@ -167,20 +178,20 @@ fun WelcomeView(onStart: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            "Welcome To Saab TV",
+            stringResource(R.string.profile_welcome_title),
             style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
             color = Color.White
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            "A profile makes your watchlist, progress and preferences your own.",
+            stringResource(R.string.profile_welcome_description),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(48.dp))
 
         SetupButton(
-            text = "Create First Profile",
+            text = stringResource(R.string.profile_create_first),
             onClick = onStart,
             primary = true,
             modifier = Modifier.width(250.dp),
@@ -199,6 +210,7 @@ fun ProfileSelectorView(
     onDelete: (ProfileEntity) -> Unit,
     viewModel: ProfileViewModel
 ) {
+    val context = LocalContext.current
     var activeProfileForOptions by remember { mutableStateOf<ProfileEntity?>(null) }
     var setupTargetProfile by remember { mutableStateOf<ProfileEntity?>(null) }
     var showSetupChoiceDialog by remember { mutableStateOf(false) }
@@ -237,31 +249,37 @@ fun ProfileSelectorView(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            "Who Is Watching?",
+            stringResource(R.string.profile_selector_title),
             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
             color = Color.White
         )
 
         Spacer(Modifier.height(50.dp))
 
-        // Static centered row (no scrolling)
-        val focusRequesters = remember(profiles.size) { 
+        // Keep every profile reachable on TV-sized viewports. A normal Row
+        // clips later profiles instead of bringing them into view on D-pad.
+        val profileIds = profiles.map { it.id }
+        val focusRequesters = remember(profileIds) {
             List(profiles.size) { FocusRequester() } 
         }
+        val profileListState = rememberLazyListState()
         
         // Request focus on first profile
-        LaunchedEffect(profiles.size, activeProfileForOptions) {
-            if (profiles.isNotEmpty() && activeProfileForOptions == null) {
+        LaunchedEffect(profileIds, activeProfileForOptions) {
+            if (profileIds.isNotEmpty() && activeProfileForOptions == null) {
                 delay(100)
                 focusRequesters[0].requestFocus()
             }
         }
         
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(32.dp),
+        LazyRow(
+            state = profileListState,
+            modifier = Modifier.fillMaxWidth().focusGroup(),
+            contentPadding = PaddingValues(horizontal = 32.dp),
+            horizontalArrangement = Arrangement.spacedBy(32.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            profiles.forEachIndexed { index, profile ->
+            itemsIndexed(profiles, key = { _, profile -> "profile-${profile.id}" }) { index, profile ->
                 ProfileCard(
                     profile = profile,
                     onClick = {
@@ -274,7 +292,7 @@ fun ProfileSelectorView(
             }
 
             // Only show Add button if under 6 profiles
-            if (profiles.size < 6) {
+            if (profiles.size < 6) item(key = "profile-add") {
                 AddProfileCard(onClick = onAdd)
             }
         }
@@ -308,16 +326,16 @@ fun ProfileSelectorView(
     val lockedProfile = profileAwaitingPin
     if (lockedProfile != null) {
         ProfilePinDialog(
-            title = "Unlock ${lockedProfile.name}",
-            description = "Enter this profile's 4-digit PIN.",
-            submitLabel = "Continue",
+            title = stringResource(R.string.profile_unlock_title, lockedProfile.name),
+            description = stringResource(R.string.profile_pin_enter_description),
+            submitLabel = stringResource(R.string.common_continue),
             onSubmit = { pin ->
                 if (viewModel.verifyPin(lockedProfile, pin)) {
                     profileAwaitingPin = null
                     continueProfileSelection(lockedProfile)
                     null
                 } else {
-                    "Incorrect PIN"
+                    context.getString(R.string.profile_pin_incorrect)
                 }
             },
             onDismiss = { profileAwaitingPin = null }
@@ -413,20 +431,20 @@ private fun ProfileInitialSetupDialog(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "Set Up \"$profileName\"",
+                    text = stringResource(R.string.profile_initial_setup_title, profileName),
                     style = MaterialTheme.typography.headlineSmall,
                     color = Color.White
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    text = "Choose how this profile should start.",
+                    text = stringResource(R.string.profile_initial_setup_description),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray
                 )
                 Spacer(Modifier.height(24.dp))
 
                 SetupButton(
-                    text = if (canCopy) "Copy Settings" else "No Profiles To Copy",
+                    text = stringResource(if (canCopy) R.string.profile_copy_settings else R.string.profile_no_profiles_to_copy),
                     onClick = onCopy,
                     enabled = canCopy && !isLoading,
                     primary = true,
@@ -434,14 +452,14 @@ private fun ProfileInitialSetupDialog(
                 )
                 Spacer(Modifier.height(12.dp))
                 SetupButton(
-                    text = "Start From Scratch",
+                    text = stringResource(R.string.profile_start_from_scratch),
                     onClick = onStartScratch,
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(12.dp))
                 SetupButton(
-                    text = "Cancel",
+                    text = stringResource(R.string.common_cancel),
                     onClick = onDismiss,
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
@@ -471,13 +489,13 @@ private fun CopyProfileSelectionDialog(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "Copy Profile Settings",
+                    text = stringResource(R.string.profile_copy_dialog_title),
                     style = MaterialTheme.typography.headlineSmall,
                     color = Color.White
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "Select the profile to copy into \"$targetProfileName\".",
+                    text = stringResource(R.string.profile_copy_dialog_description, targetProfileName),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray
                 )
@@ -485,7 +503,7 @@ private fun CopyProfileSelectionDialog(
 
                 if (sourceProfiles.isEmpty()) {
                     Text(
-                        text = "No available profiles to copy.",
+                        text = stringResource(R.string.profile_no_available_to_copy),
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.Gray
                     )
@@ -502,7 +520,7 @@ private fun CopyProfileSelectionDialog(
                 }
 
                 SetupButton(
-                    text = "Back",
+                    text = stringResource(R.string.common_back),
                     onClick = onBack,
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
@@ -531,19 +549,19 @@ private fun ScratchConfirmDialog(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "Start From Scratch?",
+                    text = stringResource(R.string.profile_scratch_confirm_title),
                     style = MaterialTheme.typography.headlineSmall,
                     color = Color.White
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    text = "\"$profileName\" will start with no addons, no integrations, and a fresh home setup.",
+                    text = stringResource(R.string.profile_scratch_confirm_description, profileName),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray
                 )
                 Spacer(Modifier.height(24.dp))
                 SetupButton(
-                    text = "Start Fresh",
+                    text = stringResource(R.string.profile_start_fresh),
                     onClick = onConfirm,
                     enabled = !isLoading,
                     primary = true,
@@ -551,7 +569,7 @@ private fun ScratchConfirmDialog(
                 )
                 Spacer(Modifier.height(12.dp))
                 SetupButton(
-                    text = "Back",
+                    text = stringResource(R.string.common_back),
                     onClick = onBack,
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
@@ -580,6 +598,7 @@ fun ProfileOptionsDialog(
     onRemovePin: () -> Unit,
     verifyPin: (String) -> Boolean
 ) {
+    val context = LocalContext.current
     val editRequester = remember { FocusRequester() }
 
     // SAFETY LOCK: Delay input to prevent accidental clicks
@@ -636,7 +655,7 @@ fun ProfileOptionsDialog(
 
                     // Action Buttons
                     VoidButton(
-                        text = "Edit Profile",
+                        text = stringResource(R.string.profile_edit_action),
                         onClick = {
                             if (areButtonsReady) onEdit()
                         },
@@ -646,7 +665,7 @@ fun ProfileOptionsDialog(
                     )
                     Spacer(Modifier.height(12.dp))
                     VoidButton(
-                        text = if (profile.pinHash == null) "Set 4-Digit PIN" else "Edit 4-Digit PIN",
+                        text = stringResource(if (profile.pinHash == null) R.string.profile_set_pin_action else R.string.profile_edit_pin_action),
                         onClick = {
                             if (areButtonsReady) {
                                 pinAction = if (profile.pinHash == null) {
@@ -662,7 +681,7 @@ fun ProfileOptionsDialog(
                     if (profile.pinHash != null) {
                         Spacer(Modifier.height(12.dp))
                         VoidButton(
-                            text = "Remove PIN",
+                            text = stringResource(R.string.profile_remove_pin_action),
                             onClick = {
                                 if (areButtonsReady) pinAction = ProfilePinAction.VERIFY_REMOVE
                             },
@@ -672,7 +691,7 @@ fun ProfileOptionsDialog(
                     }
                     Spacer(Modifier.height(12.dp))
                     VoidButton(
-                        text = "Delete Profile",
+                        text = stringResource(R.string.profile_delete_action),
                         onClick = {
                             if (areButtonsReady) showDeleteConfirmation = true
                         },
@@ -699,26 +718,26 @@ fun ProfileOptionsDialog(
 
     val currentPinAction = pinAction
     if (currentPinAction != null) {
-        val title = when (currentPinAction) {
-            ProfilePinAction.SET_NEW -> "Set Profile PIN"
-            ProfilePinAction.CONFIRM_NEW -> "Confirm Profile PIN"
-            ProfilePinAction.VERIFY_EDIT -> "Enter Current PIN"
-            ProfilePinAction.EDIT_NEW -> "Enter New PIN"
-            ProfilePinAction.EDIT_CONFIRM -> "Confirm New PIN"
-            ProfilePinAction.VERIFY_REMOVE -> "Remove Profile PIN"
-        }
+        val title = stringResource(when (currentPinAction) {
+            ProfilePinAction.SET_NEW -> R.string.profile_pin_title_set
+            ProfilePinAction.CONFIRM_NEW -> R.string.profile_pin_title_confirm
+            ProfilePinAction.VERIFY_EDIT -> R.string.profile_pin_title_enter_current
+            ProfilePinAction.EDIT_NEW -> R.string.profile_pin_title_enter_new
+            ProfilePinAction.EDIT_CONFIRM -> R.string.profile_pin_title_confirm_new
+            ProfilePinAction.VERIFY_REMOVE -> R.string.profile_pin_title_remove
+        })
         val description = when (currentPinAction) {
             ProfilePinAction.VERIFY_EDIT,
-            ProfilePinAction.VERIFY_REMOVE -> "Enter the current 4-digit PIN for ${profile.name}."
+            ProfilePinAction.VERIFY_REMOVE -> stringResource(R.string.profile_pin_current_description, profile.name)
             ProfilePinAction.CONFIRM_NEW,
-            ProfilePinAction.EDIT_CONFIRM -> "Enter the same PIN again to confirm."
-            else -> "Choose a 4-digit PIN for ${profile.name}."
+            ProfilePinAction.EDIT_CONFIRM -> stringResource(R.string.profile_pin_same_description)
+            else -> stringResource(R.string.profile_pin_choose_description, profile.name)
         }
         val submitLabel = when (currentPinAction) {
             ProfilePinAction.CONFIRM_NEW,
             ProfilePinAction.EDIT_CONFIRM,
-            ProfilePinAction.VERIFY_REMOVE -> "Confirm"
-            else -> "Continue"
+            ProfilePinAction.VERIFY_REMOVE -> stringResource(R.string.profile_pin_confirm)
+            else -> stringResource(R.string.common_continue)
         }
 
         ProfilePinDialog(
@@ -734,7 +753,7 @@ fun ProfileOptionsDialog(
                     }
                     ProfilePinAction.CONFIRM_NEW -> {
                         if (pin != pendingPin) {
-                            "PINs do not match"
+                            context.getString(R.string.profile_pin_mismatch)
                         } else {
                             onSetPin(pin)
                             pendingPin = null
@@ -747,7 +766,7 @@ fun ProfileOptionsDialog(
                             pinAction = ProfilePinAction.EDIT_NEW
                             null
                         } else {
-                            "Incorrect PIN"
+                            context.getString(R.string.profile_pin_incorrect)
                         }
                     }
                     ProfilePinAction.EDIT_NEW -> {
@@ -757,7 +776,7 @@ fun ProfileOptionsDialog(
                     }
                     ProfilePinAction.EDIT_CONFIRM -> {
                         if (pin != pendingPin) {
-                            "PINs do not match"
+                            context.getString(R.string.profile_pin_mismatch)
                         } else {
                             onSetPin(pin)
                             pendingPin = null
@@ -771,7 +790,7 @@ fun ProfileOptionsDialog(
                             pinAction = null
                             null
                         } else {
-                            "Incorrect PIN"
+                            context.getString(R.string.profile_pin_incorrect)
                         }
                     }
                 }
@@ -788,10 +807,11 @@ fun ProfileOptionsDialog(
 private fun ProfilePinDialog(
     title: String,
     description: String,
-    submitLabel: String = "Continue",
+    submitLabel: String,
     onSubmit: (String) -> String?,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     var pin by remember(title) { mutableStateOf("") }
     var errorMessage by remember(title) { mutableStateOf<String?>(null) }
     val firstDigitRequester = remember(title) { FocusRequester() }
@@ -800,12 +820,12 @@ private fun ProfilePinDialog(
     var appeared by remember(title) { mutableStateOf(false) }
     val dialogScale by animateFloatAsState(
         targetValue = if (appeared) 1f else 0.96f,
-        animationSpec = tween(240),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "pinDialogScale"
     )
     val dialogAlpha by animateFloatAsState(
         targetValue = if (appeared) 1f else 0f,
-        animationSpec = tween(200),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "pinDialogAlpha"
     )
 
@@ -841,7 +861,7 @@ private fun ProfilePinDialog(
 
     fun submitPin() {
         if (pin.length != 4) {
-            errorMessage = "Enter exactly 4 digits"
+            errorMessage = context.getString(R.string.profile_pin_exactly_four)
             return
         }
         val error = onSubmit(pin)
@@ -925,7 +945,7 @@ private fun ProfilePinDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     PinKeyButton(
-                        text = "Clear",
+                        text = stringResource(R.string.profile_pin_clear),
                         onClick = {
                             pin = ""
                             errorMessage = null
@@ -938,7 +958,7 @@ private fun ProfilePinDialog(
                         modifier = Modifier.weight(1f)
                     )
                     PinKeyButton(
-                        text = "Delete",
+                        text = stringResource(R.string.common_delete),
                         onClick = {
                             if (pin.isNotEmpty()) pin = pin.dropLast(1)
                             errorMessage = null
@@ -953,7 +973,7 @@ private fun ProfilePinDialog(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     VoidButton(
-                        text = "Cancel",
+                        text = stringResource(R.string.common_cancel),
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f)
                     )
@@ -980,25 +1000,19 @@ private fun PinKeyButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.06f else 1f,
-        animationSpec = tween(140),
-        label = "pinKeyScale"
-    )
     val background by animateColorAsState(
         targetValue = if (isFocused) {
             MaterialTheme.colorScheme.primary
         } else {
             MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
         },
-        animationSpec = tween(140),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "pinKeyBackground"
     )
 
     Box(
         modifier = modifier
             .height(42.dp)
-            .scale(scale)
             .clip(RoundedCornerShape(10.dp))
             .background(background)
             .border(
@@ -1055,13 +1069,13 @@ fun DeleteConfirmationDialog(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "Delete Profile?",
+                    text = stringResource(R.string.profile_delete_confirm_title),
                     style = MaterialTheme.typography.headlineSmall,
                     color = Color.White
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    text = "Are you sure you want to delete \"${profileName}\"?",
+                    text = stringResource(R.string.profile_delete_confirm_description, profileName),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray
                 )
@@ -1072,14 +1086,14 @@ fun DeleteConfirmationDialog(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     VoidButton(
-                        text = "Yes",
+                        text = stringResource(R.string.profile_yes),
                         onClick = onConfirm,
                         isPrimary = false,
                         isDestructive = true,
                         modifier = Modifier.weight(1f)
                     )
                     VoidButton(
-                        text = "No",
+                        text = stringResource(R.string.profile_no),
                         onClick = onDismiss,
                         isPrimary = false,
                         modifier = Modifier.weight(1f),
@@ -1099,18 +1113,22 @@ fun WizardNameStep(initialName: String, onNext: (String) -> Unit, onCancel: () -
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
-    ProfileSetupLayout(if(initialName.isEmpty()) "Name Your Profile" else "Edit Your Profile",
-        "Give this profile a name. Its watchlist, progress and preferences stay separate.", "PROFILE SETUP · NAME", onCancel) {
+    ProfileSetupLayout(
+        stringResource(if (initialName.isEmpty()) R.string.profile_name_create_title else R.string.profile_name_edit_title),
+        stringResource(R.string.profile_name_description),
+        stringResource(R.string.profile_name_stage),
+        onCancel
+    ) {
         Box(modifier = Modifier.fillMaxWidth()) {
             VoidInput(
                 value = name,
                 onValueChange = { name = it.take(32) },
-                placeholder = "Profile Name",
+                placeholder = stringResource(R.string.profile_name_placeholder),
                 modifier = Modifier.focusRequester(focusRequester),
                 onDone = { if(name.isNotBlank()) onNext(name.trim()) }
             )
         }
-        SetupButton("Continue", { onNext(name.trim()) }, primary = true, enabled = name.isNotBlank(), modifier = Modifier.fillMaxWidth())
+        SetupButton(stringResource(R.string.common_continue), { onNext(name.trim()) }, primary = true, enabled = name.isNotBlank(), modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -1132,7 +1150,7 @@ fun WizardAvatarStep(onNext: (String) -> Unit, onBack: () -> Unit) {
         delay(100)
         focusRequesters[initialIndex].requestFocus()
     }
-    BackHandler { onBack() }
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Screen) { onBack() }
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -1140,7 +1158,11 @@ fun WizardAvatarStep(onNext: (String) -> Unit, onBack: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Column(Modifier.widthIn(max = 600.dp).padding(horizontal = 32.dp)) {
-            SetupHeader("Choose Your Avatar", "Select an avatar to continue, or upload a photo from your phone.", "PROFILE SETUP · AVATAR")
+            SetupHeader(
+                stringResource(R.string.profile_avatar_title),
+                stringResource(R.string.profile_avatar_description),
+                stringResource(R.string.profile_avatar_stage)
+            )
         }
 
         Spacer(Modifier.height(24.dp))
@@ -1173,8 +1195,8 @@ fun WizardAvatarStep(onNext: (String) -> Unit, onBack: () -> Unit) {
         Spacer(Modifier.height(32.dp))
         
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            SetupButton("Back", onBack, modifier = Modifier.width(160.dp))
-            SetupButton("Upload Photo", { showUploadDialog = true }, focusRequester = uploadButtonRequester, modifier = Modifier.width(220.dp))
+            SetupButton(stringResource(R.string.common_back), onBack, modifier = Modifier.width(160.dp))
+            SetupButton(stringResource(R.string.profile_upload_photo), { showUploadDialog = true }, focusRequester = uploadButtonRequester, modifier = Modifier.width(220.dp))
         }
     }
     
@@ -1196,11 +1218,9 @@ private fun UploadAvatarButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
     
     Box(
         modifier = Modifier
-            .scale(scale)
             .clip(RoundedCornerShape(12.dp))
             .background(
                 if (isFocused) MaterialTheme.colorScheme.primary
@@ -1218,7 +1238,7 @@ private fun UploadAvatarButton(
         contentAlignment = Alignment.Center
     ) {
         Text(
-            "Upload Your Own",
+            stringResource(R.string.profile_upload_your_own),
             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
             color = if (isFocused) Color.Black else Color.White.copy(alpha = 0.8f)
         )
@@ -1245,7 +1265,7 @@ fun WizardThemeStep(onFinish: (String) -> Unit, onBack: () -> Unit) {
         delay(100)
         focusRequesters[initialIndex].requestFocus()
     }
-    BackHandler { onBack() }
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Screen) { onBack() }
 
     SaabTvTheme(theme = previewTheme) {
         Column(
@@ -1256,7 +1276,11 @@ fun WizardThemeStep(onFinish: (String) -> Unit, onBack: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(Modifier.widthIn(max = 600.dp).padding(horizontal = 32.dp)) {
-                SetupHeader("Choose Your Theme", "Preview colors with the remote. Select a theme to continue.", "PROFILE SETUP · THEME")
+                SetupHeader(
+                    stringResource(R.string.profile_theme_title),
+                    stringResource(R.string.profile_theme_description),
+                    stringResource(R.string.profile_theme_stage)
+                )
             }
             Spacer(Modifier.height(24.dp))
 
@@ -1288,8 +1312,8 @@ fun WizardThemeStep(onFinish: (String) -> Unit, onBack: () -> Unit) {
             Spacer(Modifier.height(32.dp))
             
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                SetupButton("Back", onBack, modifier = Modifier.width(160.dp))
-                SetupButton("Create Theme", { showThemeEditor = true }, focusRequester = createButtonRequester, modifier = Modifier.width(220.dp))
+                SetupButton(stringResource(R.string.common_back), onBack, modifier = Modifier.width(160.dp))
+                SetupButton(stringResource(R.string.profile_create_theme), { showThemeEditor = true }, focusRequester = createButtonRequester, modifier = Modifier.width(220.dp))
             }
         }
     }
@@ -1331,11 +1355,9 @@ private fun CreateThemeButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
     
     Box(
         modifier = Modifier
-            .scale(scale)
             .clip(RoundedCornerShape(12.dp))
             .background(
                 if (isFocused) MaterialTheme.colorScheme.primary
@@ -1353,7 +1375,7 @@ private fun CreateThemeButton(
         contentAlignment = Alignment.Center
     ) {
         Text(
-            "Create Your Own",
+            stringResource(R.string.profile_create_your_own),
             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
             color = if (isFocused) Color.Black else Color.White.copy(alpha = 0.8f)
         )
@@ -1369,7 +1391,6 @@ fun ThemePickItem(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
 
     LaunchedEffect(isFocused) {
         if (isFocused) onFocused?.invoke()
@@ -1392,10 +1413,6 @@ fun ThemePickItem(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                    }
                     .clip(CircleShape)
                     .background(Color(theme.backgroundColor.toInt()))
                     .border(
@@ -1445,8 +1462,11 @@ fun ProfileCard(
     
     val context = LocalContext.current
 
-    val scale by animateFloatAsState(if (isCardFocused) 1.1f else 1f)
-    val borderAlpha by animateFloatAsState(if (isCardFocused || isEditFocused) 1f else 0f)
+    val borderAlpha by animateFloatAsState(
+        targetValue = if (isCardFocused || isEditFocused) 1f else 0f,
+        animationSpec = SaabMotion.focusFeedbackSpec(),
+        label = "ProfileCardFocusBorder"
+    )
 
     // CONVERT STRING ("avatar_5") -> Source (Int or File)
     val avatarSource = ProfileAssets.getAvatarSource(profile.avatarRef)
@@ -1455,7 +1475,7 @@ fun ProfileCard(
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.scale(scale)
+        modifier = Modifier
     ) {
         Box(
             modifier = Modifier
@@ -1464,6 +1484,11 @@ fun ProfileCard(
                 .background(Color(0xFF1A1A1A))
                 .border(3.dp, MaterialTheme.colorScheme.primary.copy(alpha = borderAlpha), CircleShape)
                 .then(focusModifier)
+                .testTag("profile-card-${profile.id}")
+                .semantics {
+                    contentDescription = profile.name
+                    role = Role.Button
+                }
                 .cardFocusSound()
                 .onPreviewKeyEvent { event ->
                     val isConfirm = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
@@ -1502,14 +1527,17 @@ fun ProfileCard(
         Spacer(Modifier.height(8.dp))
         
         // Pencil Edit Icon - always in composition but visibility controlled by alpha
-        val editScale by animateFloatAsState(if (isEditFocused) 1.2f else 1f)
-        val pencilAlpha by animateFloatAsState(if (isPencilVisible) 1f else 0f)
+        val pencilAlpha by animateFloatAsState(
+            targetValue = if (isPencilVisible) 1f else 0f,
+            animationSpec = SaabMotion.focusLabelSpec(),
+            label = "ProfileCardEditAffordance"
+        )
         
         Box(
             modifier = Modifier
                 .size(32.dp)
-                .scale(editScale)
                 .alpha(pencilAlpha)
+                .focusProperties { canFocus = isPencilVisible }
                 .clip(CircleShape)
                 .background(if (isEditFocused) Color.White else Color.Transparent)
                 .clickable(
@@ -1522,7 +1550,7 @@ fun ProfileCard(
         ) {
             Icon(
                 imageVector = Icons.Default.Edit,
-                contentDescription = "Edit Profile",
+                contentDescription = context.getString(R.string.profile_edit_action),
                 tint = if (isEditFocused) Color.Black else Color.White,
                 modifier = Modifier.size(18.dp)
             )
@@ -1534,13 +1562,12 @@ fun ProfileCard(
 fun AddProfileCard(onClick: () -> Unit, focusRequester: FocusRequester? = null) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
 
     val focusModifier = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.scale(scale)
+        modifier = Modifier
     ) {
         Box(
             modifier = Modifier
@@ -1558,7 +1585,7 @@ fun AddProfileCard(onClick: () -> Unit, focusRequester: FocusRequester? = null) 
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            "Add Profile",
+            stringResource(R.string.profile_add),
             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
             color = if(isFocused) Color.White else Color.Gray
         )
@@ -1577,7 +1604,6 @@ fun AvatarGridItem(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.15f else 1f)
 
     LaunchedEffect(isFocused) {
         if (isFocused) onFocused?.invoke()
@@ -1596,10 +1622,6 @@ fun AvatarGridItem(
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
                 .clip(CircleShape)
                 .border(3.dp, if (isFocused) MaterialTheme.colorScheme.primary else Color.Transparent, CircleShape)
         ) {

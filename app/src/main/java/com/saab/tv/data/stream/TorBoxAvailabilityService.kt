@@ -6,6 +6,7 @@ import com.google.gson.JsonParser
 import com.saab.tv.data.model.stremio.Stream
 import com.saab.tv.data.security.SecurePreferences
 import com.saab.tv.data.account.AccountStorage
+import com.saab.tv.data.cache.BoundedExpiringCache
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
@@ -48,8 +49,12 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
     }
     private val client = OkHttpClient.Builder().callTimeout(9, TimeUnit.SECONDS)
         .connectTimeout(3, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS).build()
-    private data class Evidence(val cached: Boolean?, val at: Long)
-    private val results = ConcurrentHashMap<String, Evidence>()
+    private data class Evidence(val cached: Boolean?)
+    private val results = BoundedExpiringCache<String, Evidence>(
+        capacity = 2_000,
+        ttlMillis = 60_000L,
+        nowMillis = System::currentTimeMillis
+    )
 
     private suspend fun request(path: String, key: String?, query: Map<String, String>): JsonObject? = withContext(Dispatchers.IO) {
         val url = "https://api.torbox.app/v1/api/torrents/$path".toHttpUrl().newBuilder().apply {
@@ -98,7 +103,7 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
         withTimeoutOrNull(4_000L) {
             hashes.chunked(80).forEach { chunk ->
                 val missing = chunk.filter { hash ->
-                    results[hash]?.takeIf { System.currentTimeMillis() - it.at in 0..60_000L } == null
+                    results[hash] == null
                 }
                 if (missing.isEmpty()) {
                     chunk.forEach { hash -> results[hash]?.let { evidence[hash] = it } }
@@ -106,10 +111,10 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
                 }
                 val response = request("checkcached", key, mapOf("hash" to missing.joinToString(","), "format" to "object", "list_files" to "false"))
                 chunk.forEach { hash ->
-                    val prior = results[hash]?.takeIf { System.currentTimeMillis() - it.at in 0..60_000L }
+                    val prior = results[hash]
                     // Only a successful object response can establish a cache miss.
                     val cached = prior?.cached ?: TorBoxAvailabilityPolicy.cached(response, hash)
-                    val value = Evidence(cached, System.currentTimeMillis())
+                    val value = Evidence(cached)
                     evidence[hash] = value
                     if (cached != null) results[hash] = value
                 }
@@ -122,7 +127,6 @@ class TorBoxAvailabilityService @Inject constructor(@ApplicationContext private 
             val value = evidence[hash]
             stream.copy(torBoxChecked = true, torBoxCached = value?.cached, torBoxSeeders = null)
         }
-        if (results.size > 2_000) results.clear()
         com.saab.tv.AppDiagnostics.torBoxEvent(context, "Enrichment Completed",
             "sources=${streams.size} hashes=${hashes.size} output=${enriched.size} checked=${enriched.count { it.torBoxChecked }} " +
                 "cached=${enriched.count { it.torBoxCached == true }} removed=${streams.size - enriched.size} " +

@@ -20,7 +20,7 @@ class ProfileWizardP1Test {
     private lateinit var vm: ProfileViewModel
     @Before fun setup() {
         f = FeatureFixture(RuntimeEnvironment.getApplication())
-        vm = ProfileViewModel(f.dao, f.app.configuration, f.traktAuth, f.cache)
+        vm = ProfileViewModel(f.dao, f.app.configuration, f.traktAuth, f.cache, f.userStateCommands)
         awaitAppState { !vm.isLoading.value }
     }
     @After fun cleanup() { vm.viewModelScope.cancel(); f.close() }

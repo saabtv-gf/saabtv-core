@@ -53,13 +53,21 @@ class UpdaterServiceRegressionTest {
     @Test fun untrustedReleaseAssetIsRejectedBeforeDownload() = runBlocking {
         val vm = manager(release(url = "https://evil.invalid/app.apk")); vm.checkForUpdate()
         assertTrue(vm.state.value is UpdateState.Error)
-        assertTrue((vm.state.value as UpdateState.Error).message.contains("trusted"))
+        val failure = vm.state.value as UpdateState.Error
+        assertTrue(failure.message.contains("trusted"))
+        assertEquals(UpdateFailureKind.UNTRUSTED_SOURCE, failure.kind)
+        assertEquals(UpdateRecoveryAction.CHECK_FOR_UPDATES, failure.recovery)
     }
     @Test fun missingChecksumAndMissingCompatibleApkAreActionableErrors() = runBlocking {
         val noHash = manager(release(digest = "")); noHash.checkForUpdate()
-        assertTrue((noHash.state.value as UpdateState.Error).message.contains("checksum"))
+        val checksumFailure = noHash.state.value as UpdateState.Error
+        assertTrue(checksumFailure.message.contains("checksum"))
+        assertEquals(UpdateFailureKind.MISSING_CHECKSUM, checksumFailure.kind)
+        assertEquals(UpdateRecoveryAction.CHECK_FOR_UPDATES, checksumFailure.recovery)
         val noApk = manager("""{"tag_name":"v99.0.0","assets":[],"body":"Notes"}"""); noApk.checkForUpdate()
-        assertTrue((noApk.state.value as UpdateState.Error).message.contains("compatible"))
+        val compatibilityFailure = noApk.state.value as UpdateState.Error
+        assertTrue(compatibilityFailure.message.contains("compatible"))
+        assertEquals(UpdateFailureKind.UNSUPPORTED_DEVICE, compatibilityFailure.kind)
     }
     @Test fun malformedResponseBecomesErrorAndCanBeRetriedAfterReset() = runBlocking {
         val vm = manager("not json"); vm.checkForUpdate()
@@ -69,7 +77,9 @@ class UpdaterServiceRegressionTest {
     }
     @Test fun httpFailureIsContainedWithoutUncaughtException() = runBlocking {
         val vm = manager("unavailable", 503); vm.checkForUpdate()
-        assertTrue(vm.state.value is UpdateState.Error)
+        val failure = vm.state.value as UpdateState.Error
+        assertEquals(UpdateFailureKind.UPDATE_CHECK, failure.kind)
+        assertEquals(UpdateRecoveryAction.CHECK_FOR_UPDATES, failure.recovery)
     }
     @Test fun invalidDownloadUrlOrHashNeverStartsNetworkTransfer() = runBlocking {
         val requests = AtomicInteger(); val vm = manager(release(), requests = requests)
@@ -122,6 +132,8 @@ class UpdaterServiceRegressionTest {
             val state = vm.state.value
             assertTrue("Malformed APK must fail safely, got $state", state is UpdateState.Error)
             assertTrue((state as UpdateState.Error).message.startsWith("Download failed:"))
+            assertEquals(UpdateFailureKind.PACKAGE_VERIFICATION, state.kind)
+            assertEquals(UpdateRecoveryAction.DOWNLOAD_AGAIN, state.recovery)
         } finally {
             packageManager.setCanRequestPackageInstalls(false)
         }

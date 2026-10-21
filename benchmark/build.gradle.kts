@@ -11,6 +11,16 @@ android {
         minSdk = 28
         targetSdk = 34
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Emulator runs are wiring smoke tests only; do not use their timings as device data.
+        if (providers.gradleProperty("saabAllowEmulatorBenchmark").isPresent) {
+            testInstrumentationRunnerArguments["androidx.benchmark.suppressErrors"] = "EMULATOR"
+        }
+    }
+    buildTypes {
+        create("benchmark") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

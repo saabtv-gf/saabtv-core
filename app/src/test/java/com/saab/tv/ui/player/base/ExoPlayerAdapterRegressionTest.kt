@@ -1,6 +1,8 @@
 package com.saab.tv.ui.player.base
 
 import android.app.Application
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -55,8 +57,75 @@ class ExoPlayerAdapterRegressionTest {
         backend.selectSubtitleTrack("external:en")
         assertEquals(before, backend.uiState.value)
     }
+
+    @Test fun selectingSubtitleOffCancelsPendingAutoSyncWork() {
+        val pending = Job()
+        setPrivateField("subtitleAutoSyncJob", pending)
+        setPrivateField("autoSyncSubtitleId", "external:en")
+
+        ExoPlayerBackend::class.java.getDeclaredMethod(
+            "scheduleSubtitleAutoSync", String::class.java
+        ).apply {
+            isAccessible = true
+            invoke(backend, "#none")
+        }
+
+        assertFalse("Subtitle Off must cancel ALASS work", pending.isActive)
+        assertNull(privateField<Job?>("subtitleAutoSyncJob"))
+        assertNull(privateField<String?>("autoSyncSubtitleId"))
+    }
+
+    @Test fun manualSubtitleDelayCancelsPendingAutoSyncWork() {
+        val pending = Job()
+        setPrivateField("subtitleAutoSyncJob", pending)
+
+        backend.setSubtitleDelay(250L)
+
+        assertFalse("A manual delay supersedes auto-sync", pending.isActive)
+        assertEquals(250L, backend.persistableSubtitleDelayMs())
+    }
     @Test fun transportControlsBeforeLoadDoNotCreateSourcesOrCrash() {
         backend.play(); backend.pause(); backend.seekBy(-30_000); backend.seekTo(10_000)
         assertTrue(backend.sourceOptions.value.isEmpty()); assertEquals(0L, backend.uiState.value.positionMs)
     }
+
+    @Test fun lateMagnetResolutionFromPreviousLoadCannotReplaceCurrentSession() {
+        setPrivateField("_sourceOptions", MutableStateFlow(listOf(
+            PlayerSourceOption("magnet", "magnet:?xt=urn:btih:0123456789012345678901234567890123456789", "Torrent"),
+            PlayerSourceOption("direct", "https://media.example/video.mp4", "Direct")
+        )))
+        setPrivateField("currentSourceId", "direct")
+
+        var resolveMagnet: ((String, String) -> Unit)? = null
+        backend.onMagnetSourceSelected = { _, _, _, onReady, _ -> resolveMagnet = onReady }
+        backend.selectSource("magnet")
+        val oldResolution = checkNotNull(resolveMagnet)
+
+        // A new title can reuse the same source id, so the id check alone is not
+        // enough to distinguish the stale callback from the active session.
+        backend.load(PlayerLoadRequest(
+            mediaUrl = "https://media.example/new-title.mp4",
+            title = "New title",
+            initialSourceId = "magnet"
+        ))
+        val generationAfterNewLoad = privateField<Long>("loadToken")
+
+        oldResolution("magnet://resolved", "http://127.0.0.1:8080/new-title")
+
+        assertEquals(generationAfterNewLoad, privateField<Long>("loadToken"))
+    }
+
+    private fun setPrivateField(name: String, value: Any?) {
+        ExoPlayerBackend::class.java.getDeclaredField(name).apply {
+            isAccessible = true
+            set(backend, value)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun <T> privateField(name: String): T =
+        ExoPlayerBackend::class.java.getDeclaredField(name).let { field ->
+            field.isAccessible = true
+            field.get(backend) as T
+        }
 }

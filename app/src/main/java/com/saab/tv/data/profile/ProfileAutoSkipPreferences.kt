@@ -15,3 +15,13 @@ internal fun ProfileEntity.withAutoSkipCountdown(seconds: Int): ProfileEntity {
         outroSkipCountdownSeconds = value
     )
 }
+
+/**
+ * Canonicalizes fields retained only for old clients/storage layouts. New playback
+ * behavior reads the seek step and intro countdown; their legacy mirrors must
+ * never become independent values during profile copy, restore, or sync.
+ */
+internal fun ProfileEntity.withCanonicalSharedPreferences(): ProfileEntity = copy(
+    seekThumbnailIntervalSeconds = seekTimeIntervalSeconds,
+    outroSkipCountdownSeconds = autoSkipCountdownSeconds
+)

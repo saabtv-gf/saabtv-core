@@ -9,10 +9,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.saab.tv.ui.settings.SettingToggleRow
+import com.saab.tv.ui.settings.SettingsSidebarItem
+import com.saab.tv.R
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -26,6 +29,35 @@ import org.robolectric.annotation.Config
 @OptIn(ExperimentalTestApi::class)
 class ComponentInteractionRegressionTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun focusSoundPlaysOnlyOnEntryAndCoalescesRapidHandoffCallbacks() {
+        assertTrue(CardFocusSoundPolicy.gainedFocus(wasFocused = false, isFocused = true))
+        assertFalse(CardFocusSoundPolicy.gainedFocus(wasFocused = true, isFocused = true))
+        assertFalse(CardFocusSoundPolicy.gainedFocus(wasFocused = true, isFocused = false))
+        assertFalse(CardFocusSoundPolicy.mayPlay(lastPlayedAtMs = 1_000L, nowMs = 1_060L))
+        assertTrue(CardFocusSoundPolicy.mayPlay(lastPlayedAtMs = 1_000L, nowMs = 1_080L))
+    }
+
+    @Test fun focusHandoffCanSuppressAnchorCueWithoutSuppressingDestinationCue() {
+        val suppression = FocusSoundSuppression()
+        suppression.suppressNext()
+        assertFalse(suppression.shouldPlay())
+        assertTrue(suppression.shouldPlay())
+        suppression.suppressNext()
+        suppression.clear()
+        assertTrue(suppression.shouldPlay())
+    }
+
+    @Test fun setupButtonLabelUsesHighContrastColorForEachActionState() {
+        val onPrimary = Color(0xFF112233)
+        val onError = Color(0xFF445566)
+        val onSurfaceVariant = Color(0xFFE2E8F0)
+
+        assertEquals(onSurfaceVariant, setupButtonTextColor(true, false, false, onPrimary, onError, onSurfaceVariant))
+        assertEquals(onPrimary, setupButtonTextColor(true, true, false, onPrimary, onError, onSurfaceVariant))
+        assertEquals(onError, setupButtonTextColor(true, true, true, onPrimary, onError, onSurfaceVariant))
+        assertEquals(Color.White.copy(alpha = 0.9f), setupButtonTextColor(false, false, false, onPrimary, onError, onSurfaceVariant))
+    }
 
     @Test fun setupButtonInvokesActionOnce() {
         var calls = 0
@@ -46,6 +78,18 @@ class ComponentInteractionRegressionTest {
         compose.runOnIdle { focus.requestFocus() }
         compose.onNodeWithText("Sign Out").assertIsFocused().performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertEquals(1, calls) }
+    }
+    @Test fun setupButtonFocusKeepsItsLayoutBoundsStable() {
+        val focus = FocusRequester()
+        compose.setContent {
+            MaterialTheme { SetupButton("Continue", {}, focusRequester = focus) }
+        }
+        val button = compose.onNodeWithText("Continue")
+        val initialBounds = button.fetchSemanticsNode().boundsInRoot
+
+        compose.runOnIdle { focus.requestFocus() }
+        button.assertIsFocused()
+        assertEquals(initialBounds, button.fetchSemanticsNode().boundsInRoot)
     }
     @Test fun setupHeaderShowsOnlyNonBlankStage() {
         compose.setContent { MaterialTheme { Column { SetupHeader("Welcome", "Choose your preferences", "Step 1") } } }
@@ -72,6 +116,14 @@ class ComponentInteractionRegressionTest {
         compose.onNodeWithContentDescription("Resume").performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertEquals(1, calls) }
     }
+    @Test fun compactDetailActionKeepsBoundsWhenFocused() {
+        val action = compose.onNodeWithContentDescription("Play")
+        compose.setContent { MaterialTheme { DetailActionButton("Play", Icons.Default.PlayArrow, {}, compact = true) } }
+        val initialBounds = action.fetchSemanticsNode().boundsInRoot
+        action.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        action.assertIsFocused()
+        assertEquals(initialBounds, action.fetchSemanticsNode().boundsInRoot)
+    }
     @Test fun toggleChangesStateAndKeepsHelperTextVisible() {
         val checked = mutableStateOf(false)
         compose.setContent { MaterialTheme { SettingToggleRow("Thumbnails", "Generate seek previews", checked.value, { checked.value = it }) } }
@@ -80,6 +132,27 @@ class ComponentInteractionRegressionTest {
         compose.onNodeWithText("Generate seek previews").assertExists()
         compose.onNodeWithText("Thumbnails").performClick()
         compose.runOnIdle { assertFalse(checked.value) }
+    }
+    @Test fun settingsSidebarFocusKeepsItsLayoutBoundsStable() {
+        val focus = FocusRequester()
+        compose.setContent {
+            MaterialTheme {
+                SettingsSidebarItem(
+                    label = "Playback",
+                    iconRes = R.drawable.playback_icon,
+                    isSelected = false,
+                    modifier = Modifier.focusRequester(focus),
+                    onClick = {},
+                    onFocus = {}
+                )
+            }
+        }
+        val item = compose.onNodeWithText("Playback")
+        val initialBounds = item.fetchSemanticsNode().boundsInRoot
+
+        compose.runOnIdle { focus.requestFocus() }
+        item.assertIsFocused()
+        assertEquals(initialBounds, item.fetchSemanticsNode().boundsInRoot)
     }
     @Test fun toggleWithoutHelperTextCanReceiveFocusAndReturnWithLeftKey() {
         val focus = FocusRequester()

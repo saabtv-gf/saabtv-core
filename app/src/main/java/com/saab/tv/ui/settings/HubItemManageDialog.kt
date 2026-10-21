@@ -7,12 +7,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.saab.tv.R
 import com.saab.tv.data.model.HubRowItemEntity
 import com.saab.tv.ui.addons.VoidButton
 import com.saab.tv.ui.addons.VoidDialog
 import com.saab.tv.ui.addons.VoidInput
-import kotlinx.coroutines.delay
 
 @Composable
 fun HubItemManageDialog(
@@ -33,25 +34,28 @@ fun HubItemManageDialog(
     // Main Manage Dialog
     if (!showRenameDialog && !showRemoveConfirm && !showRemoveImageConfirm) {
         val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
-        VoidDialog(onDismissRequest = onDismiss, title = "Manage Item") {
+        VoidDialog(onDismissRequest = onDismiss, title = stringResource(R.string.hub_manage_item_title)) {
+            LaunchedEffect(focusRequester) {
+                withFrameNanos { }
+                focusRequester.requestFocus()
+            }
             Text(item.title, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 24.dp))
 
             // Rename
             if (showRenameOption) {
-                VoidButton("Rename", { showRenameDialog = true }, Modifier.fillMaxWidth(), focusRequester = focusRequester)
+                VoidButton(stringResource(R.string.common_rename), { showRenameDialog = true }, Modifier.fillMaxWidth(), focusRequester = focusRequester)
                 Spacer(Modifier.height(12.dp))
             }
 
             // Move
-            VoidButton("Move Item", onStartReorder, Modifier.fillMaxWidth(), focusRequester = if (!showRenameOption) focusRequester else null)
+            VoidButton(stringResource(R.string.hub_move_item), onStartReorder, Modifier.fillMaxWidth(), focusRequester = if (!showRenameOption) focusRequester else null)
             Spacer(Modifier.height(12.dp))
 
             // Remove Image (only shown when item has an image)
             if (showImageOption && item.customImageUrl != null) {
                 VoidButton(
-                    "Remove Image",
+                    stringResource(R.string.hub_remove_image),
                     { showRemoveImageConfirm = true },
                     Modifier.fillMaxWidth(),
                     isDestructive = true
@@ -61,7 +65,7 @@ fun HubItemManageDialog(
 
             // Remove
             VoidButton(
-                "Remove from Hub",
+                stringResource(R.string.hub_remove_from_hub),
                 { showRemoveConfirm = true },
                 Modifier.fillMaxWidth(),
                 isDestructive = true
@@ -69,27 +73,30 @@ fun HubItemManageDialog(
 
             Spacer(Modifier.height(24.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                VoidButton("Close", onDismiss, Modifier.width(120.dp))
+                VoidButton(stringResource(R.string.common_close), onDismiss, Modifier.width(120.dp))
             }
         }
     }
 
     if (showRemoveImageConfirm) {
         val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
-        VoidDialog(onDismissRequest = { showRemoveImageConfirm = false }, title = "Remove Image?") {
-            Text("This will remove the custom image for this item.", color = Color.Gray)
+        VoidDialog(onDismissRequest = { showRemoveImageConfirm = false }, title = stringResource(R.string.hub_remove_image_title)) {
+            LaunchedEffect(focusRequester) {
+                withFrameNanos { }
+                focusRequester.requestFocus()
+            }
+            Text(stringResource(R.string.hub_confirm_remove_image_generic), color = Color.Gray)
             Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 VoidButton(
-                    "Cancel",
+                    stringResource(R.string.common_cancel),
                     { showRemoveImageConfirm = false },
                     Modifier.weight(1f),
                     focusRequester = focusRequester
                 )
                 VoidButton(
-                    "Remove",
+                    stringResource(R.string.common_remove),
                     {
                         onRemoveImage()
                         showRemoveImageConfirm = false
@@ -104,20 +111,23 @@ fun HubItemManageDialog(
 
     if (showRemoveConfirm) {
         val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
-        VoidDialog(onDismissRequest = { showRemoveConfirm = false }, title = "Remove from Hub?") {
-            Text("Are you sure you want to remove this item from the hub?", color = Color.Gray)
+        VoidDialog(onDismissRequest = { showRemoveConfirm = false }, title = stringResource(R.string.hub_remove_from_hub_title)) {
+            LaunchedEffect(focusRequester) {
+                withFrameNanos { }
+                focusRequester.requestFocus()
+            }
+            Text(stringResource(R.string.hub_confirm_remove_item_generic), color = Color.Gray)
             Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 VoidButton(
-                    "Cancel",
+                    stringResource(R.string.common_cancel),
                     { showRemoveConfirm = false },
                     Modifier.weight(1f),
                     focusRequester = focusRequester
                 )
                 VoidButton(
-                    "Remove",
+                    stringResource(R.string.common_remove),
                     {
                         showRemoveConfirm = false
                         onRemove()
@@ -132,14 +142,17 @@ fun HubItemManageDialog(
     // Rename Sub-Dialog
     if (showRenameDialog) {
         val focusRequester = remember { FocusRequester() }
-        LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
-        VoidDialog(onDismissRequest = { showRenameDialog = false }, title = "Rename Item") {
-            VoidInput(value = editName, onValueChange = { editName = it }, placeholder = "Item Name", modifier = Modifier.focusRequester(focusRequester))
+        VoidDialog(onDismissRequest = { showRenameDialog = false }, title = stringResource(R.string.hub_rename_item_title)) {
+            LaunchedEffect(focusRequester) {
+                withFrameNanos { }
+                focusRequester.requestFocus()
+            }
+            VoidInput(value = editName, onValueChange = { editName = it }, placeholder = stringResource(R.string.hub_item_name), modifier = Modifier.focusRequester(focusRequester))
             Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                VoidButton("Cancel", { showRenameDialog = false }, Modifier.weight(1f))
-                VoidButton("Save", { onRename(editName); showRenameDialog = false }, Modifier.weight(1f), isPrimary = true)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                VoidButton(stringResource(R.string.common_cancel), { showRenameDialog = false }, Modifier.weight(1f))
+                VoidButton(stringResource(R.string.common_save), { onRename(editName); showRenameDialog = false }, Modifier.weight(1f), isPrimary = true)
             }
         }
     }

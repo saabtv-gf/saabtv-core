@@ -39,7 +39,7 @@ class HomeDetailsComposeJourneyTest {
         )
         val row = HomeRow("fixture:movies", "Popular Movies", listOf(movie), order = 0)
         val state = HomeViewModel.HomeState(
-            mixedRows = listOf(CategoryRow.fromHomeRow(row)), rows = listOf(row), isLoading = false,
+            mixedRows = listOf(CategoryRow.fromHomeRow(row)), rows = listOf(CategoryRow.fromHomeRow(row)), isLoading = false,
             loadedScreen = "home", loadedProfileId = 31
         )
         var openedMovieId: String? = null

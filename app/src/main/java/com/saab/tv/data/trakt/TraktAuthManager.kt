@@ -52,9 +52,9 @@ class TraktAuthManager @Inject constructor(
     private val _authState = MutableStateFlow<DeviceAuthState>(DeviceAuthState.Idle)
     val authState: StateFlow<DeviceAuthState> = _authState
 
-    private fun activeProfileId(): Int = profileConfigurationManager.getLastActiveProfileId() ?: 1
+    private fun activeProfileId(): Int? = profileConfigurationManager.getLastActiveProfileId()
 
-    private fun profileKey(key: String, profileId: Int = activeProfileId()) = "${key}_$profileId"
+    private fun profileKey(key: String, profileId: Int? = activeProfileId()) = "${key}_${profileId ?: "none"}"
 
     /** Runtime credentials take precedence so self-built APKs can configure Trakt securely. */
     fun getClientId(): String? = prefs.getString(KEY_CLIENT_ID, null)
@@ -102,7 +102,7 @@ class TraktAuthManager @Inject constructor(
         val globalToken = prefs.getString(KEY_ACCESS_TOKEN, null) ?: return
         val globalRefresh = prefs.getString(KEY_REFRESH_TOKEN, null)
         val globalExpiry = prefs.getLong(KEY_EXPIRES_AT, 0L)
-        val pid = activeProfileId()
+        val pid = activeProfileId() ?: return
 
         prefs.edit()
             .putString(profileKey(KEY_ACCESS_TOKEN, pid), globalToken)

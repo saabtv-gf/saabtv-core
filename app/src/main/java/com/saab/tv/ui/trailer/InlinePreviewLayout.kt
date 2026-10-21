@@ -4,6 +4,17 @@ package com.saab.tv.ui.trailer
 internal object InlinePreviewLayout {
     data class Bounds(val left: Float, val top: Float, val width: Float, val height: Float)
 
+    fun interpolate(from: Bounds, to: Bounds, fraction: Float): Bounds {
+        val progress = fraction.coerceIn(0f, 1f)
+        fun value(start: Float, end: Float) = start + (end - start) * progress
+        return Bounds(
+            left = value(from.left, to.left),
+            top = value(from.top, to.top),
+            width = value(from.width, to.width),
+            height = value(from.height, to.height)
+        )
+    }
+
     fun bounds(anchor: Bounds?, viewportWidth: Float, viewportHeight: Float, density: Float): Bounds {
         val margin = 16f * density
         val footer = 72f * density

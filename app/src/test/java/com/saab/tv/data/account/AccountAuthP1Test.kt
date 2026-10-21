@@ -38,6 +38,16 @@ class AccountAuthP1Test {
             assertEquals("Bearer fixture-token",it.header("Authorization")); assertNull(it.header("Cookie"))
         }
     }
+    @Test fun quotaResponseKeepsStatusAndServiceCodeWithoutReturningServerSecrets() = runBlocking {
+        val f = fixture()
+        f.handler = { 429 to "{\"code\":\"PT429\",\"message\":\"private response token=secret\"}" }
+        try { f.auth.dataRequest("rpc/fixture", com.google.gson.JsonObject()); fail("Quota response should fail") }
+        catch (error: AccountApiException) {
+            assertEquals(429, error.status)
+            assertEquals("PT429", error.serviceCode)
+            assertFalse(error.message.orEmpty().contains("secret"))
+        }
+    }
     @Test fun wrongAccountSessionIsClearedRatherThanCrossAccountRestore() = runBlocking {
         val f=fixture(); f.handler={200 to "{\"user\":{\"id\":\"other-user\"}}"}
         assertFalse(f.auth.validateSession()); assertFalse(f.auth.hasSession); assertNull(f.auth.userId)
@@ -56,6 +66,26 @@ class AccountAuthP1Test {
         val f=fixture(false); assertFalse(f.auth.validateSession())
         try { f.auth.jwt(); fail("Token issued without session") } catch (_: java.io.IOException) {}
         assertTrue(f.requests.isEmpty())
+    }
+    @Test fun syncKeyCopyIsClearedAfterSuccessfulUse() {
+        val f=fixture(); var usedKey: ByteArray? = null
+        val result = f.auth.withSyncKey { key -> usedKey = key; key.sumOf { it.toInt() } }
+        assertEquals(f.key.sumOf { it.toInt() }, result)
+        assertNotNull(usedKey)
+        assertTrue(usedKey!!.all { it == 0.toByte() })
+        assertArrayEquals(f.key, f.auth.syncKey)
+    }
+    @Test fun syncKeyCopyIsClearedWhenOperationThrows() {
+        val f=fixture(); var usedKey: ByteArray? = null
+        try {
+            f.auth.withSyncKey { key -> usedKey = key; error("fixture failure") }
+            fail("Expected operation to fail")
+        } catch (expected: IllegalStateException) {
+            assertEquals("fixture failure", expected.message)
+        }
+        assertNotNull(usedKey)
+        assertTrue(usedKey!!.all { it == 0.toByte() })
+        assertArrayEquals(f.key, f.auth.syncKey)
     }
     @Test fun failedLoginNeverPersistsPartialSession() = runBlocking {
         val f=fixture(false); f.handler={401 to "{}"}

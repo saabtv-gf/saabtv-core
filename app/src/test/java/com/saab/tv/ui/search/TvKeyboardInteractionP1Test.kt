@@ -12,6 +12,8 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
+import com.saab.tv.R
+import org.robolectric.RuntimeEnvironment
 import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -24,10 +26,11 @@ import org.robolectric.annotation.Config
 class TvKeyboardInteractionP1Test {
     @get:Rule val compose=createComposeRule()
     private val entry=FocusRequester();private val drawer=FocusRequester();private val result=FocusRequester()
-    private val entered=mutableListOf<String>();private var spaces=0;private var deletes=0;private var clears=0;private var qr=0
+    private val entered=mutableListOf<String>();private var spaces=0;private var deletes=0;private var clears=0;private var qr=0;private var submits=0
     private fun show(hasResults:Boolean=true) {
         compose.setContent { MaterialTheme { Column(Modifier.padding(16.dp)) {
-            TvKeyboard({entered+=it},{deletes++},{spaces++},{clears++},{qr++},entry,drawer,false,hasResults,result)
+            TvKeyboard({entered+=it},{deletes++},{spaces++},{clears++},{qr++},entry,drawer,false,hasResults,result,
+                onSubmitSearch = { submits++ })
             Button(onClick={},modifier=Modifier.focusRequester(result)) { Text("Search Result") }
             Button(onClick={},modifier=Modifier.focusRequester(drawer)) { Text("Main Menu") }
         } } }
@@ -35,10 +38,21 @@ class TvKeyboardInteractionP1Test {
     }
     @Test fun qwertyAndSpaceBackspaceClearAndQrButtonsDispatchExactlyOnce() {
         show()
-        compose.onNodeWithText("Q").performClick();compose.onNodeWithText("Space").performClick()
-        compose.onNodeWithText("Backspace").performClick();compose.onNodeWithText("Clear").performClick()
-        compose.onNodeWithText("QR Search").performClick()
-        compose.runOnIdle { assertEquals(listOf("q"),entered);assertEquals(1,spaces);assertEquals(1,deletes);assertEquals(1,clears);assertEquals(1,qr) }
+        val resources = RuntimeEnvironment.getApplication().resources
+        compose.onNodeWithText("Q").performClick()
+        compose.onNodeWithText(resources.getString(R.string.search_key_space)).performClick()
+        compose.onNodeWithText(resources.getString(R.string.search_key_backspace)).performClick()
+        compose.onNodeWithText(resources.getString(R.string.search_key_clear)).performClick()
+        compose.onNodeWithText(resources.getString(R.string.search_key_qr)).performClick()
+        compose.onNodeWithText(resources.getString(R.string.search_key_submit)).performClick()
+        compose.runOnIdle {
+            assertEquals("Letter key should dispatch once", listOf("q"), entered)
+            assertEquals("Space key should dispatch once", 1, spaces)
+            assertEquals("Backspace key should dispatch once", 1, deletes)
+            assertEquals("Clear key should dispatch once", 1, clears)
+            assertEquals("QR search key should dispatch once", 1, qr)
+            assertEquals("Explicit search key should dispatch once", 1, submits)
+        }
     }
     @Test fun topKeyboardRowMovesUpToSearchResultsWhenPresent() {
         show(true)

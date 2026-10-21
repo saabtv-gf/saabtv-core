@@ -11,6 +11,7 @@ import java.util.Date
 object AppHealthMonitor {
     private const val DIRECTORY = "app_health"
     private const val MAX_TRACE_LINES = 80
+    private const val MAX_EVENT_CHARS = 8_000
 
     fun install(context: Context) {
         capturePreviousExits(context.applicationContext)
@@ -44,9 +45,11 @@ object AppHealthMonitor {
     fun latestSummary(context: Context): List<String> =
         healthFile(context).takeIf(File::isFile)?.readLines()?.takeLast(180).orEmpty()
 
-    fun clear(context: Context) = synchronized(this) {
-        healthFile(context).delete()
-        File(healthFile(context).parentFile, "previous.txt").delete()
+    fun clear(context: Context) {
+        DiagnosticStorageBudget.withLock(context) {
+            healthFile(context).delete()
+            File(healthFile(context).parentFile, "previous.txt").delete()
+        }
     }
 
     private fun capturePreviousExits(context: Context) {
@@ -86,18 +89,19 @@ object AppHealthMonitor {
         }
     }
 
-    @Synchronized
     private fun append(context: Context, value: String) {
         runCatching {
-            val file = healthFile(context)
-            file.parentFile?.mkdirs()
-            if (file.length() > 512L * 1024L) {
-                File(file.parentFile, "previous.txt").also { previous ->
-                    previous.delete()
-                    file.renameTo(previous)
+            DiagnosticStorageBudget.withLock(context) {
+                val file = healthFile(context)
+                file.parentFile?.mkdirs()
+                if (file.length() > 512L * 1024L) {
+                    File(file.parentFile, "previous.txt").also { previous ->
+                        previous.delete()
+                        file.renameTo(previous)
+                    }
                 }
+                file.appendText("${System.currentTimeMillis()} ${value.take(MAX_EVENT_CHARS)}\n")
             }
-            file.appendText("${System.currentTimeMillis()} $value\n")
         }
     }
 

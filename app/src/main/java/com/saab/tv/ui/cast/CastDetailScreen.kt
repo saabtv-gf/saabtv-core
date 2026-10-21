@@ -2,20 +2,17 @@ package com.saab.tv.ui.cast
 
 import com.saab.tv.ui.trailer.titleTrailerFocus
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -54,23 +51,31 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
-import com.saab.tv.data.tmdb.TmdbMetaPreview
+import com.saab.tv.R
 import com.saab.tv.data.tmdb.TmdbPersonDetail
+import com.saab.tv.domain.schema.canonicalPresentationKey
+import com.saab.tv.domain.schema.TitleCardProjection
+import com.saab.tv.domain.schema.toCanonicalProjection
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import com.saab.tv.ui.home.DpadRepeatGate
-import com.saab.tv.ui.home.FocusPivotSpec
+import com.saab.tv.ui.components.ArtworkPrefetchDispatcher
+import com.saab.tv.ui.components.ArtworkPrefetchEffect
+import com.saab.tv.ui.components.LocalTitleCardShape
+import com.saab.tv.ui.utils.requestFocusOrFallback
+import com.saab.tv.ui.utils.requestFocusSafely
+import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
+import com.saab.tv.ui.navigation.handoffNavigationFocus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -96,6 +101,7 @@ fun CastDetailScreen(
     var quickActionProfileId by remember { mutableStateOf(0) }
     var quickActionTarget by remember { mutableStateOf<Pair<com.saab.tv.data.model.stremio.MetaItem, Rect>?>(null) }
     var quickActionReturnFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    val initialFocusRequester = remember { FocusRequester() }
     androidx.compose.runtime.LaunchedEffect(quickActionViewModel) {
         quickActionProfileId = quickActionViewModel.activeProfileId() ?: 0
     }
@@ -106,7 +112,7 @@ fun CastDetailScreen(
     val accentColor = MaterialTheme.colorScheme.primary
     val textColor = MaterialTheme.colorScheme.onBackground
 
-    androidx.activity.compose.BackHandler { onBackPress() }
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Route) { onBackPress() }
 
     Box(modifier = Modifier.fillMaxSize().background(bg)) {
         CompositionLocalProvider(
@@ -128,16 +134,17 @@ fun CastDetailScreen(
             }
             is CastDetailState.Success -> {
                 val restoreFocusRequester = remember { FocusRequester() }
-                val initialFocusRequester = remember { FocusRequester() }
                 var restoreIndex by rememberSaveable { mutableStateOf(-1) }
 
                 androidx.compose.runtime.LaunchedEffect(Unit) {
                     if (restoreIndex >= 0) {
                         kotlinx.coroutines.delay(300)
-                        runCatching { restoreFocusRequester.requestFocus() }
+                        if (!restoreFocusRequester.requestFocusSafely()) {
+                            initialFocusRequester.requestFocusSafely()
+                        }
                         restoreIndex = -1
                     } else {
-                        runCatching { initialFocusRequester.requestFocus() }
+                        initialFocusRequester.requestFocusSafely()
                     }
                 }
 
@@ -168,7 +175,7 @@ fun CastDetailScreen(
                     quickActionTarget = null
                     quickActionScope.launch {
                         delay(40)
-                        runCatching { quickActionReturnFocus?.requestFocus() }
+                        quickActionReturnFocus.requestFocusOrFallback(initialFocusRequester)
                     }
                 }
             )
@@ -232,8 +239,8 @@ private fun CastDetailContent(
         // Filmography
         val allCredits = remember(person) {
             (person.movieCredits + person.tvCredits)
-                .distinctBy { it.tmdbId }
-                .sortedByDescending { it.releaseInfo }
+                .distinctBy { it.identity.stableKey }
+                .sortedByDescending { it.year }
         }
 
         if (allCredits.isNotEmpty()) {
@@ -323,8 +330,8 @@ private fun HeroSection(person: TmdbPersonDetail, accentColor: Color, textColor:
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FilmographySection(
-    credits: List<TmdbMetaPreview>,
+internal fun FilmographySection(
+    credits: List<TitleCardProjection>,
     accentColor: Color,
     textColor: Color,
     onNavigateToDetails: (String, String, Int) -> Unit,
@@ -332,103 +339,135 @@ private fun FilmographySection(
     enrichmentViewModel: com.saab.tv.ui.home.HomeViewModel,
     restoreIndex: Int = -1,
     restoreFocusRequester: FocusRequester? = null,
-    initialFocusRequester: FocusRequester? = null
+    initialFocusRequester: FocusRequester? = null,
+    artworkPrefetchDispatcher: ArtworkPrefetchDispatcher? = null
 ) {
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val enrichedItems by remember(enrichmentViewModel) {
         enrichmentViewModel.state.map { it.enrichedMeta }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = emptyMap())
-    val density = LocalDensity.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val rowState = rememberLazyListState()
+    val artworkItems = remember(credits) { credits.map { it.asMetaItem() } }
+    val landscapeCards = LocalTitleCardShape.current == "landscape"
+    val focusFrame = com.saab.tv.ui.components.focusFrameSize(if (landscapeCards) 190.dp else 120.dp, landscapeCards)
+    val rowHasCardFocus = remember { mutableStateOf(false) }
+    val artworkDispatcher = remember(context, artworkPrefetchDispatcher) {
+        artworkPrefetchDispatcher ?: ArtworkPrefetchDispatcher.forCoil(context)
+    }
+    var focusedArtworkKey by remember { mutableStateOf<String?>(null) }
+    ArtworkPrefetchEffect(
+        items = artworkItems,
+        enrichedItems = enrichedItems,
+        listState = rowState,
+        focusedItemKey = focusedArtworkKey,
+        landscapeCards = landscapeCards,
+        dispatcher = artworkDispatcher,
+        posterSize = if (landscapeCards) null else androidx.compose.ui.unit.DpSize(120.dp, 180.dp),
+        onPrepareItem = { if (landscapeCards) enrichmentViewModel.ensureTmdbEnrichment(it) }
+    )
     val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L) }
     val startPad = 48.dp
-    val paddingPx = remember(density) { with(density) { startPad.toPx() } }
-    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val endPadding = (screenWidth - startPad - 120.dp).coerceAtLeast(120.dp)
+    var focusedIndex by remember(credits) { mutableIntStateOf(restoreIndex.coerceAtLeast(0)) }
 
-    val pivotSpec = remember(paddingPx) {
-        FocusPivotSpec(
-            customOffset = paddingPx,
-            stiffnessProvider = { Spring.StiffnessMediumLow }
-        )
-    }
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(start = 48.dp)
+    Column(
+        modifier = Modifier.fillMaxWidth().onFocusChanged {
+            if (!it.hasFocus) rowHasCardFocus.value = false
+        }
     ) {
-        Text(
-            text = "Filmography",
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = textColor.copy(alpha = 0.9f)
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = "${credits.size}",
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-            color = textColor.copy(alpha = 0.6f),
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(Color.White.copy(0.1f))
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-        )
-    }
-
-    Spacer(modifier = Modifier.height(12.dp))
-
-    CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-        LazyRow(
-            state = rememberLazyListState(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(start = startPad, end = endPadding)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 48.dp)
         ) {
-            itemsIndexed(credits, key = { i, it -> "${it.tmdbId}_$i" }) { index, item ->
-                Box(modifier = Modifier.onPreviewKeyEvent {
-                    if (repeatGate.shouldConsume(it)) return@onPreviewKeyEvent true
-                    if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) true else false
-                }) {
-                    FilmographyCard(
-                        item, accentColor, textColor, enrichmentViewModel, enrichedItems,
-                        modifier = when {
-                            restoreFocusRequester != null && index == restoreIndex -> Modifier.focusRequester(restoreFocusRequester)
-                            initialFocusRequester != null && index == 0 -> Modifier.focusRequester(initialFocusRequester)
-                            else -> Modifier
-                        },
-                        onClick = {
-                            val stremioType = if (item.type == "tv") "series" else item.type
-                            onNavigateToDetails(stremioType, "tmdb:${item.tmdbId}", index)
-                        },
-                        onLongClick = onQuickAction
-                    )
-                }
-            }
+            Text(
+                text = stringResource(R.string.cast_filmography),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = textColor.copy(alpha = 0.9f)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "${credits.size}",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                color = textColor.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.White.copy(0.1f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        com.saab.tv.ui.components.FocusShelf(
+            state = rowState,
+            focused = rowHasCardFocus,
+            width = focusFrame.width,
+            height = focusFrame.height,
+            startPadding = startPad,
+            focusedItemIndex = focusedIndex,
+            tag = "filmography-focus-indicator",
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+                    itemsIndexed(credits, key = { _, it -> it.presentationKey }) { index, item ->
+                        Box(modifier = Modifier.onPreviewKeyEvent {
+                            if (repeatGate.shouldConsume(it)) return@onPreviewKeyEvent true
+                            if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && index == 0) {
+                                handoffNavigationFocus(it, authorizeNavigationHandoff)
+                            } else false
+                        }) {
+                            FilmographyCard(
+                                item, accentColor, textColor, enrichmentViewModel, enrichedItems,
+                                modifier = when {
+                                    restoreFocusRequester != null && index == restoreIndex -> Modifier.focusRequester(restoreFocusRequester)
+                                    initialFocusRequester != null && index == 0 -> Modifier.focusRequester(initialFocusRequester)
+                                    else -> Modifier
+                                },
+                                onClick = {
+                                    onNavigateToDetails(item.kind.keyPart, item.sourceId, index)
+                                },
+                                onLongClick = onQuickAction,
+                                onFocused = {
+                                    focusedArtworkKey = artworkItems[index].canonicalPresentationKey()
+                                    focusedIndex = index
+                                    rowHasCardFocus.value = true
+                                }
+                            )
+                        }
+                    }
         }
     }
 }
 
 @Composable
 private fun FilmographyCard(
-    item: TmdbMetaPreview,
+    projection: TitleCardProjection,
     accentColor: Color,
     textColor: Color,
     enrichmentViewModel: com.saab.tv.ui.home.HomeViewModel,
     enrichedItems: Map<String, com.saab.tv.data.model.stremio.MetaItem>,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
-    onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit
+    onLongClick: (com.saab.tv.data.model.stremio.MetaItem, Rect) -> Unit,
+    onFocused: () -> Unit
 ) {
-    val meta = com.saab.tv.data.model.stremio.MetaItem(
-        id = "tmdb:${item.tmdbId}", type = if (item.type == "tv") "series" else item.type,
-        name = item.name, poster = item.poster, background = item.backdrop,
-        description = item.description, releaseInfo = item.releaseInfo)
-    val previewItem = enrichedItems["${meta.type}:${meta.id}"] ?: meta
+    val meta = remember(projection) { projection.asMetaItem() }
+    val previewItem = enrichedItems[meta.canonicalPresentationKey()] ?: meta
+    val cardProjection = remember(previewItem, projection) {
+        previewItem.toCanonicalProjection() ?: projection
+    }
     val landscapeCards = com.saab.tv.ui.components.LocalTitleCardShape.current == "landscape"
     LaunchedEffect(meta.type, meta.id, landscapeCards) {
         enrichmentViewModel.activeProfileId()?.let { enrichmentViewModel.ensureWatchedAlias(it, meta) }
-        if (landscapeCards) enrichmentViewModel.ensureTmdbEnrichment(meta)
     }
     com.saab.tv.ui.components.SaabTvCard(
-        title = item.name, posterUrl = item.poster, previewItem = previewItem,
+        title = projection.title,
+        posterUrl = projection.artwork(com.saab.tv.domain.schema.ArtworkRole.POSTER)?.locator,
+        previewItem = previewItem,
+        canonicalProjection = cardProjection,
         normalWidth = 120.dp, normalHeight = 180.dp,
+        showFocusOutline = false,
         modifier = modifier.titleTrailerFocus(meta), onClick = onClick,
+        onFocused = onFocused,
         onLongClick = { bounds -> onLongClick(meta, bounds) })
 
 }

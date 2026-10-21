@@ -13,6 +13,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import dagger.hilt.android.qualifiers.ApplicationContext
 import okhttp3.Cache
+import com.saab.tv.data.cache.InstallationCacheBudget
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -40,6 +41,10 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(@ApplicationContext context: Context): OkHttpClient {
+        val cacheBudget = InstallationCacheBudget.forContext(context)
+        val cacheScope = com.saab.tv.data.account.AccountStorage.scope(context)
+        val cacheRoot = context.cacheDir.resolve("http_metadata")
+        InstallationCacheBudget.pruneInactiveScopes(cacheRoot, cacheScope, cacheBudget.metadataHttpBytes)
         val dispatcher = Dispatcher().apply {
             maxRequests = 32
             maxRequestsPerHost = 8
@@ -80,7 +85,7 @@ object NetworkModule {
                     throw failure
                 }
             }
-            .cache(Cache(context.cacheDir.resolve("http_metadata/${com.saab.tv.data.account.AccountStorage.scope(context)}"), 50L * 1024L * 1024L))
+            .cache(Cache(cacheRoot.resolve(cacheScope), cacheBudget.metadataHttpBytes))
             .dispatcher(dispatcher)
             .retryOnConnectionFailure(true)
             .connectTimeout(15, TimeUnit.SECONDS)

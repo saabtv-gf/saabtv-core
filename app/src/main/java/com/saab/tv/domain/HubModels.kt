@@ -1,7 +1,7 @@
 package com.saab.tv.domain
 
 import androidx.compose.runtime.Immutable
-import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.schema.CatalogCardProjection
 
 /**
  * ============================================================================
@@ -59,10 +59,13 @@ data class CategoryRow(
     override val id: String,
     override val title: String,
     override val order: Int,
-    val items: List<MetaItem>,
+    val items: List<CatalogCardProjection>,
     val isInfiniteLoopEnabled: Boolean = false,
     val visibleItemCount: Int = 15,
-    val isInfiniteScrollingEnabled: Boolean = true
+    val isInfiniteScrollingEnabled: Boolean = true,
+    /** Opaque provider paging locator; consumed only by the repository pagination adapter. */
+    val catalogUrl: String = "",
+    val supportsSkip: Boolean = false
 ) : HomeRowItem {
     
     companion object {
@@ -74,10 +77,12 @@ data class CategoryRow(
                 id = homeRow.configId,
                 title = homeRow.title,
                 order = homeRow.order,
-                items = homeRow.items,
+                items = homeRow.items.map(CatalogCardProjection::from),
                 isInfiniteLoopEnabled = homeRow.isInfiniteLoopEnabled,
                 visibleItemCount = homeRow.visibleItemCount,
-                isInfiniteScrollingEnabled = homeRow.isInfiniteScrollingEnabled
+                isInfiniteScrollingEnabled = homeRow.isInfiniteScrollingEnabled,
+                catalogUrl = homeRow.catalogUrl,
+                supportsSkip = homeRow.supportsSkip
             )
         }
     }

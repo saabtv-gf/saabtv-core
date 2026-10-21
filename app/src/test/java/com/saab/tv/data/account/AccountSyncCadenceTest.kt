@@ -61,4 +61,32 @@ class AccountSyncCadenceTest {
         assertFalse(cadence.beginAttempt(419_999, true))
         assertTrue(cadence.beginAttempt(420_000, true))
     }
+
+    @Test fun rateLimitSurvivesNewEditsUrgentBoundariesAndManualRetries() {
+        val cadence = AccountSyncCadence(0)
+        cadence.rateLimited(1_000, 60_000)
+        cadence.markDirty(2_000)
+        cadence.markDirty(3_000, urgent = true)
+        cadence.markDirty(4_000, progressOnly = true)
+        assertEquals(57_000L, cadence.waitMs(4_000))
+        assertFalse(cadence.beginAttempt(60_999, automatic = true))
+        assertFalse(cadence.beginAttempt(60_999, automatic = false))
+        assertTrue(cadence.beginAttempt(61_000, automatic = true))
+        assertNull(cadence.waitMs(61_000))
+        cadence.markDirty(62_000)
+        assertEquals(2_000L, cadence.waitMs(62_000))
+    }
+
+    @Test fun rateLimitSurvivesGenericRetryAndDeferredEvents() {
+        val cadence = AccountSyncCadence(0)
+        cadence.rateLimited(0, 60_000)
+        cadence.retryAt(1_000, 15_000)
+        assertEquals(59_000L, cadence.waitMs(1_000))
+        cadence.deferUntilEvent(2_000)
+        cadence.markDirty(3_000, urgent = true)
+        assertEquals(57_000L, cadence.waitMs(3_000))
+        cadence.rateLimited(4_000, 60_000)
+        assertFalse(cadence.beginAttempt(63_999, automatic = false))
+        assertTrue(cadence.beginAttempt(64_000, automatic = false))
+    }
 }

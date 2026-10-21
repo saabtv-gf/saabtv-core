@@ -11,6 +11,13 @@ import com.saab.tv.data.model.ThemeEntity
 import com.saab.tv.data.model.SeriesNextUpEntity
 import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.model.WatchlistEntity
+import com.saab.tv.data.model.CanonicalTitleEntity
+import com.saab.tv.data.model.CanonicalIdentityAliasEntity
+import com.saab.tv.data.model.CanonicalEpisodeEntity
+import com.saab.tv.data.model.CanonicalEpisodeListEntity
+import com.saab.tv.data.model.SyncOutboxEntity
+import com.saab.tv.data.model.SyncEntityRevisionEntity
+import com.saab.tv.data.model.SyncClientStateEntity
 
 
 @Database(
@@ -23,10 +30,19 @@ import com.saab.tv.data.model.WatchlistEntity
         HubRowEntity::class,
         HubRowItemEntity::class,
         WatchlistEntity::class,
-        SeriesNextUpEntity::class
+        SeriesNextUpEntity::class,
+        CanonicalTitleEntity::class,
+        CanonicalIdentityAliasEntity::class,
+        CanonicalEpisodeEntity::class,
+        CanonicalEpisodeListEntity::class,
+        SyncOutboxEntity::class,
+        SyncEntityRevisionEntity::class,
+        SyncClientStateEntity::class
     ],
-    version = 54
+    version = 66
 )
 abstract class SaabTvDatabase : RoomDatabase() {
     abstract fun addonDao(): AddonDao
+    abstract fun canonicalMetadataDao(): CanonicalMetadataDao
+    abstract fun syncOutboxDao(): SyncOutboxDao
 }

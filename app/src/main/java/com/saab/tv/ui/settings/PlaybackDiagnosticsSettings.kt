@@ -43,7 +43,17 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.nativeKeyCode
+import com.saab.tv.ui.components.scrollToItemUsingSaabMotion
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -53,8 +63,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.saab.tv.data.player.PlaybackDiagnosticReport
 import com.saab.tv.data.player.PlaybackDiagnostics
+import com.saab.tv.R
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -71,6 +81,9 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
     val listState = rememberLazyListState()
     var refreshToken by remember { mutableIntStateOf(0) }
     var report by remember { mutableStateOf<PlaybackDiagnosticReport?>(null) }
+    var reportLoading by remember { mutableStateOf(true) }
+    var reportLoadFailed by remember { mutableStateOf(false) }
+    var actionBusy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var diagnosticsEnabled by remember {
         mutableStateOf(PlaybackDiagnostics.isEnabled(context))
@@ -78,17 +91,46 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
     var basicEnabled by remember { mutableStateOf(com.saab.tv.AppDiagnostics.isBasicEnabled(context)) }
 
     LaunchedEffect(refreshToken) {
-        while (true) {
+        reportLoading = true
+        reportLoadFailed = false
+        try {
             report = withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.report(context) }
-            delay(5_000L)
+            if (refreshToken > 0) status = context.getString(R.string.common_updated)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            report = null
+            reportLoadFailed = true
+            status = context.getString(R.string.diagnostics_load_failed)
+            com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Report Load Failed", failure)
+        } finally {
+            reportLoading = false
         }
     }
 
     val currentReport = report
+    // The header and log rows live in a lazy list. A directional FocusRequester
+    // cannot point across that boundary: the off-screen target may be detached.
+    fun focusListItem(index: Int, requester: FocusRequester) {
+        scope.launch {
+            try {
+                listState.scrollToItem(index)
+                withFrameNanos { }
+                if (listState.layoutInfo.visibleItemsInfo.any { it.index == index }) {
+                    requester.requestFocus()
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: IllegalStateException) {
+                com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Focus Target Unavailable", failure)
+            }
+        }
+    }
     val eventKeys = remember(currentReport?.events) {
         val occurrences = mutableMapOf<String, Int>()
         currentReport?.events.orEmpty().map { item ->
-            val base = "${item.timestampMs}-${item.component}-${item.event}-${item.details.hashCode()}"
+            val base = if (item.component == "Cloud Sync" && item.event == "Transfer Summary") "cloud-transfer-summary"
+                else "${item.timestampMs}-${item.component}-${item.event}-${item.details.hashCode()}"
             val occurrence = occurrences.getOrDefault(base, 0)
             occurrences[base] = occurrence + 1
             "$base-$occurrence"
@@ -105,26 +147,10 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             Column(modifier = Modifier.fillMaxWidth()) {
         val canFocusEvents = currentReport?.events?.isNotEmpty() == true
         val focusFirstEvent: (() -> Unit)? = if (canFocusEvents) {
-            {
-                scope.launch {
-                    try {
-                        // Lazy rows are detached when off-screen. Compose the target before focusing it.
-                        listState.scrollToItem(1)
-                        withFrameNanos { }
-                        if (listState.layoutInfo.visibleItemsInfo.any { it.index == 1 }) {
-                            firstEventRequester.requestFocus()
-                        }
-                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                        throw cancelled
-                    } catch (failure: IllegalStateException) {
-                        com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Focus Target Unavailable", failure)
-                    }
-                }
-                Unit
-            }
+            { focusListItem(1, firstEventRequester) }
         } else null
         Text(
-            "App Diagnostics",
+            stringResource(R.string.settings_section_diagnostics),
             style = MaterialTheme.typography.titleMedium.copy(
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 20.sp
@@ -132,7 +158,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             color = androidx.compose.ui.graphics.Color.White
         )
         Text(
-            "Caught request failures are not crash reports. Look for Uncaught Exception or abnormal process exits. No passwords, tokens or request bodies are recorded.",
+            stringResource(R.string.diagnostics_privacy_summary),
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f),
             modifier = Modifier.padding(top = 4.dp)
@@ -141,8 +167,8 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
         Spacer(Modifier.height(16.dp))
 
         SettingToggleRow(
-            label = "Basic Logging",
-            subtitle = "Off by default. Records app activity, trailer quality summaries and handled failures when enabled.",
+            label = stringResource(R.string.diagnostics_basic_logging),
+            subtitle = stringResource(R.string.diagnostics_basic_description),
             isChecked = basicEnabled,
             onCheckedChange = { basicEnabled = it; com.saab.tv.AppDiagnostics.setBasicEnabled(context, it) },
             onBack = onGoBack, blockUp = true,
@@ -150,11 +176,11 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
         )
         Spacer(Modifier.height(8.dp))
         SettingToggleRow(
-            label = "Detailed Logging",
+            label = stringResource(R.string.diagnostics_detailed_logging),
             subtitle = if (diagnosticsEnabled) {
-                "Recording is enabled. Disable it after troubleshooting for maximum performance."
+                stringResource(R.string.diagnostics_recording_enabled)
             } else {
-                "Off by default. Adds network, rendition, decoder and playback-state details. Actual crashes, ANRs and abnormal process exits are always captured; handled failures are opt-in."
+                stringResource(R.string.diagnostics_detailed_description)
             },
             isChecked = diagnosticsEnabled,
             onCheckedChange = { enabled ->
@@ -162,9 +188,9 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
                 diagnosticsEnabled = enabled
                 com.saab.tv.AppDiagnostics.event(context, "Diagnostics", "Logging Changed", "enabled=$enabled", true)
                 status = if (enabled) {
-                    "App logging enabled now. Start a new video for detailed playback logging."
+                    context.getString(R.string.diagnostics_enabled_status)
                 } else {
-                    "Diagnostic logging disabled. Existing reports were kept."
+                    context.getString(R.string.diagnostics_disabled_status)
                 }
             },
             onBack = onGoBack,
@@ -175,56 +201,94 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             DiagnosticsButton(
-                label = "Refresh",
+                label = stringResource(R.string.common_refresh),
+                enabled = !actionBusy,
                 modifier = Modifier.focusRequester(firstButtonRequester).focusProperties { up = detailedRequester; right = exportRequester },
                 onLeft = onGoBack,
                 onDown = focusFirstEvent
             ) {
+                status = context.getString(R.string.diagnostics_loading)
                 refreshToken++
-                status = "Updated"
             }
             DiagnosticsButton(
-                label = "Export Report",
+                label = stringResource(R.string.diagnostics_export_report),
+                enabled = !actionBusy,
                 modifier = Modifier.focusRequester(exportRequester).focusProperties { left = firstButtonRequester; right = clearRequester; up = detailedRequester },
                 onDown = focusFirstEvent
             ) {
                 scope.launch {
-                    val file = withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.export(context) }
-                    if (file == null) {
-                        status = "Could not create the app report. Check available storage."
-                    } else {
-                        runCatching {
-                        val uri = FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            file
-                        )
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    if (actionBusy) return@launch
+                    actionBusy = true
+                    status = context.getString(R.string.diagnostics_export_preparing)
+                    try {
+                        val file = try {
+                            withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.export(context) }
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Export Create Failed", failure)
+                            null
                         }
-                            context.startActivity(
-                                Intent.createChooser(intent, "Export App Diagnostics")
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                        }.onFailure {
-                            com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Export Failed", it)
-                            status = "Could not share the report. Check for a compatible export app."
+                        if (file == null) {
+                            status = context.getString(R.string.diagnostics_export_create_failed)
+                        } else {
+                            try {
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file
+                                )
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(intent, context.getString(R.string.diagnostics_export_chooser))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                                status = context.getString(R.string.diagnostics_export_ready)
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (failure: Exception) {
+                                com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Export Share Failed", failure)
+                                status = context.getString(R.string.diagnostics_export_share_failed)
+                            }
                         }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Export Failed", failure)
+                        status = context.getString(R.string.diagnostics_export_create_failed)
+                    } finally {
+                        actionBusy = false
                     }
                 }
             }
             DiagnosticsButton(
-                label = "Clear Logs",
+                label = stringResource(R.string.diagnostics_clear_logs),
+                enabled = !actionBusy,
                 modifier = Modifier.focusRequester(clearRequester).focusProperties { left = exportRequester; up = detailedRequester },
                 onDown = focusFirstEvent
             ) {
                 scope.launch {
-                    withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.clear(context) }
-                    report = null
-                    status = "App and playback logs cleared."
+                    if (actionBusy) return@launch
+                    actionBusy = true
+                    status = context.getString(R.string.diagnostics_clearing)
+                    try {
+                        withContext(Dispatchers.IO) { com.saab.tv.AppDiagnostics.clear(context) }
+                        report = null
+                        reportLoadFailed = false
+                        status = context.getString(R.string.diagnostics_cleared_status)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        com.saab.tv.AppDiagnostics.failure(context, "Diagnostics", "Clear Failed", failure)
+                        status = context.getString(R.string.diagnostics_clear_failed)
+                    } finally {
+                        actionBusy = false
+                    }
                 }
             }
         }
@@ -234,18 +298,30 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
                 status,
                 color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 10.dp)
+                modifier = Modifier.padding(top = 10.dp).semantics { liveRegion = LiveRegionMode.Polite }
             )
         }
 
         Spacer(Modifier.height(16.dp))
 
-        if (currentReport == null) {
+        if (reportLoading && currentReport == null) {
+            Text(
+                stringResource(R.string.diagnostics_loading),
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        } else if (reportLoadFailed) {
+            Text(
+                stringResource(R.string.diagnostics_load_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        } else if (currentReport == null) {
             Text(
                 if (diagnosticsEnabled) {
-                    "No app events have been recorded yet. Reproduce the issue, then return here."
+                    stringResource(R.string.diagnostics_no_events)
                 } else {
-                    "Diagnostic logging is off. Existing reports will remain available until cleared."
+                    stringResource(R.string.diagnostics_off_empty)
                 },
                 color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
                 style = MaterialTheme.typography.bodyMedium
@@ -259,8 +335,11 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                "Started ${PlaybackDiagnostics.formatTimestamp(currentReport.startedAtMs)}  •  " +
-                    "${currentReport.events.size} recent events",
+                stringResource(
+                    R.string.diagnostics_report_summary,
+                    PlaybackDiagnostics.formatTimestamp(currentReport.startedAtMs),
+                    currentReport.events.size
+                ),
                 color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.55f),
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 3.dp, bottom = 10.dp)
@@ -279,24 +358,47 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
                     item = item,
                     index = index,
                     modifier = if (index == 0) {
-                        Modifier.focusRequester(firstEventRequester).focusProperties { up = firstButtonRequester }
+                        Modifier.focusRequester(firstEventRequester)
                     } else {
                         Modifier
                     },
                     onFocused = {
-                        scope.launch { listState.animateScrollToItem(index + 1) }
+                        val itemIndex = index + 1
+                        val layout = listState.layoutInfo
+                        val visibleItem = layout.visibleItemsInfo.firstOrNull { it.index == itemIndex }
+                        if (shouldScrollDiagnosticItemIntoViewport(
+                                itemOffset = visibleItem?.offset,
+                                itemSize = visibleItem?.size,
+                                viewportStart = layout.viewportStartOffset,
+                                viewportEnd = layout.viewportEndOffset
+                            )
+                        ) {
+                            scope.launch { listState.scrollToItemUsingSaabMotion(itemIndex) }
+                        }
                     },
-                    onLeft = onGoBack
+                    onLeft = onGoBack,
+                    onUp = if (index == 0) ({ focusListItem(0, firstButtonRequester) }) else null
                 )
             }
         }
     }
 }
 
+internal fun shouldScrollDiagnosticItemIntoViewport(
+    itemOffset: Int?,
+    itemSize: Int?,
+    viewportStart: Int,
+    viewportEnd: Int
+): Boolean {
+    if (itemOffset == null || itemSize == null || itemSize <= 0) return true
+    return itemOffset < viewportStart || itemOffset + itemSize > viewportEnd
+}
+
 @Composable
 private fun DiagnosticsButton(
     label: String,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onLeft: (() -> Unit)? = null,
     onDown: (() -> Unit)? = null,
     onClick: () -> Unit
@@ -304,6 +406,7 @@ private fun DiagnosticsButton(
     com.saab.tv.ui.components.SetupButton(
         text = label,
         onClick = onClick,
+        enabled = enabled,
         compact = true,
         modifier = modifier
             .onPreviewKeyEvent {
@@ -326,10 +429,15 @@ private fun DiagnosticEventCard(
     index: Int,
     modifier: Modifier = Modifier,
     onFocused: () -> Unit,
-    onLeft: () -> Unit
+    onLeft: () -> Unit,
+    onUp: (() -> Unit)? = null
 ) {
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val context = LocalContext.current
+    var expanded by remember(item.timestampMs, item.component, item.event, item.details.hashCode()) {
+        mutableStateOf(false)
+    }
     val accent = MaterialTheme.colorScheme.primary
 
     LaunchedEffect(focused) {
@@ -341,7 +449,11 @@ private fun DiagnosticEventCard(
             .fillMaxWidth()
             .onPreviewKeyEvent {
                 if (isDiagnosticActivationKey(it.key.nativeKeyCode)) {
-                    // Read-only log rows have no child/action to enter. Consume down AND up.
+                    // Keep focus on the row while making long stack traces explicitly expandable.
+                    if (it.type == KeyEventType.KeyDown && item.details.isNotBlank()) expanded = !expanded
+                    true
+                } else if (onUp != null && it.key == Key.DirectionUp) {
+                    if (it.type == KeyEventType.KeyDown) onUp()
                     true
                 } else if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
                     onLeft()
@@ -361,6 +473,31 @@ private fun DiagnosticEventCard(
                 shape = RoundedCornerShape(8.dp)
             )
             .focusable(interactionSource = interaction)
+            .semantics(mergeDescendants = true) {
+                if (item.details.isNotBlank()) {
+                    role = Role.Button
+                    stateDescription = if (expanded) {
+                        context.getString(R.string.diagnostics_details_expanded)
+                    } else {
+                        context.getString(R.string.diagnostics_details_collapsed)
+                    }
+                    onClick(label = context.getString(
+                        if (expanded) R.string.diagnostics_details_expanded
+                        else R.string.diagnostics_details_collapsed
+                    )) {
+                        expanded = !expanded
+                        true
+                    }
+                }
+                contentDescription = buildString {
+                    append("${index + 1}. ${PlaybackDiagnostics.formatTimestamp(item.timestampMs)}. ")
+                    append("${item.component}: ${item.event}.")
+                    if (item.details.isNotBlank()) {
+                        append(" ${item.details.take(if (expanded) 2_000 else 240)}")
+                    }
+                }
+            }
+            .testTag("diagnostic-event-$index")
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Row(
@@ -369,14 +506,14 @@ private fun DiagnosticEventCard(
         ) {
             Text(
                 "#${index + 1}",
-                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.38f),
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp
             )
             Spacer(Modifier.width(8.dp))
             Text(
                 PlaybackDiagnostics.formatTimestamp(item.timestampMs).substringAfter(' '),
-                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.48f),
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp
             )
@@ -398,10 +535,12 @@ private fun DiagnosticEventCard(
         if (item.details.isNotBlank()) {
             Text(
                 item.details,
-                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.67f),
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 lineHeight = 15.sp,
+                maxLines = if (expanded) Int.MAX_VALUE else 10,
+                overflow = if (expanded) TextOverflow.Clip else TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 4.dp)
             )
         }

@@ -22,7 +22,7 @@ class ThemeManagerRegressionTest {
     private lateinit var vm: ThemeManager
     @Before fun setup() {
         app = OfflineAppFixture(RuntimeEnvironment.getApplication())
-        vm = ThemeManager(app.dao)
+        vm = ThemeManager(app.dao, app.userStateCommands)
         awaitAppState { runBlocking { app.dao.getThemeById(DefaultThemes.VOID.id) != null } }
     }
     @After fun cleanup() { vm.viewModelScope.cancel(); app.close() }
@@ -39,11 +39,12 @@ class ThemeManagerRegressionTest {
     }
     @Test fun selectsThemeOnlyForRequestedProfile() = runBlocking {
         app.dao.insertProfile(ProfileEntity(id = 1, name = "One"))
-        app.dao.insertProfile(ProfileEntity(id = 2, name = "Two"))
+        val secondProfile = ProfileEntity(id = 2, name = "Two")
+        app.dao.insertProfile(secondProfile)
         val chosen = DefaultThemes.ALL.last()
         vm.selectTheme(1, chosen.id)
         awaitAppState { runBlocking { app.dao.getProfileById(1)?.themeId == chosen.id } }
-        assertEquals(ProfileEntity(id = 2, name = "Two"), app.dao.getProfileById(2))
+        assertEquals(secondProfile, app.dao.getProfileById(2))
     }
     @Test fun activeProfileThemeChangesImmediatelyAfterPersistence() {
         runBlocking { app.dao.insertProfile(ProfileEntity(id = 1, name = "One")) }

@@ -22,22 +22,21 @@ class PlaybackTrackSelectionStore @Inject constructor(
 
     fun getSelection(playbackId: String): Selection? {
         val scopedId = canonicalPlaybackId(playbackId) ?: return null
-        val audioTrackId = prefs.getString(audioKey(scopedId), null)
+        val audioTrackId = readString(audioKey(scopedId), legacyAudioKey(scopedId))
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
         // Older builds persisted whichever subtitle auto-selection happened to
         // win first (often OpenSubtitles). Only restore selections explicitly
         // made by the user in the player.
-        val subtitleTrackId = if (prefs.getBoolean(subtitleExplicitKey(scopedId), false)) {
-            prefs.getString(subtitleKey(scopedId), null)
+        val subtitleTrackId = if (readBoolean(
+                subtitleExplicitKey(scopedId), legacySubtitleExplicitKey(scopedId), false
+            )
+        ) {
+            readString(subtitleKey(scopedId), legacySubtitleKey(scopedId))
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
         } else null
-        val subtitleDelay = if (prefs.contains(subtitleDelayKey(scopedId))) {
-            prefs.getLong(subtitleDelayKey(scopedId), 0L)
-        } else {
-            null
-        }
+        val subtitleDelay = readLongOrNull(subtitleDelayKey(scopedId), legacySubtitleDelayKey(scopedId))
         if (audioTrackId == null && subtitleTrackId == null && subtitleDelay == null) return null
         return Selection(
             audioTrackId = audioTrackId,
@@ -63,6 +62,7 @@ class PlaybackTrackSelectionStore @Inject constructor(
                 val normalizedAudio = audioTrackId?.trim()?.takeIf { it.isNotEmpty() }
                 if (normalizedAudio == null) {
                     remove(audioKey(scopedId))
+                    remove(legacyAudioKey(scopedId))
                 } else {
                     putString(audioKey(scopedId), normalizedAudio)
                 }
@@ -71,7 +71,9 @@ class PlaybackTrackSelectionStore @Inject constructor(
                 val normalizedSubtitle = subtitleTrackId?.trim()?.takeIf { it.isNotEmpty() }
                 if (normalizedSubtitle == null) {
                     remove(subtitleKey(scopedId))
+                    remove(legacySubtitleKey(scopedId))
                     remove(subtitleExplicitKey(scopedId))
+                    remove(legacySubtitleExplicitKey(scopedId))
                 } else {
                     putString(subtitleKey(scopedId), normalizedSubtitle)
                     putBoolean(subtitleExplicitKey(scopedId), true)
@@ -81,6 +83,7 @@ class PlaybackTrackSelectionStore @Inject constructor(
                 val delay = subtitleDelayMs
                 if (delay == null || delay == 0L) {
                     remove(subtitleDelayKey(scopedId))
+                    remove(legacySubtitleDelayKey(scopedId))
                 } else {
                     putLong(subtitleDelayKey(scopedId), delay)
                 }
@@ -92,20 +95,26 @@ class PlaybackTrackSelectionStore @Inject constructor(
         val scopedId = canonicalPlaybackId(playbackId) ?: return
         prefs.edit()
             .remove(audioKey(scopedId))
+            .remove(legacyAudioKey(scopedId))
             .remove(subtitleKey(scopedId))
+            .remove(legacySubtitleKey(scopedId))
             .remove(subtitleExplicitKey(scopedId))
+            .remove(legacySubtitleExplicitKey(scopedId))
             .remove(subtitleDelayKey(scopedId))
+            .remove(legacySubtitleDelayKey(scopedId))
             .apply()
     }
 
     fun clearSelectionsForPrefix(prefix: String) {
         val editor = prefs.edit()
-        val profilePrefix = "p${activeProfileId()}_"
+        val profilePrefixes = profilePrefixes()
         prefs.all.keys.forEach { key ->
-            if (key.startsWith("${KEY_AUDIO_PREFIX}$profilePrefix$prefix") ||
-                key.startsWith("${KEY_SUBTITLE_PREFIX}$profilePrefix$prefix") ||
-                key.startsWith("${KEY_SUBTITLE_EXPLICIT_PREFIX}$profilePrefix$prefix") ||
-                key.startsWith("${KEY_SUBTITLE_DELAY_PREFIX}$profilePrefix$prefix")
+            if (profilePrefixes.any { profilePrefix ->
+                    key.startsWith("${KEY_AUDIO_PREFIX}$profilePrefix$prefix") ||
+                        key.startsWith("${KEY_SUBTITLE_PREFIX}$profilePrefix$prefix") ||
+                        key.startsWith("${KEY_SUBTITLE_EXPLICIT_PREFIX}$profilePrefix$prefix") ||
+                        key.startsWith("${KEY_SUBTITLE_DELAY_PREFIX}$profilePrefix$prefix")
+                }
             ) {
                 editor.remove(key)
             }
@@ -117,16 +126,54 @@ class PlaybackTrackSelectionStore @Inject constructor(
         return playbackId.trim().takeIf { it.isNotEmpty() }
     }
 
-    private fun audioKey(scopedId: String): String = "${KEY_AUDIO_PREFIX}p${activeProfileId()}_$scopedId"
+    private fun audioKey(scopedId: String): String = "${KEY_AUDIO_PREFIX}${activeProfilePrefix()}$scopedId"
+    private fun legacyAudioKey(scopedId: String): String = "${KEY_AUDIO_PREFIX}${legacyProfilePrefix()}$scopedId"
 
-    private fun subtitleKey(scopedId: String): String = "${KEY_SUBTITLE_PREFIX}p${activeProfileId()}_$scopedId"
+    private fun subtitleKey(scopedId: String): String = "${KEY_SUBTITLE_PREFIX}${activeProfilePrefix()}$scopedId"
+    private fun legacySubtitleKey(scopedId: String): String = "${KEY_SUBTITLE_PREFIX}${legacyProfilePrefix()}$scopedId"
 
     private fun subtitleExplicitKey(scopedId: String): String =
-        "${KEY_SUBTITLE_EXPLICIT_PREFIX}p${activeProfileId()}_$scopedId"
+        "${KEY_SUBTITLE_EXPLICIT_PREFIX}${activeProfilePrefix()}$scopedId"
+    private fun legacySubtitleExplicitKey(scopedId: String): String =
+        "${KEY_SUBTITLE_EXPLICIT_PREFIX}${legacyProfilePrefix()}$scopedId"
 
-    private fun subtitleDelayKey(scopedId: String): String = "${KEY_SUBTITLE_DELAY_PREFIX}p${activeProfileId()}_$scopedId"
+    private fun subtitleDelayKey(scopedId: String): String = "${KEY_SUBTITLE_DELAY_PREFIX}${activeProfilePrefix()}$scopedId"
+    private fun legacySubtitleDelayKey(scopedId: String): String =
+        "${KEY_SUBTITLE_DELAY_PREFIX}${legacyProfilePrefix()}$scopedId"
 
-    private fun activeProfileId(): Int = profileConfigurationManager.getLastActiveProfileId() ?: 1
+    /** Use portable IDs for account sync: Room integer profile IDs are device-local. */
+    private fun activeProfilePrefix(): String = profileConfigurationManager.getLastActivePortableProfileId()
+        ?.let { "u${it}_" } ?: legacyProfilePrefix()
+
+    /** Legacy namespace retained only for reading/migrating pre-portable-key selections. */
+    private fun legacyProfilePrefix(): String = profileConfigurationManager.getLastActiveProfileId()
+        ?.let { "p${it}_" } ?: "pnone_"
+
+    private fun profilePrefixes(): Set<String> = setOf(activeProfilePrefix(), legacyProfilePrefix())
+
+    private fun readString(currentKey: String, legacyKey: String): String? {
+        prefs.getString(currentKey, null)?.let { return it }
+        if (currentKey == legacyKey) return null
+        val legacy = prefs.getString(legacyKey, null) ?: return null
+        prefs.edit().putString(currentKey, legacy).remove(legacyKey).apply()
+        return legacy
+    }
+
+    private fun readBoolean(currentKey: String, legacyKey: String, default: Boolean): Boolean {
+        if (prefs.contains(currentKey)) return prefs.getBoolean(currentKey, default)
+        if (currentKey == legacyKey || !prefs.contains(legacyKey)) return default
+        val legacy = prefs.getBoolean(legacyKey, default)
+        prefs.edit().putBoolean(currentKey, legacy).remove(legacyKey).apply()
+        return legacy
+    }
+
+    private fun readLongOrNull(currentKey: String, legacyKey: String): Long? {
+        if (prefs.contains(currentKey)) return prefs.getLong(currentKey, 0L)
+        if (currentKey == legacyKey || !prefs.contains(legacyKey)) return null
+        val legacy = prefs.getLong(legacyKey, 0L)
+        prefs.edit().putLong(currentKey, legacy).remove(legacyKey).apply()
+        return legacy
+    }
 
     companion object {
         private const val PREFS_FILE = "playback_track_selection_prefs"

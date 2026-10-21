@@ -13,10 +13,10 @@ class SaabTvLandscapeArtworkTest {
         assertNull(landscapeArtworkUrl("  "))
     }
 
-    @Test fun missingLandscapeArtworkUsesInitialsEvenWhenPortraitPosterExists() {
-        assertTrue(shouldShowLandscapeInitialArtwork(null))
-        assertTrue(shouldShowLandscapeInitialArtwork("  "))
-        assertTrue(shouldShowLandscapeInitialArtwork("backdrop.jpg", loadFailed = true))
-        assertFalse(shouldShowLandscapeInitialArtwork("backdrop.jpg"))
+    @Test fun landscapeLogoFallbackWaitsForMissingOrFailedArtwork() {
+        assertFalse(shouldShowArtworkFallback(hasDisplayedArtwork = false, hasArtworkModel = true))
+        assertTrue(shouldShowArtworkFallback(hasDisplayedArtwork = false, hasArtworkModel = false))
+        assertTrue(shouldShowArtworkFallback(hasDisplayedArtwork = false, hasArtworkModel = true, requestFailed = true))
+        assertFalse(shouldShowArtworkFallback(hasDisplayedArtwork = true))
     }
 }

@@ -30,6 +30,16 @@ class AppDiagnosticsP1Test {
         val export=AppDiagnostics.export(context)!!
         assertTrue(export.readText().contains("Saved"));assertFalse(export.readText().contains("supersecretfixture"))
     }
+    @Test fun exportedEventUsesOneComponentColumnAndPreservesEventName() {
+        AppDiagnostics.setBasicEnabled(context, true)
+        AppDiagnostics.event(context, "Updater", "Download Started", "attempt=1")
+        awaitAppState { AppDiagnostics.report(context).events.any { it.event == "Download Started" } }
+
+        val exportText = AppDiagnostics.export(context)!!.readText()
+        val eventLine = exportText.lineSequence().first { it.contains("Download Started") }
+        assertTrue(eventLine.contains("Updater Download Started"))
+        assertFalse(eventLine.contains("Updater Updater"))
+    }
     @Test fun cancellationIsNotRecordedAsFailure() {
         AppDiagnostics.setBasicEnabled(context,true)
         AppDiagnostics.failure(context,"Fixture","Cancelled",kotlinx.coroutines.CancellationException("normal"))
@@ -40,5 +50,16 @@ class AppDiagnosticsP1Test {
         assertEquals(3,AppDiagnostics.report(context,3).events.size)
         AppDiagnostics.clear(context)
         assertFalse(AppDiagnostics.report(context).events.any {it.event=="Uncaught Exception"})
+    }
+
+    @Test fun oversizedEventLabelsAreBoundedBeforePersistenceAndExport() {
+        AppDiagnostics.setBasicEnabled(context,true)
+        AppDiagnostics.event(context, "c".repeat(1_000), "e".repeat(1_000), "bounded")
+
+        awaitAppState { AppDiagnostics.report(context).events.any { it.details == "bounded" } }
+        val item = AppDiagnostics.report(context).events.first { it.details == "bounded" }
+        assertTrue(item.component.length <= 120)
+        assertTrue(item.event.length <= 160)
+        assertTrue(AppDiagnostics.export(context)!!.length() <= DiagnosticStorageBudget.MAX_EXPORT_BYTES)
     }
 }

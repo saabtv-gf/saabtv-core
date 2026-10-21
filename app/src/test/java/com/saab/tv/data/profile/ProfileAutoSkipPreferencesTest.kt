@@ -35,4 +35,29 @@ class ProfileAutoSkipPreferencesTest {
     @Test fun invalidValuesTurnOffInsteadOfTriggeringAnUnexpectedSkip() {
         assertEquals(0, ProfileEntity(name = "Test").withAutoSkipCountdown(30).autoSkipCountdownSeconds)
     }
+
+    @Test fun legacyMirrorsAreAlwaysDerivedFromTheCanonicalSeekAndIntroSettings() {
+        val tenSecondProfile = ProfileEntity(
+            name = "Ten seconds",
+            seekTimeIntervalSeconds = 20,
+            seekThumbnailIntervalSeconds = 30,
+            autoSkipIntro = true,
+            introSkipCountdownSeconds = 10,
+            outroSkipCountdownSeconds = 5
+        ).withCanonicalSharedPreferences()
+        assertEquals(20, tenSecondProfile.seekThumbnailIntervalSeconds)
+        assertEquals(10, tenSecondProfile.outroSkipCountdownSeconds)
+
+        val fallbackCountdownProfile = ProfileEntity(
+            name = "Fallback countdown",
+            autoSkipIntro = true,
+            introSkipCountdownSeconds = 0,
+            outroSkipCountdownSeconds = 10
+        ).withCanonicalSharedPreferences()
+        assertEquals(5, fallbackCountdownProfile.outroSkipCountdownSeconds)
+
+        val disabledProfile = fallbackCountdownProfile.copy(autoSkipIntro = false)
+            .withCanonicalSharedPreferences()
+        assertEquals(0, disabledProfile.outroSkipCountdownSeconds)
+    }
 }

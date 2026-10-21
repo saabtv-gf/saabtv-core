@@ -1,8 +1,8 @@
 package com.saab.tv.ui.home
 
-import androidx.compose.animation.core.Spring
+import com.saab.tv.ui.components.FocusPivotSpec
+
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,16 +11,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -31,21 +31,20 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.saab.tv.domain.HubGroupRow
 import com.saab.tv.domain.HubItem
-import kotlinx.coroutines.delay
-
-private class HubKeyRepeatDebouncer {
-    var lastTime: Long = 0L
-}
+import com.saab.tv.ui.components.FocusShelf
+import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
+import com.saab.tv.ui.navigation.handoffNavigationFocus
+import com.saab.tv.ui.theme.LocalHubRoundCorners
 
 /**
  * ============================================================================
@@ -77,60 +76,37 @@ fun HubRow(
     isFirstRow: Boolean = false,
     isLastRow: Boolean = false,
     externalListState: androidx.compose.foundation.lazy.LazyListState? = null,
-    upKeyDebouncer: UpKeyDebouncer,
     repeatGate: DpadRepeatGate,
     pivotFocusRequester: FocusRequester? = null,
     isGlobalFocusPresent: Boolean = false
 ) {
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val density = LocalDensity.current
     val paddingPx = remember(density, startPadding) { with(density) { startPadding.toPx() } }
 
     // Use external state if provided, otherwise create local state
     val internalListState = rememberLazyListState()
     val listState = externalListState ?: internalListState
+    val cardWidth = hubCardWidth(hubGroup.shape)
+    val cardHeight = cardWidth / hubGroup.shape.aspectRatio
+    val rowHasCardFocus = remember(listState) { mutableStateOf(false) }
+    var focusedItemIndex by remember(listState) { mutableIntStateOf(0) }
     
     // Detect if this is a restoration (coming back from details screen)
     val isRestoration = remember(locallyFocusedItemId, rowIndex, externalListState) {
         locallyFocusedItemId != null && externalListState != null
     }
     
-    // Skip scroll flag - true during restoration, resets after focus is established
-    var skipBringIntoViewScroll by remember { mutableStateOf(isRestoration) }
+    // Match catalog shelves: preserve the restored position until the user moves
+    // with the D-pad, then let the shared bring-into-view motion own scrolling.
+    var skipBringIntoViewScroll by remember(isRestoration) { mutableStateOf(isRestoration) }
     
-    // Reset skip flag after restoration is complete (focus is established)
-    LaunchedEffect(isRestoration) {
-        if (isRestoration) {
-            delay(300)
-            skipBringIntoViewScroll = false
-        }
-    }
-    
-    // Create pivot spec with skip provider and dynamic stiffness
-    val pivotSpec = remember(paddingPx) { 
+    // Use the shared no-bounce spring; only the hub's leading anchor differs.
+    val pivotSpec = remember(paddingPx, isRestoration) {
         FocusPivotSpec(
             customOffset = paddingPx,
-            skipScrollProvider = { skipBringIntoViewScroll },
-            stiffnessProvider = { Spring.StiffnessMediumLow }
+            skipScrollProvider = { skipBringIntoViewScroll }
         ) 
-    }
-    
-    // Debounce navbar escape: track last LEFT key time to prevent escape during long-press
-    val leftKeyDebouncer = remember { HubKeyRepeatDebouncer() }
-    val navbarEscapeDebounceMs = 300L
-
-    // Calculate end padding to allow last item to align to left (pivot position)
-    // End padding = Screen Width - Start Padding - Item Width based on shape
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val screenWidth = configuration.screenWidthDp.dp
-    
-    val itemWidth = when (hubGroup.shape) {
-        com.saab.tv.domain.HubShape.HORIZONTAL -> 190.dp
-        com.saab.tv.domain.HubShape.VERTICAL -> 120.dp
-        com.saab.tv.domain.HubShape.SQUARE -> 140.dp
-    }
-    
-    val endPadding = remember(screenWidth, startPadding, itemWidth) {
-        (screenWidth - startPadding - itemWidth).coerceAtLeast(120.dp)
     }
     
     Column(
@@ -138,6 +114,7 @@ fun HubRow(
             .fillMaxWidth()
             .padding(bottom = 12.dp)
             .graphicsLayer { clip = false }
+            .onFocusChanged { if (!it.hasFocus) rowHasCardFocus.value = false }
     ) {
         // Row Title
         Text(
@@ -148,103 +125,84 @@ fun HubRow(
         )
         
         // Hub Cards Row
-        CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-            LazyRow(
-                state = listState,
-                contentPadding = PaddingValues(start = startPadding, end = endPadding),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer { clip = false }
-            ) {
-                itemsIndexed(
-                    items = hubGroup.items,
-                    key = { index, item -> "hub_${hubGroup.id}_${item.id}_$index" }
-                ) { index, hubItem ->
-                    val isFirstItem = index == 0
-                    val isLastItem = index == hubGroup.items.lastIndex
-                    val uniqueKey = "${hubGroup.id}_${index}"
-                    
-                    // Parse last focused key to check for match
-                    // Key format from HomeScreen: "hub_$uniqueKey" = "hub_${hubGroup.id}_${index}"
-                    // locallyFocusedItemId passed here should effectively be "hub_${hubGroup.id}_${index}" if matched in HomeScreen
-                    // BUT HomeScreen passes `wrappedOnFocusChange("hub_$focusKey")` where focusKey is "gid_index"
-                    
-                    val shouldRequestFocus = when {
-                        locallyFocusedItemId != null && locallyFocusedItemId.endsWith(uniqueKey) -> true
-                        !isGlobalFocusPresent && isFirstRow && isFirstItem -> true
-                        else -> false
-                    }
+        FocusShelf(
+            state = listState,
+            focused = rowHasCardFocus,
+            width = cardWidth,
+            height = cardHeight,
+            startPadding = startPadding,
+            focusedItemIndex = focusedItemIndex,
+            tag = "hub-row-focus-indicator",
+            rounded = LocalHubRoundCorners.current,
+            viewportHeight = cardHeight,
+            indicatorAlignment = Alignment.TopStart,
+            pivotSpec = pivotSpec,
+            contentPadding = PaddingValues(start = startPadding),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+            rowModifier = Modifier
+                .fillMaxWidth()
+                .height(cardHeight)
+                .focusGroup()
+                .graphicsLayer { clip = false }
+        ) {
+            itemsIndexed(
+                items = hubGroup.items,
+                key = { index, item -> "hub_${hubGroup.id}_${item.id}_$index" }
+            ) { index, hubItem ->
+                val isFirstItem = index == 0
+                val isLastItem = index == hubGroup.items.lastIndex
+                val uniqueKey = homeHubFocusKey(rowIndex, hubGroup.id, hubItem.id, index)
+                val shouldRequestFocus = locallyFocusedItemId == uniqueKey ||
+                    (!isGlobalFocusPresent && isFirstRow && isFirstItem)
+                val focusModifier = Modifier
+                    .then(if (shouldRequestFocus) Modifier.focusRequester(entryRequester) else Modifier)
+                    .then(
+                        if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) {
+                            Modifier.focusRequester(pivotFocusRequester)
+                        } else Modifier
+                    )
+                Box(
+                    modifier = Modifier
+                        .graphicsLayer { clip = false }
+                        .onPreviewKeyEvent { keyEvent ->
+                            if (repeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
+                            if (keyEvent.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
-                    // Modifier chaining for focus requesters
-                    // We attach entryRequester if this is the default focus target
-                    // We attach pivotFocusRequester if this is the current pivot item
-                    // An item can have BOTH if it's the first item of the first row
-                    val focusModifier = Modifier
-                        .then(if (shouldRequestFocus) Modifier.focusRequester(entryRequester) else Modifier)
-                        .then(if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester) else Modifier)
-
-                    Box(
-                        modifier = Modifier
-                            .graphicsLayer { clip = false }
-                            .onPreviewKeyEvent { keyEvent ->
-                                if (repeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
-                                if (keyEvent.type == KeyEventType.KeyDown) {
-                                    when {
-                                        keyEvent.key == Key.DirectionRight -> {
-                                            if (isTopNav && isLastItem) {
-                                                true // Block escape to top navbar from end of row
-                                            } else {
-                                                false
-                                            }
-                                        }
-                                        keyEvent.key == Key.DirectionLeft -> {
-                                            // Always update time on ANY left press for debounce tracking
-                                            val now = System.currentTimeMillis()
-                                            val timeSinceLastLeft = now - leftKeyDebouncer.lastTime
-                                            leftKeyDebouncer.lastTime = now
-                                            
-                                            if (isFirstItem) {
-                                                // Only escape to navbar if this is a deliberate press
-                                                if (!isTopNav && timeSinceLastLeft > navbarEscapeDebounceMs) {
-                                                    drawerRequester.requestFocus()
-                                                }
-                                                true // Consume at first item to prevent focus escaping
-                                            } else {
-                                                false
-                                            }
-                                        }
-                                        keyEvent.key == Key.DirectionUp -> {
-                                            if (isTopNav) {
-                                                val now = System.currentTimeMillis()
-                                                val timeSinceLastUp = now - upKeyDebouncer.lastTime
-                                                upKeyDebouncer.lastTime = now
-
-                                                if (isFirstRow) { // Strict check: isFirstRow
-                                                    if (timeSinceLastUp > 300L) {
-                                                        drawerRequester.requestFocus()
-                                                    }
-                                                    true
-                                                } else {
-                                                    false
-                                                }
-                                            } else false
-                                        }
-                                        else -> false
-                                    }
-                                } else false
+                            when (keyEvent.key) {
+                                Key.DirectionLeft,
+                                Key.DirectionRight,
+                                Key.DirectionUp,
+                                Key.DirectionDown -> skipBringIntoViewScroll = false
+                                else -> Unit
                             }
-                    ) {
-                        HubCard(
-                            hubItem = hubItem,
-                            shape = hubGroup.shape,
-                            onClick = { onHubClick(hubItem) },
-                            onFocused = {
-                                onFocused?.invoke(hubItem, uniqueKey)
-                            },
-                            modifier = focusModifier
-                        )
-                    }
+
+                            when (keyEvent.key) {
+                                Key.DirectionRight -> isTopNav && isLastItem
+                                Key.DirectionLeft -> {
+                                    if (isFirstItem) {
+                                        if (!isTopNav) handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
+                                        else true
+                                    } else false
+                                }
+                                Key.DirectionUp -> if (isTopNav && isFirstRow) {
+                                    handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
+                                } else false
+                                else -> false
+                            }
+                        }
+                ) {
+                    HubCard(
+                        hubItem = hubItem,
+                        shape = hubGroup.shape,
+                        onClick = { onHubClick(hubItem) },
+                        onFocused = {
+                            rowHasCardFocus.value = true
+                            focusedItemIndex = index
+                            onFocused?.invoke(hubItem, uniqueKey)
+                        },
+                        modifier = focusModifier,
+                        showFocusBorder = false
+                    )
                 }
             }
         }

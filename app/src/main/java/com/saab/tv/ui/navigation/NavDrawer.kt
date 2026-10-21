@@ -1,7 +1,7 @@
 package com.saab.tv.ui.navigation
 
-import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -20,21 +20,25 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
 import com.saab.tv.R
+import com.saab.tv.ui.components.SaabMotion
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.ui.profiles.ProfileAssets
+import com.saab.tv.ui.utils.requestFocusSafely
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
@@ -49,18 +53,18 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 
 enum class NavDestination(
     @DrawableRes val iconRes: Int,
-    val label: String,
+    @StringRes val labelRes: Int,
     val iconSize: Dp = 20.dp
 ) {
-    Home(R.drawable.home_icon, "Home", iconSize = 21.dp),
-    Movies(R.drawable.movies_icon, "Movies"),
-    Series(R.drawable.series_icon, "Series"),
-    Ott(R.drawable.ott_icon, "OTT"),
-    Watchlist(R.drawable.watchlist_icon, "My Library"),
-    Search(R.drawable.search_icon, "Search"),
-    Profile(R.drawable.profile_icon, "Profile", iconSize = 18.dp),
-    Settings(R.drawable.settings_icon, "Settings"),
-    Exit(R.drawable.exit_icon, "Exit", iconSize = 21.dp)
+    Home(R.drawable.home_icon, R.string.nav_home, iconSize = 21.dp),
+    Movies(R.drawable.movies_icon, R.string.nav_movies),
+    Series(R.drawable.series_icon, R.string.nav_series),
+    Ott(R.drawable.ott_icon, R.string.nav_ott),
+    Watchlist(R.drawable.watchlist_icon, R.string.nav_my_library),
+    Search(R.drawable.search_icon, R.string.nav_search),
+    Profile(R.drawable.profile_icon, R.string.nav_profile, iconSize = 18.dp),
+    Settings(R.drawable.settings_icon, R.string.nav_settings),
+    Exit(R.drawable.exit_icon, R.string.nav_exit, iconSize = 21.dp)
 }
 
 @Composable
@@ -71,31 +75,54 @@ fun NavDrawer(
     onNavigate: (NavDestination) -> Unit,
     onClose: () -> Unit,
     hideNavigation: Boolean = false,
+    navigationActive: Boolean = true,
     content: @Composable () -> Unit
 ) {
     var drawerHasFocus by remember { mutableStateOf(false) }
     val hidden = hideNavigation || com.saab.tv.ui.trailer.InlineTrailerAnchor.fullscreenActive
-    val navigationBlocked = hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
+    val navigationBlocked = !navigationActive || hidden || com.saab.tv.ui.trailer.LocalManualTrailerActive.current ||
         com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null
     val isMenuFocused = drawerHasFocus && !navigationBlocked
     val focusGuard = rememberNavigationFocusGuard(navigationBlocked, Key.DirectionLeft, onClose)
+    val boundaryPressGate = remember { DpadFreshPressGate() }
+    val focusHandoffRegistry = LocalNavigationFocusHandoffRegistry.current
+    val focusHandoff: (KeyEvent?) -> Boolean = remember(focusGuard, currentDestination, drawerRequesters) {
+        { event ->
+            val requestFocus = {
+                drawerRequesters[currentDestination]?.requestFocusSafely() ?: false
+            }
+            if (event == null) focusGuard.handoffBack(requestFocus)
+            else focusGuard.handoff(event, requestFocus)
+        }
+    }
+    val focusHandoffOwner = remember(focusGuard) { Any() }
+    SideEffect {
+        if (navigationActive) focusHandoffRegistry?.register(focusHandoffOwner, focusHandoff)
+        else focusHandoffRegistry?.clear(focusHandoffOwner)
+    }
+    DisposableEffect(focusHandoffRegistry, focusHandoffOwner) {
+        onDispose { focusHandoffRegistry?.clear(focusHandoffOwner) }
+    }
+    LaunchedEffect(navigationBlocked) {
+        if (navigationBlocked) drawerHasFocus = false
+    }
 
     val width by animateDpAsState(
         targetValue = if (isMenuFocused) 200.dp else 80.dp,
         label = "NavWidth",
-        animationSpec = tween(300)
+        animationSpec = SaabMotion.navigationRevealSpec()
     )
 
     // VISIBILITY ANIMATION:
     val extraItemsAlpha by animateFloatAsState(
         targetValue = if (isMenuFocused) 1f else 0f,
         label = "ExtraItemsAlpha",
-        animationSpec = tween(300)
+        animationSpec = SaabMotion.navigationRevealSpec()
     )
 
     // Back from the navigation surface is an app-exit request. MainActivity
     // converts NavDestination.Exit into the confirmation modal.
-    BackHandler(enabled = isMenuFocused) {
+    AppBackHandler(enabled = isMenuFocused, priority = AppBackPriority.Navigation) {
         onNavigate(NavDestination.Exit)
     }
 
@@ -107,12 +134,17 @@ fun NavDrawer(
         NavDestination.Watchlist
     )
 
-    Box(modifier = Modifier.fillMaxSize().onPreviewKeyEvent(focusGuard::key)) {
+    // Only arm navigation entry after focused content declines the key. Preview
+    // sees handled Up/Left presses too and can make later focus restoration open
+    // the menu without a fresh remote action.
+    Box(modifier = Modifier.fillMaxSize().onKeyEvent(focusGuard::key)) {
 
         // LAYER 1: Content
         Box(modifier = Modifier.fillMaxSize().zIndex(
             if (hidden || com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f)) {
-            content()
+            CompositionLocalProvider(LocalNavigationFocusHandoff provides focusHandoff) {
+                content()
+            }
         }
 
         // LAYER 2: Static Hero Mask
@@ -146,8 +178,8 @@ fun NavDrawer(
         // LAYER 3: Dynamic Expansion Shadow
         androidx.compose.animation.AnimatedVisibility(
             visible = isMenuFocused,
-            enter = androidx.compose.animation.fadeIn(animationSpec = tween(300)),
-            exit = androidx.compose.animation.fadeOut(animationSpec = tween(300)),
+            enter = androidx.compose.animation.fadeIn(animationSpec = SaabMotion.navigationRevealSpec()),
+            exit = androidx.compose.animation.fadeOut(animationSpec = SaabMotion.navigationRevealSpec()),
             modifier = Modifier.zIndex(1.5f).fillMaxSize()
         ) {
             Box(
@@ -181,7 +213,7 @@ fun NavDrawer(
             modifier = Modifier
                 .width(width)
                 .graphicsLayer { alpha = if (hidden) 0f else 1f }
-                .then(Modifier.focusProperties { canFocus = !hidden })
+                .then(Modifier.focusProperties { canFocus = !navigationBlocked })
                 .fillMaxHeight()
                 .zIndex(2f)
                 .onFocusChanged { drawerHasFocus = focusGuard.focus("drawer", it.hasFocus) }
@@ -213,17 +245,13 @@ fun NavDrawer(
                                 down = drawerRequesters[DrawerFocusPolicy.adjacent(dest, true)]!!
                             }
                             .focusRequester(drawerRequesters[dest]!!)
-                            .onPreviewKeyEvent {
-                                if (it.type == KeyEventType.KeyDown) {
-                                    if (it.key == Key.DirectionRight) {
-                                        onClose()
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
+                            .onPreviewKeyEvent { event ->
+                                dispatchFreshDpadAction(
+                                    event = event,
+                                    expectedKey = Key.DirectionRight,
+                                    gate = boundaryPressGate,
+                                    action = onClose
+                                )
                             }
                     )
                 }
@@ -244,17 +272,13 @@ fun NavDrawer(
                                     down = drawerRequesters[NavDestination.Search]!!
                                 }
                                 .focusRequester(drawerRequesters[NavDestination.Profile]!!)
-                                .onPreviewKeyEvent {
-                                    if (it.type == KeyEventType.KeyDown) {
-                                        if (it.key == Key.DirectionRight) {
-                                            onClose()
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    }
+                                .onPreviewKeyEvent { event ->
+                                    dispatchFreshDpadAction(
+                                        event = event,
+                                        expectedKey = Key.DirectionRight,
+                                        gate = boundaryPressGate,
+                                        action = onClose
+                                    )
                                 }
                         )
                     }
@@ -262,21 +286,16 @@ fun NavDrawer(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // 2. Search
-                DrawerItem(NavDestination.Search)
+                // Search is the first shared top-level destination.
+                DrawerItem(NavigationDestinations.topBar.first())
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Middle Items
-                DrawerItem(NavDestination.Home)
-                Spacer(modifier = Modifier.height(4.dp))
-                DrawerItem(NavDestination.Movies)
-                Spacer(modifier = Modifier.height(4.dp))
-                DrawerItem(NavDestination.Series)
-                Spacer(modifier = Modifier.height(4.dp))
-                DrawerItem(NavDestination.Ott)
-                Spacer(modifier = Modifier.height(4.dp))
-                DrawerItem(NavDestination.Watchlist)
+                // Main content destinations follow the same canonical order as the top bar.
+                NavigationDestinations.contentTabs.forEachIndexed { index, destination ->
+                    if (index > 0) Spacer(modifier = Modifier.height(4.dp))
+                    DrawerItem(destination)
+                }
 
                 Spacer(modifier = Modifier.weight(1f))
 
@@ -320,6 +339,7 @@ fun SidebarItem(
 
     val contentColor by animateColorAsState(
         targetValue = if (showIndicator) Color.White else Color(0xFF8E9099),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "contentColor"
     )
 
@@ -327,26 +347,22 @@ fun SidebarItem(
 
     val indicatorWidth by animateDpAsState(
         targetValue = if (showIndicator) 4.dp else 0.dp,
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "IndicatorWidth"
-    )
-
-    val textScale by animateFloatAsState(
-        targetValue = if (isFocused) 1.15f else 1.0f,
-        label = "TextScale"
     )
 
     val textAlpha by animateFloatAsState(
         targetValue = if (isMenuExpanded) 1f else 0f,
-        animationSpec = tween(300),
+        animationSpec = SaabMotion.focusLabelSpec(),
         label = "TextAlpha"
     )
     val textOffset by animateFloatAsState(
         targetValue = if (isMenuExpanded) 0f else -20f,
-        animationSpec = tween(300),
+        animationSpec = SaabMotion.focusLabelSpec(),
         label = "TextOffset"
     )
 
-    val displayText = customLabel ?: screen.label
+    val displayText = customLabel ?: stringResource(screen.labelRes)
 
     Box(
         modifier = modifier
@@ -357,6 +373,7 @@ fun SidebarItem(
             onClick = { onNavigate(screen) },
             modifier = Modifier
                 .fillMaxSize()
+                .semantics { selected = isSelected }
                 .onFocusChanged { isFocused = it.isFocused },
             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
             scale = ClickableSurfaceDefaults.scale(focusedScale = 1.0f),
@@ -392,9 +409,6 @@ fun SidebarItem(
                     modifier = Modifier
                         .padding(start = 16.dp)
                         .graphicsLayer {
-                            scaleX = textScale
-                            scaleY = textScale
-                            transformOrigin = TransformOrigin(0f, 0.5f)
                             alpha = textAlpha
                             translationX = textOffset
                         }
@@ -432,36 +446,26 @@ fun ProfileAvatarItem(
     
     val contentColor by animateColorAsState(
         targetValue = if (showIndicator) Color.White else Color(0xFF8E9099),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "contentColor"
     )
     
     val borderColor by animateColorAsState(
         targetValue = if (showIndicator) accentColor else Color.Transparent,
-        animationSpec = tween(200),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "borderColor"
-    )
-    
-    val avatarScale by animateFloatAsState(
-        targetValue = if (isFocused) 1.15f else 1.0f,
-        animationSpec = tween(200),
-        label = "avatarScale"
-    )
-    
-    val textScale by animateFloatAsState(
-        targetValue = if (isFocused) 1.15f else 1.0f,
-        label = "TextScale"
     )
     
     // Text only appears when profile item is focused
     val textAlpha by animateFloatAsState(
         targetValue = if (isFocused) 1f else 0f,
-        animationSpec = tween(200),
+        animationSpec = SaabMotion.focusLabelSpec(),
         label = "TextAlpha"
     )
     
     val textOffset by animateFloatAsState(
         targetValue = if (isFocused) 0f else -20f,
-        animationSpec = tween(200),
+        animationSpec = SaabMotion.focusLabelSpec(),
         label = "TextOffset"
     )
     
@@ -498,10 +502,6 @@ fun ProfileAvatarItem(
                     modifier = Modifier
                         .padding(start = 15.dp)
                         .size(30.dp)
-                        .graphicsLayer {
-                            scaleX = avatarScale
-                            scaleY = avatarScale
-                        }
                         .clip(CircleShape)
                         .border(2.dp, borderColor, CircleShape)
                         .background(Color(0xFF1A1A1A))
@@ -513,7 +513,7 @@ fun ProfileAvatarItem(
                                 .size(100, 100)
                                 .crossfade(true)
                                 .build(),
-                            contentDescription = "Profile Avatar",
+                            contentDescription = stringResource(R.string.profile_avatar_content_description),
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -526,9 +526,6 @@ fun ProfileAvatarItem(
                     modifier = Modifier
                         .padding(start = 16.dp)
                         .graphicsLayer {
-                            scaleX = textScale
-                            scaleY = textScale
-                            transformOrigin = TransformOrigin(0f, 0.5f)
                             alpha = textAlpha
                             translationX = textOffset
                         }
@@ -542,7 +539,7 @@ fun ProfileAvatarItem(
                         overflow = TextOverflow.Visible
                     )
                     Text(
-                        text = "Change Profile",
+                        text = stringResource(R.string.nav_change_profile),
                         fontSize = 10.sp,
                         color = contentColor.copy(alpha = 0.7f),
                         maxLines = 1,

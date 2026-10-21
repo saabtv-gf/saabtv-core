@@ -38,4 +38,15 @@ internal object SeekThumbnailCarouselPolicy {
         val previousIndex = previous.withIndex().associate { it.value to it.index }
         return requested.map { position -> position?.let(previousIndex::get) }
     }
+
+    /** A carousel is reusable only when every visible slot belongs to this source and seek window. */
+    fun hasCurrentFrames(
+        framePositions: List<Long?>,
+        frameCacheKeys: List<String>,
+        requestedPositions: List<Long>,
+        cacheKey: String
+    ): Boolean = framePositions.size == requestedPositions.size &&
+        frameCacheKeys.size == requestedPositions.size &&
+        framePositions == requestedPositions &&
+        frameCacheKeys.all { it == cacheKey }
 }

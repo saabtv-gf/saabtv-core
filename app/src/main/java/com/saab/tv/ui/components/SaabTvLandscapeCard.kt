@@ -1,8 +1,6 @@
 package com.saab.tv.ui.components
 import com.saab.tv.ui.trailer.trailerAnchor
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -19,9 +17,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,33 +29,35 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
+import com.saab.tv.domain.schema.ArtworkRole
+import com.saab.tv.domain.schema.TitleCardProjection
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
-import coil.compose.SubcomposeAsyncImage
-import coil.request.CachePolicy
-import coil.request.ImageRequest
-import coil.size.Scale
 import com.saab.tv.ui.theme.LocalRoundCorners
+import com.saab.tv.ui.theme.SaabVisualTokens
+import com.saab.tv.ui.utils.ArtworkCacheRole
+import com.saab.tv.ui.utils.artworkDecodeSizePx
+import com.saab.tv.ui.utils.artworkImageRequest
 
 /**
  * ============================================================================
@@ -84,6 +82,7 @@ fun SaabTvLandscapeCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     previewItem: com.saab.tv.data.model.stremio.MetaItem? = null,
+    canonicalProjection: TitleCardProjection? = null,
     progress: Float = 0f,
     isWatched: Boolean = false,
     hasNewEpisode: Boolean = false,
@@ -91,58 +90,82 @@ fun SaabTvLandscapeCard(
     onLongClick: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
     enableWatchedBadge: Boolean = true,
     cardWidth: Dp = 190.dp,
-    showFocusOutline: Boolean = true
+    showFocusOutline: Boolean = true,
+    focusRequester: FocusRequester? = null
 ) {
-    val landscapeImageUrl = landscapeArtworkUrl(backdropUrl)
-    var artworkUnavailable by remember(landscapeImageUrl) {
-        mutableStateOf(shouldShowLandscapeInitialArtwork(backdropUrl))
+    val resolvedProjection = remember(canonicalProjection, previewItem) {
+        resolveCardProjection(canonicalProjection, previewItem)
     }
-    val showWatchedBadge = shouldShowWatchedBadge(
-        isWatched, previewItem?.id, LocalWatchedIds.current, enabled = enableWatchedBadge
+    val resolvedBackdropUrl = resolveCardArtworkUrl(
+        resolvedProjection,
+        ArtworkRole.BACKDROP,
+        backdropUrl?.takeIf(String::isNotBlank) ?: previewItem?.background
     )
-    val showWatchlistBadge = shouldShowWatchlistBadge(previewItem?.id, LocalWatchlistIds.current)
-    var isFocused by remember { mutableStateOf(false) }
+    val resolvedLogoUrl = resolveCardArtworkUrl(
+        resolvedProjection,
+        ArtworkRole.LOGO,
+        logoUrl?.takeIf(String::isNotBlank) ?: previewItem?.logo
+    )
+    val landscapeImageUrl = landscapeArtworkUrl(resolvedBackdropUrl)
+    val canonicalIdentityKey = resolvedProjection?.presentationKey
+    val showWatchedBadge = shouldShowWatchedBadge(
+        isWatched, previewItem?.id, LocalWatchedIds.current, enabled = enableWatchedBadge,
+        canonicalIdentityKey = canonicalIdentityKey
+    )
+    val showWatchlistBadge = shouldShowWatchlistBadge(
+        previewItem?.id, LocalWatchlistIds.current, canonicalIdentityKey
+    )
+    val cardStateDescription = titleCardStateDescription(showWatchedBadge, showWatchlistBadge)
     val ownRequester = remember { FocusRequester() }
     val rememberReturnFocus = LocalPosterFocusReturn.current
-    var longPressHandled by remember { mutableStateOf(false) }
+    val longPressHandler = remember(previewItem?.id) { QuickActionLongPressHandler() }
     val cardCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     val roundCorners = LocalRoundCorners.current
 
     val cardShape = if (roundCorners) RoundedCornerShape(12.dp) else RectangleShape
     val focusedCardShape = cardShape
+    val density = LocalDensity.current
+    val landscapeDecodeSize = remember(cardWidth, density.density) {
+        artworkDecodeSizePx(cardWidth, cardWidth * (9f / 16f), density)
+    }
+    val logoDecodeSize = remember(density.density) {
+        artworkDecodeSizePx(150.dp, 45.dp, density)
+    }
 
     Box(
         modifier = modifier.trailerAnchor(previewItem)
             .width(cardWidth)
             .aspectRatio(16f / 9f)
             .onGloballyPositioned { cardCoordinates[0] = it }
-            .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
     ) {
-        if (usesSeriesPosterStack(previewItem?.type)) {
-            SeriesTitleCardStack(cardShape, isFocused, landscape = true)
+        if (usesSeriesPosterStack(previewItem?.type, resolvedProjection?.kind)) {
+            SeriesTitleCardStack(cardShape, landscape = true)
         }
         Surface(
             onClick = onClick,
             modifier = Modifier
                 .fillMaxSize()
+                .then(focusRequester?.let(Modifier::focusRequester) ?: Modifier)
                 .focusRequester(ownRequester)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = title
+                    cardStateDescription?.let { stateDescription = it }
+                }
                 .onPreviewKeyEvent { event ->
-                    if (onLongClick == null || (event.key != Key.Enter && event.key != Key.DirectionCenter)) false
-                    else if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount > 0) {
-                        if (!longPressHandled) onLongClick(cardCoordinates[0]?.boundsInWindow() ?: androidx.compose.ui.geometry.Rect.Zero)
-                        longPressHandled = true
-                        true
-                    } else if (event.type == KeyEventType.KeyUp && longPressHandled) {
-                        longPressHandled = false
-                        true
-                    } else false
+                    onLongClick?.let { openActions ->
+                        longPressHandler.handleKey(
+                            event.key, event.type, event.nativeKeyEvent.repeatCount,
+                            event.nativeKeyEvent.eventTime, event.nativeKeyEvent.downTime
+                        ) {
+                            openActions(cardCoordinates[0]?.boundsInWindow() ?: androidx.compose.ui.geometry.Rect.Zero)
+                        }
+                    } ?: false
                 }
                 .cardFocusSound()
                 .onFocusChanged {
-                    isFocused = it.isFocused
                     if (it.isFocused) rememberReturnFocus(ownRequester)
-                    if (!it.isFocused) longPressHandled = false
+                    if (!it.isFocused) longPressHandler.reset()
                     if (it.isFocused) onFocused?.invoke()
                 },
             shape = ClickableSurfaceDefaults.shape(
@@ -158,63 +181,47 @@ fun SaabTvLandscapeCard(
             border = ClickableSurfaceDefaults.border(
                 focusedBorder = Border(
                     border = BorderStroke(
-                        if (showFocusOutline) 2.dp else 0.dp,
-                        if (showFocusOutline) Color.White else Color.Transparent
+                        if (showFocusOutline) SaabVisualTokens.focusOutlineWidth else 0.dp,
+                        if (showFocusOutline) SaabVisualTokens.focusColor else Color.Transparent
                     ),
                     shape = focusedCardShape
                 )
             )
         ) {
             val context = LocalContext.current
-            val imageRequest = remember(landscapeImageUrl) {
-                ImageRequest.Builder(context)
-                    .data(landscapeImageUrl)
-                    .crossfade(70)
-                    .memoryCachePolicy(CachePolicy.ENABLED)
-                    .diskCachePolicy(CachePolicy.ENABLED)
-                    .scale(Scale.FILL)
-                    .size(380, 214) // 2x card size for crisp rendering on high-DPI
-                    .memoryCacheKey(landscapeImageUrl?.let { "landscape:$it" })
-                    .diskCacheKey(landscapeImageUrl?.let { "landscape:$it" })
-                    .allowHardware(true)
-                    .build()
+            val imageRequest = remember(landscapeImageUrl, landscapeDecodeSize) {
+                landscapeImageUrl?.let {
+                    artworkImageRequest(context, it, ArtworkCacheRole.Landscape, landscapeDecodeSize)
+                }
             }
-            val logoRequest = remember(logoUrl) {
-                ImageRequest.Builder(context)
-                    .data(logoUrl)
-                    .size(300, 90)
-                    .memoryCacheKey(logoUrl?.let { "logo:$it" })
-                    .diskCacheKey(logoUrl?.let { "logo:$it" })
-                    .memoryCachePolicy(CachePolicy.ENABLED)
-                    .diskCachePolicy(CachePolicy.ENABLED)
-                    .allowHardware(true)
-                    .build()
+            val logoRequest = remember(resolvedLogoUrl, logoDecodeSize) {
+                resolvedLogoUrl?.takeIf(String::isNotBlank)?.let {
+                    artworkImageRequest(context, it, ArtworkCacheRole.Logo, logoDecodeSize)
+                }
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
                 // Backdrop/poster image
-                AsyncImage(
-                    model = imageRequest,
+                RetainedArtworkImage(
+                    model = landscapeImageUrl?.let { imageRequest },
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
-                    onState = { state ->
-                        if (state is coil.compose.AsyncImagePainter.State.Error) {
-                            artworkUnavailable = shouldShowLandscapeInitialArtwork(
-                                backdropUrl, loadFailed = true
-                            )
-                        }
-                        if (state is coil.compose.AsyncImagePainter.State.Success) artworkUnavailable = false
-                    },
+                    contentIdentityKey = artworkContentIdentityKey(
+                        stableContentKey = canonicalIdentityKey ?: previewItem?.let { "${it.type}:${it.id}" },
+                        artworkUrl = landscapeImageUrl,
+                        title = title
+                    ),
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(cardShape)
-                        .background(MaterialTheme.colorScheme.surface)
+                        .background(MaterialTheme.colorScheme.surface),
+                    unavailable = { TitleInitialArtwork(title) }
                 )
 
-                if (artworkUnavailable) TitleInitialArtwork(title)
-
-                if (showWatchedBadge) WatchedBadge(Modifier.align(Alignment.TopEnd))
-                if (showWatchlistBadge) WatchlistBadge(Modifier.align(Alignment.TopStart))
+                TitleCardStatusBadges(
+                    watched = showWatchedBadge,
+                    watchlisted = showWatchlistBadge
+                )
 
                 // Bottom gradient scrim for logo/text readability
                 Box(
@@ -247,16 +254,21 @@ fun SaabTvLandscapeCard(
                             bottom = if (progress > 0f) 12.dp else 6.dp
                         )
                 ) {
-                    if (!logoUrl.isNullOrEmpty()) {
-                        SubcomposeAsyncImage(
+                    if (!resolvedLogoUrl.isNullOrEmpty()) {
+                        RetainedArtworkImage(
                             model = logoRequest,
                             contentDescription = title,
                             contentScale = ContentScale.Fit,
+                            contentIdentityKey = artworkContentIdentityKey(
+                                stableContentKey = canonicalIdentityKey ?: previewItem?.let { "${it.type}:${it.id}" },
+                                artworkUrl = resolvedLogoUrl,
+                                title = title
+                            ),
                             alignment = Alignment.BottomStart,
                             modifier = Modifier
                                 .widthIn(max = 150.dp)
                                 .heightIn(max = 45.dp),
-                            error = {
+                            unavailable = {
                                 Text(
                                     text = title,
                                     style = MaterialTheme.typography.bodySmall.copy(
@@ -329,8 +341,3 @@ fun SaabTvLandscapeCard(
 /** Landscape cards must use landscape artwork; absent backdrops use initials, not a portrait poster. */
 internal fun landscapeArtworkUrl(backdropUrl: String?): String? =
     backdropUrl?.takeIf(String::isNotBlank)
-
-internal fun shouldShowLandscapeInitialArtwork(
-    backdropUrl: String?,
-    loadFailed: Boolean = false
-): Boolean = landscapeArtworkUrl(backdropUrl) == null || loadFailed

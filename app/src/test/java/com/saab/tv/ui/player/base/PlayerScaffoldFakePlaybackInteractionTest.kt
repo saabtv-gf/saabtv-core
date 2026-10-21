@@ -8,14 +8,19 @@ import androidx.compose.material3.MaterialTheme as Material3Theme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.*
 import androidx.tv.material3.MaterialTheme
+import com.saab.tv.R
+import com.saab.tv.data.localization.AppLanguage
 import com.saab.tv.data.model.stremio.MetaVideo
 import com.saab.tv.data.model.stremio.Stream
+import com.saab.tv.data.tmdb.TmdbCastInfo
 import com.saab.tv.ui.details.GlassSidebar
 import com.saab.tv.ui.details.SidebarState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +31,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -41,6 +47,7 @@ class PlayerScaffoldFakePlaybackInteractionTest {
     private var chosenSources = mutableListOf<PlayerSourceOption>()
     private var chosenStreams = mutableListOf<Stream>()
     private var selectedEpisodes = mutableListOf<MetaVideo>()
+    private var castLoadCalls = 0
 
     private fun show(
         nextEpisodeInfo: NextEpisodeInfo? = null,
@@ -51,22 +58,30 @@ class PlayerScaffoldFakePlaybackInteractionTest {
         autoSkipIntro: Boolean = true,
         introSkipCountdownSeconds: Int = 5,
         seekThumbnailProvider: (suspend (Long) -> Bitmap?)? = null,
-        seekThumbnailIntervalSeconds: Int = 30,
+        seekTimeIntervalSeconds: Int = 30,
         episodes: List<MetaVideo> = emptyList(),
-        currentPlaybackId: String? = null
+        castMembers: List<TmdbCastInfo> = emptyList(),
+        currentPlaybackId: String? = null,
+        languageTag: String? = null
     ) {
+        val localizedContext = languageTag?.let {
+            AppLanguage.localizedContext(RuntimeEnvironment.getApplication(), it)
+        }
         compose.setContent {
-            Material3Theme {
-                MaterialTheme {
+            val playerContent: @Composable () -> Unit = {
+                Material3Theme {
+                    MaterialTheme {
                     BasePlayerScaffold(
                         playbackController = playback,
                         renderSurface = FakeRenderSurface,
                         seekThumbnailProvider = seekThumbnailProvider,
                         seekThumbnailCacheKey = "fake-source",
-                        seekThumbnailIntervalSeconds = seekThumbnailIntervalSeconds,
+                        seekTimeIntervalSeconds = seekTimeIntervalSeconds,
                         onSeekPreviewPosition = { seekPreviewCallbacks += it },
                         title = "Fake Film",
                         mediaType = "movie",
+                        castMembers = castMembers,
+                        onLoadCast = { castLoadCalls++ },
                         onBack = { backCalls++ },
                         skipSegmentInfo = skipSegmentInfo,
                         skipIntroEnabled = skipIntroEnabled,
@@ -80,8 +95,11 @@ class PlayerScaffoldFakePlaybackInteractionTest {
                         currentPlaybackId = currentPlaybackId,
                         onEpisodeSelected = { episode, _, _, _ -> selectedEpisodes += episode }
                     )
+                    }
                 }
             }
+            if (localizedContext == null) playerContent()
+            else CompositionLocalProvider(LocalContext provides localizedContext, content = playerContent)
         }
     }
 
@@ -100,6 +118,91 @@ class PlayerScaffoldFakePlaybackInteractionTest {
         compose.waitUntil(1_000) { playback.playCalls == 1 }
         assertTrue(playback.uiState.value.playWhenReady)
         assertEquals(0, backCalls)
+    }
+
+    @Test fun castPanelLoadsCastSupportsDpadMovementAndBackButtonReturnsToControls() {
+        show(castMembers = listOf(
+            TmdbCastInfo("Lead Actor", "Hero", null, 1),
+            TmdbCastInfo("Second Actor", "Friend", null, 2)
+        ))
+
+        compose.onNodeWithTag("player-cast-control", useUnmergedTree = true)
+            .assertHasClickAction()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        compose.waitUntil(2_000) { castLoadCalls > 0 }
+        compose.waitUntil(2_000) {
+            compose.onAllNodesWithContentDescription("Back to playback")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        val castPanelBounds = compose.onNodeWithTag("playback-cast-panel")
+            .fetchSemanticsNode().boundsInRoot
+        val rootBounds = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        assertTrue("Cast panel should be docked on the right", castPanelBounds.left >= rootBounds.width / 2f)
+        assertTrue("Cast panel should use a compact width", castPanelBounds.width <= 380f)
+        compose.onNodeWithText("Lead Actor").assertExists()
+        compose.onNodeWithText("Second Actor").assertExists()
+        val avatarBounds = compose.onNodeWithTag("playback-cast-avatar-0", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals("Avatar should remain a compact square", avatarBounds.width, avatarBounds.height, 0.5f)
+        assertTrue("Focus outline should be constrained to the avatar", avatarBounds.width < castPanelBounds.width / 2f)
+        assertTrue(
+            "Cast members should be stacked vertically",
+            compose.onNodeWithText("Second Actor").fetchSemanticsNode().boundsInRoot.top >
+                compose.onNodeWithText("Lead Actor").fetchSemanticsNode().boundsInRoot.top
+        )
+        assertTrue(castLoadCalls > 0)
+        compose.onNodeWithContentDescription("Back to playback").assertIsFocused()
+
+        compose.onNodeWithContentDescription("Back to playback")
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        compose.onNodeWithText("Lead Actor").assertIsFocused()
+        compose.onNodeWithText("Lead Actor")
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        compose.onNodeWithText("Second Actor").assertIsFocused()
+
+        compose.onNodeWithContentDescription("Back to playback")
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+            .performClick()
+        compose.waitUntil(2_000) {
+            compose.onAllNodesWithContentDescription("Back to playback").fetchSemanticsNodes().isEmpty() &&
+                runCatching { compose.onNodeWithContentDescription("Pause").assertIsFocused() }.isSuccess
+        }
+        compose.onNodeWithContentDescription("Pause").assertIsFocused()
+    }
+
+    @Test fun localizedPlaybackControlDescriptionStillExecutesThePlayerAction() {
+        val localized = AppLanguage.localizedContext(RuntimeEnvironment.getApplication(), "kn")
+        show(languageTag = "kn")
+
+        compose.onNodeWithContentDescription(localized.getString(R.string.player_pause))
+            .assertExists()
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+
+        compose.waitUntil(1_000) { playback.pauseCalls == 1 }
+        assertEquals(1, playback.pauseCalls)
+        assertFalse(playback.uiState.value.playWhenReady)
+    }
+
+    @Test fun seekThumbnailSceneAnnouncementUsesTheSelectedLocale() {
+        val localized = AppLanguage.localizedContext(RuntimeEnvironment.getApplication(), "ml")
+        playback.uiState.value = playback.uiState.value.copy(positionMs = 50_000L)
+        val bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+        show(languageTag = "ml", seekThumbnailProvider = { bitmap })
+        compose.mainClock.autoAdvance = false
+
+        compose.onNodeWithContentDescription(localized.getString(R.string.player_pause))
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+            .performKeyInput { pressKey(Key.DirectionUp) }
+        compose.onNodeWithContentDescription(localized.getString(R.string.player_pause))
+            .performKeyInput { pressKey(Key.DirectionRight) }
+        compose.mainClock.advanceTimeBy(100L)
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription(
+            localized.getString(R.string.player_scene_preview_at, "1:30")
+        ).assertExists()
+        bitmap.recycle()
     }
 
     @Test fun subtitleControlTracksAvailabilityFromFakePlayback() {
@@ -125,6 +228,33 @@ class PlayerScaffoldFakePlaybackInteractionTest {
             .performSemanticsAction(SemanticsActions.RequestFocus)
             .performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertEquals(1, backCalls) }
+    }
+
+    @Test fun playbackErrorCanAdvanceToTheNextRankedSource() {
+        val first = PlayerSourceOption(
+            id = "first", url = "https://fixture.invalid/first.mkv", label = "First source"
+        )
+        val second = PlayerSourceOption(
+            id = "second", url = "https://fixture.invalid/second.mkv", label = "Next source"
+        )
+        playback.sourceOptions.value = listOf(first, second)
+        playback.uiState.value = playback.uiState.value.copy(
+            isReady = false,
+            isPlaying = false,
+            playWhenReady = false,
+            currentSourceId = first.id,
+            errorMessage = "This source timed out. Try another source."
+        )
+        show()
+
+        compose.onNodeWithText("Next Source").assertExists()
+            .performSemanticsAction(SemanticsActions.RequestFocus)
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+
+        compose.runOnIdle {
+            assertEquals(second.id, playback.uiState.value.currentSourceId)
+            assertEquals(listOf(second), chosenSources)
+        }
     }
 
     @Test fun seekBarPreviewsThenCommitsConfiguredInterval() {
@@ -180,9 +310,11 @@ class PlayerScaffoldFakePlaybackInteractionTest {
             autoSkipIntro = false
         )
 
-        compose.onNodeWithText("Skip Intro")
-            .performSemanticsAction(SemanticsActions.RequestFocus)
-            .performKeyInput { pressKey(Key.DirectionCenter) }
+        val skipIntro = compose.onNodeWithText("Skip Intro")
+        val boundsBeforeFocus = skipIntro.fetchSemanticsNode().boundsInRoot
+        skipIntro.performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.runOnIdle { assertEquals(boundsBeforeFocus, skipIntro.fetchSemanticsNode().boundsInRoot) }
+        skipIntro.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertEquals(42_000L, playback.uiState.value.positionMs) }
     }
 
@@ -282,9 +414,11 @@ class PlayerScaffoldFakePlaybackInteractionTest {
     }
 
     @Test fun audioPanelGroupsTracksByLanguageAndSelectsTheLanguageTrack() {
+        val preferredLanguages = androidx.compose.runtime.mutableStateOf(listOf("en", "hi"))
         playback.audioTracks.value = listOf(
             PlayerTrackOption("en-main", "English Stereo", "en", selected = true, audioFormat = "AAC 2.0"),
-            PlayerTrackOption("hi-main", "Hindi Stereo", "hi", audioFormat = "EAC3 5.1")
+            PlayerTrackOption("hi-main", "Hindi Stereo", "hi", audioFormat = "EAC3 5.1"),
+            PlayerTrackOption("ta-main", "Tamil Stereo", "ta", audioFormat = "AAC 2.0")
         )
         playback.uiState.value = playback.uiState.value.copy(selectedAudioTrackId = "en-main")
         compose.setContent {
@@ -297,6 +431,7 @@ class PlayerScaffoldFakePlaybackInteractionTest {
                         title = "Audio Tracks",
                         audioTracks = audioTracks,
                         selectedAudioId = uiState.selectedAudioTrackId,
+                        preferredAudioLanguages = preferredLanguages.value,
                         onClose = {},
                         onSelectTrack = { playback.selectAudioTrack(it) }
                     )
@@ -304,12 +439,89 @@ class PlayerScaffoldFakePlaybackInteractionTest {
             } }
         }
         compose.onNodeWithText("Audio Tracks").assertExists()
+        compose.onNodeWithText("Language preference: English › Hindi").assertExists()
+        compose.onNodeWithText("Preferred languages").assertExists()
+        compose.onNodeWithText("Other languages").assertExists()
+        assertTrue(
+            "Preferred languages should appear before other languages",
+            compose.onNodeWithText("Hindi").fetchSemanticsNode().boundsInRoot.top <
+                compose.onNodeWithText("Other languages").fetchSemanticsNode().boundsInRoot.top
+        )
+        assertTrue(
+            "Other language entries should appear after their section heading",
+            compose.onNodeWithText("Other languages").fetchSemanticsNode().boundsInRoot.top <
+                compose.onNodeWithText("Tamil").fetchSemanticsNode().boundsInRoot.top
+        )
         compose.onNodeWithText("Languages").assertExists()
         compose.onNodeWithText("Tracks").assertExists()
         compose.onNodeWithText("Hindi").performClick()
 
         compose.waitUntil(2_000) { playback.uiState.value.selectedAudioTrackId == "hi-main" }
         assertEquals("hi-main", playback.uiState.value.selectedAudioTrackId)
+        assertEquals("A playback track choice must not change saved preferences", listOf("en", "hi"), preferredLanguages.value)
+        compose.onNodeWithText("Language preference: English › Hindi").assertExists()
+    }
+
+    @Test fun audioPanelSwitchesToAlternateSourceWhenLanguageIsNotOnCurrentStream() {
+        val currentSourceId = androidx.compose.runtime.mutableStateOf("english-source")
+        val preferredLanguages = listOf("en", "hi")
+        val sources = listOf(
+            PlayerSourceOption(
+                id = "english-source",
+                url = "https://fixture.invalid/english.mkv",
+                label = "English 1080p",
+                audioLanguages = listOf("en")
+            ),
+            PlayerSourceOption(
+                id = "hindi-source",
+                url = "https://fixture.invalid/hindi.mkv",
+                label = "Hindi 720p",
+                audioLanguages = listOf("hi")
+            )
+        )
+        playback.audioTracks.value = listOf(
+            PlayerTrackOption("en-main", "English Stereo", "en", selected = true)
+        )
+        playback.uiState.value = playback.uiState.value.copy(
+            currentSourceId = currentSourceId.value,
+            selectedAudioTrackId = "en-main"
+        )
+        playback.sourceAudioTracks = mapOf(
+            "hindi-source" to listOf(PlayerTrackOption("hi-main", "Hindi Stereo", "hi", selected = true))
+        )
+
+        compose.setContent {
+            Material3Theme { MaterialTheme {
+                val uiState = playback.uiState.collectAsState().value
+                Box(Modifier.fillMaxSize()) {
+                    AudioSelectionSidePanel(
+                        visible = true,
+                        title = "Audio Tracks",
+                        audioTracks = playback.audioTracks.collectAsState().value,
+                        sources = sources,
+                        currentSourceId = currentSourceId.value,
+                        selectedAudioId = uiState.selectedAudioTrackId,
+                        preferredAudioLanguages = preferredLanguages,
+                        onClose = {},
+                        onSelectTrack = { playback.selectAudioTrack(it) },
+                        onSelectSourceForLanguage = { sourceId, language ->
+                            currentSourceId.value = sourceId
+                            playback.selectSourceForAudioLanguage(sourceId, language)
+                        }
+                    )
+                }
+            } }
+        }
+
+        compose.onAllNodesWithText("Hindi", substring = false).get(0).performClick()
+
+        compose.waitUntil(2_000) {
+            playback.uiState.value.currentSourceId == "hindi-source"
+        }
+        assertEquals("hindi-source", playback.uiState.value.currentSourceId)
+        assertEquals("hi", playback.requestedSourceLanguage)
+        assertEquals("hi-main", playback.uiState.value.selectedAudioTrackId)
+        assertEquals("Selecting a language-specific source must not promote its language", listOf("en", "hi"), preferredLanguages)
     }
 
     @Test fun subtitlePanelSelectsLanguageAndAllowsExplicitOffTrack() {
@@ -344,7 +556,43 @@ class PlayerScaffoldFakePlaybackInteractionTest {
         assertEquals("#none", playback.selectedSubtitleId)
     }
 
+    @Test fun subtitleOffChoiceUsesAppLanguageAndKeepsCanonicalTrackId() {
+        val localized = AppLanguage.localizedContext(RuntimeEnvironment.getApplication(), "ml")
+        playback.subtitleTracks.value = listOf(
+            PlayerTrackOption("#none", "Off", null),
+            PlayerTrackOption("en-sub", "English SDH", "en", selected = true)
+        )
+        playback.uiState.value = playback.uiState.value.copy(selectedSubtitleTrackId = "en-sub")
+
+        compose.setContent {
+            CompositionLocalProvider(LocalContext provides localized) {
+                Material3Theme { MaterialTheme {
+                    Box(Modifier.fillMaxSize()) {
+                        SubtitleSelectionSidePanel(
+                            visible = true,
+                            title = "Subtitles",
+                            subtitleTracks = playback.subtitleTracks.collectAsState().value,
+                            selectedSubtitleId = playback.uiState.collectAsState().value.selectedSubtitleTrackId,
+                            onClose = {},
+                            onSelectTrack = { playback.selectSubtitleTrack(it) }
+                        )
+                    }
+                } }
+            }
+        }
+
+        val localizedOff = localized.getString(R.string.common_off)
+        compose.onNode(hasText(localizedOff, substring = true) and hasClickAction()).performClick()
+        compose.onNodeWithText(
+            localized.getString(R.string.player_current_track, localizedOff),
+            substring = false
+        ).assertExists()
+        compose.waitUntil(2_000) { playback.uiState.value.selectedSubtitleTrackId == "#none" }
+        assertEquals("#none", playback.selectedSubtitleId)
+    }
+
     @Test fun sourceLanguagePanelSelectsBestMatchingSourceAndExposesProviderList() {
+        var selectedAudioLanguage = ""
         val english = PlayerSourceOption(
             id = "english-source", url = "https://fixture.invalid/en.mkv", label = "English 1080p",
             name = "Torrentio", title = "Movie English 1080p"
@@ -369,6 +617,7 @@ class PlayerScaffoldFakePlaybackInteractionTest {
                         onEpisodeSelected = {},
                         onSourceSelected = { chosenStreams += it },
                         onLanguageSourceSelected = { chosenStreams += it },
+                        onAudioLanguageSelected = { selectedAudioLanguage = it },
                         onBack = {},
                         onDismiss = {}
                     )
@@ -381,6 +630,51 @@ class PlayerScaffoldFakePlaybackInteractionTest {
 
         compose.waitUntil(2_000) { chosenStreams.any { it.url == hindi.url } }
         assertEquals(hindi.url, chosenStreams.first().url)
+        assertEquals("hi", selectedAudioLanguage)
+    }
+
+    @Test fun playerSourceLanguageChoiceDoesNotUpdateTheSharedAudioPreference() {
+        var chosenSource = ""
+        val englishUrl = "https://fixture.invalid/english.mkv"
+        val hindiUrl = "https://fixture.invalid/hindi.mkv"
+        val sources = listOf(
+            PlayerSourceOption(
+                id = englishUrl,
+                url = englishUrl,
+                label = "English 1080p",
+                name = "[Torrentio]",
+                title = "Fake Film English 1080p"
+            ),
+            PlayerSourceOption(
+                id = hindiUrl,
+                url = hindiUrl,
+                label = "Hindi 720p",
+                name = "[MediaFusion]",
+                title = "Fake Film Hindi 720p"
+            )
+        )
+        compose.setContent {
+            Material3Theme { MaterialTheme {
+                Box(Modifier.fillMaxSize()) {
+                    PlayerSourceSidebar(
+                        visible = true,
+                        title = "Fake Film",
+                        sources = sources,
+                        currentSourceId = englishUrl,
+                        onClose = {},
+                        onLanguageSelectSource = { chosenSource = it },
+                        onSelectSource = { chosenSource = it }
+                    )
+                }
+            } }
+        }
+
+        compose.onAllNodesWithText("Hindi", substring = true)
+            .filter(hasClickAction())
+            .onFirst()
+            .performClick()
+        compose.waitUntil(2_000) { chosenSource == hindiUrl }
+        assertEquals(hindiUrl, chosenSource)
     }
 
     @Test fun episodePanelSelectsRequestedEpisodeAndClosesAfterSelection() {
@@ -428,6 +722,8 @@ private class FakePlaybackController : PlayerPlaybackController {
     var playCalls = 0
     var pauseCalls = 0
     var selectedSubtitleId: String? = null
+    var requestedSourceLanguage: String? = null
+    var sourceAudioTracks: Map<String, List<PlayerTrackOption>> = emptyMap()
 
     override fun load(request: PlayerLoadRequest) = Unit
     override fun play() {
@@ -445,6 +741,18 @@ private class FakePlaybackController : PlayerPlaybackController {
     override fun seekBy(deltaMs: Long) { seekTo((uiState.value.positionMs + deltaMs).coerceAtLeast(0L)) }
     override fun setPlaybackSpeed(speed: Float) { uiState.value = uiState.value.copy(playbackSpeed = speed) }
     override fun selectSource(sourceId: String) { uiState.value = uiState.value.copy(currentSourceId = sourceId) }
+    override fun selectSourceForAudioLanguage(sourceId: String, language: String) {
+        requestedSourceLanguage = language
+        selectSource(sourceId)
+        val tracks = sourceAudioTracks[sourceId].orEmpty()
+        if (tracks.isNotEmpty()) {
+            audioTracks.value = tracks
+            val selected = tracks.firstOrNull {
+                AudioTrackPreferencePolicy.normalizeTrackLanguage(it.language, it.label) == language
+            }
+            selected?.let { selectAudioTrack(it.id) }
+        }
+    }
     override fun selectAudioTrack(trackId: String?) { uiState.value = uiState.value.copy(selectedAudioTrackId = trackId) }
     override fun selectSubtitleTrack(trackId: String?) {
         selectedSubtitleId = trackId

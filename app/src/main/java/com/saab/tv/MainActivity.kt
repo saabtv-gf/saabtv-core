@@ -9,8 +9,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
@@ -49,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
@@ -56,6 +55,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.input.key.type
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -65,9 +65,21 @@ import com.saab.tv.data.torrent.TorrentProgress
 import com.saab.tv.data.torrent.TorrentService
 import com.saab.tv.data.torrent.TorrentFallbackPolicy
 import com.saab.tv.data.player.SourceSelectionStore
+import com.saab.tv.data.account.UserStateCommandRepository
+import com.saab.tv.data.localization.LocalizedComponentActivity
 import com.saab.tv.ui.MainViewModel
 import com.saab.tv.ui.components.SaabTvBackground
+import com.saab.tv.ui.components.SaabMotion
 import com.saab.tv.ui.components.LocalTitleCardShape
+import com.saab.tv.ui.navigation.AppBackHandler
+import com.saab.tv.ui.navigation.AppBackPriority
+import com.saab.tv.ui.navigation.BackNavigationHost
+import com.saab.tv.ui.navigation.ShellView
+import com.saab.tv.ui.navigation.ShellViewSaver
+import com.saab.tv.ui.navigation.catalogDetailsRoute
+import com.saab.tv.ui.navigation.trailerHandoffRoute
+import com.saab.tv.ui.navigation.toCatalogDetailsSelection
+import com.saab.tv.ui.navigation.toCatalogPlaybackSelection
 import com.saab.tv.ui.components.LocalWatchlistIds
 import com.saab.tv.ui.details.DetailsScreen
 import com.saab.tv.ui.home.GridViewScreen
@@ -75,6 +87,7 @@ import com.saab.tv.ui.home.HomeScreen
 import com.saab.tv.ui.watchlist.WatchlistScreen
 import com.saab.tv.ui.home.HomeViewModel
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.model.stremio.Stream
 import com.saab.tv.data.model.stremio.StreamSubtitle
 import com.saab.tv.data.model.stremio.MetaVideo
@@ -95,7 +108,9 @@ import com.saab.tv.domain.episodeStreamId
 import com.saab.tv.domain.findNextEpisode
 import com.saab.tv.domain.normalizeEpisodeList
 import com.saab.tv.domain.seriesIdFromPlaybackId
+import com.saab.tv.domain.playbackShellSelection
 import com.saab.tv.ui.navigation.NavDestination
+import com.saab.tv.ui.navigation.NavigationDestinations
 import com.saab.tv.ui.navigation.NavDrawer
 import com.saab.tv.ui.navigation.TopNavigationBar
 import com.saab.tv.ui.player.PlayerScreen
@@ -118,6 +133,8 @@ import com.saab.tv.ui.theme.LocalHubRoundCorners
 import com.saab.tv.ui.theme.SaabTvTheme
 import com.saab.tv.ui.theme.ThemeManager
 import com.saab.tv.ui.trailer.YouTubeTrailerActivity
+import com.saab.tv.ui.utils.requestFocusSafely
+import com.saab.tv.ui.utils.requestFocusWhenAttached
 import dagger.hilt.android.AndroidEntryPoint
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.async
@@ -132,27 +149,6 @@ import javax.inject.Inject
 
 private const val SOURCE_SELECTION_COMMIT_MIN_POSITION_MS = 5_000L
 private const val SOURCE_SELECTION_FAILURE_RESET_MAX_POSITION_MS = 1_000L
-
-private fun FocusRequester.requestFocusSafely(): Boolean =
-    runCatching {
-        requestFocus()
-        // Compose 1.7 requestFocus returns Unit; capture verifies actual focus.
-        val focused = captureFocus()
-        if (focused) freeFocus()
-        focused
-    }.getOrDefault(false)
-
-private suspend fun FocusRequester.requestFocusWhenAttached(hasFocus: () -> Boolean = { true }): Boolean {
-    repeat(40) {
-        androidx.compose.runtime.withFrameNanos { }
-        if (requestFocusSafely()) {
-            androidx.compose.runtime.withFrameNanos { }
-            if (hasFocus()) return true
-        }
-        delay(50)
-    }
-    return false
-}
 
 internal fun isPlaybackSnapshotCompleted(
     positionMs: Long,
@@ -481,7 +477,8 @@ internal fun buildSourcePayload(
             fileName = stream.behaviorHints?.filename ?: "",
             subtitles = buildEmbeddedSubtitlePayload(stream).map {
                 PlayerSubtitleSource(it.id, it.url, it.name, it.language, it.sourcePriority)
-            }
+            },
+            audioLanguages = StreamParser.extractAudioLanguages(StreamParser.combinedText(stream)).toList()
         )
     }
         .distinctBy { it.id }
@@ -604,7 +601,9 @@ internal fun handlePlayerSessionEnd(
     pendingSourceSelection: PendingSourceSelection?,
     onConsumePendingSelection: () -> Unit,
     onResumeHintResolved: (String?) -> Unit,
-    rememberSourceSelection: Boolean = true
+    rememberSourceSelection: Boolean = true,
+    selectedMediaType: String = "movie",
+    onSourceSelectionCommitted: ((String, String, Stream) -> Unit)? = null
 ) {
     val playbackId = selectedPlaybackId.trim()
     if (playbackId.isBlank()) {
@@ -650,7 +649,11 @@ internal fun handlePlayerSessionEnd(
 
             val shouldCommitSource = rememberSourceSelection
             if (shouldCommitSource) {
-                sourceSelectionStore.rememberSelection(pendingPlaybackId, selectedStream)
+                if (onSourceSelectionCommitted != null) {
+                    onSourceSelectionCommitted(pendingPlaybackId, selectedMediaType, selectedStream)
+                } else {
+                    sourceSelectionStore.rememberSelection(pendingPlaybackId, selectedStream, selectedMediaType)
+                }
             }
         }
     }
@@ -658,14 +661,43 @@ internal fun handlePlayerSessionEnd(
     onConsumePendingSelection()
 }
 
-private class GridRestoreState {
-    var focusedIndex: Int? = null
-    var scrollIndex: Int = 0
-    var scrollOffset: Int = 0
-}
+internal data class GridRestoreState(
+    val sourceKey: String? = null,
+    val focusedIndex: Int? = null,
+    val focusedItemKey: String? = null,
+    val scrollIndex: Int = 0,
+    val scrollOffset: Int = 0
+)
+
+internal val GridRestoreStateSaver = listSaver<GridRestoreState, Any>(
+    save = { state ->
+        listOf(
+            state.sourceKey.orEmpty(),
+            state.focusedIndex ?: -1,
+            state.focusedItemKey.orEmpty(),
+            state.scrollIndex.coerceAtLeast(0),
+            state.scrollOffset.coerceAtLeast(0)
+        )
+    },
+    restore = { values ->
+        GridRestoreState(
+            sourceKey = (values.getOrNull(0) as? String)?.takeIf(String::isNotEmpty),
+            focusedIndex = (values.getOrNull(1) as? Int)?.takeIf { it >= 0 },
+            focusedItemKey = (values.getOrNull(2) as? String)?.takeIf(String::isNotEmpty),
+            scrollIndex = (values.getOrNull(3) as? Int)?.coerceAtLeast(0) ?: 0,
+            scrollOffset = (values.getOrNull(4) as? Int)?.coerceAtLeast(0) ?: 0
+        )
+    }
+)
+
+internal fun GridRestoreState.forSource(sourceKey: String): GridRestoreState =
+    if (this.sourceKey == sourceKey) this else GridRestoreState(sourceKey = sourceKey)
+
+internal fun gridRestoreSourceKey(title: String, configId: String): String =
+    "${configId.trim()}|${title.trim()}"
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : LocalizedComponentActivity() {
     @Inject
     lateinit var sourceSelectionStore: SourceSelectionStore
     @Inject
@@ -682,6 +714,7 @@ class MainActivity : ComponentActivity() {
     lateinit var streamSortingService: StreamSortingService
     @Inject lateinit var accountSync: com.saab.tv.data.account.AccountSyncManager
     @Inject lateinit var accountAuth: com.saab.tv.data.account.AccountAuthManager
+    @Inject lateinit var userStateCommands: UserStateCommandRepository
 
     private var splashOverlay: SaabTvSplashView? = null
     private var splashStartedAtMs = 0L
@@ -694,6 +727,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        SaabMotion.refreshSystemAnimations()
         val checkCloud = backgroundedAt > 0 && SystemClock.elapsedRealtime() - backgroundedAt >= 5_000L && allowAccountRefresh
         backgroundedAt = 0L
         if (checkCloud && accountAuth.hasSession) lifecycleScope.launch {
@@ -824,13 +858,20 @@ class MainActivity : ComponentActivity() {
             val mainViewModel = hiltViewModel<MainViewModel>()
             val themeManager = hiltViewModel<ThemeManager>()
             val currentProfile by mainViewModel.activeProfile.collectAsStateWithLifecycle()
+            val preferredAudioLanguages = currentProfile
+                ?.let(com.saab.tv.data.profile.AudioLanguagePreferencePolicy::forProfile)
+                .orEmpty()
             val watchlistIdsFlow = remember(currentProfile?.id) {
                 mainViewModel.watchlistIdsForProfile(currentProfile?.id)
             }
             val watchlistIds by watchlistIdsFlow.collectAsStateWithLifecycle(emptySet())
-            var sessionProfileId by rememberSaveable { mutableStateOf<Int?>(null) }
+            var sessionProfileId by rememberSaveable {
+                mutableStateOf(profileConfigurationManager.getLastActiveProfileId())
+            }
             var sessionRestoreAttemptedProfileId by rememberSaveable { mutableStateOf<Int?>(null) }
-            var activeView by rememberSaveable { mutableStateOf("menu") }
+            // Shell/player/detail screens are transient. Recreate the menu shell
+            // after activity/process restoration instead of reviving stale focus.
+            var activeView by remember { mutableStateOf(ShellView.Menu) }
             var selectedMovieId by rememberSaveable { mutableStateOf("") }
             var backdropTrailerActive by remember { mutableStateOf(false) }
             var selectedMovieType by rememberSaveable { mutableStateOf("movie") }
@@ -855,8 +896,70 @@ class MainActivity : ComponentActivity() {
             var selectedPlaybackType by rememberSaveable { mutableStateOf("movie") }
             var selectedPlaybackTitle by rememberSaveable { mutableStateOf("") }
             var selectedPlaybackPoster by rememberSaveable { mutableStateOf("") }
-            var previousView by rememberSaveable { mutableStateOf("menu") }
+            var previousView by rememberSaveable(stateSaver = ShellViewSaver) {
+                mutableStateOf(ShellView.Menu)
+            }
             val playerState = remember { PlayerState() }
+
+            // Both navigation placements render the same Home surface. Keep its
+            // title-selection transition in one place so selection identity,
+            // metadata, and the browse return target cannot drift between them.
+            val applyCatalogDetailsSelection: (com.saab.tv.ui.navigation.CatalogDetailsSelection) -> Unit = { selection ->
+                autoResumeFromContinue = false
+                detailsResumePlaybackHint = null
+                selectedMovieId = selection.contentId
+                selectedMovieType = selection.contentType
+                selectedMovieTitle = selection.title
+                selectedMoviePoster = selection.poster
+                selectedMovieBackground = selection.background
+                selectedMovieLogo = selection.logo
+                selectedAddonBaseUrl = selection.addonBaseUrl
+                selectedPlaybackId = selection.playbackId
+                selectedPlaybackType = selection.playbackType
+                selectedPlaybackTitle = selection.playbackTitle
+                selectedPlaybackPoster = selection.playbackPoster
+                previousView = selection.returnDestination
+            }
+            val selectCatalogTitleDetails: (MetaItem, ShellView) -> Unit = { movie, returnDestination ->
+                applyCatalogDetailsSelection(
+                    movie.toCatalogDetailsSelection(returnDestination)
+                )
+                activeView = ShellView.Details
+            }
+            val openCatalogTitleDetails: (MetaItem) -> Unit = { movie ->
+                selectCatalogTitleDetails(movie, ShellView.Menu)
+            }
+            val openContinueTitle: (MetaItem, List<WatchHistoryEntity>) -> Unit = { movie, history ->
+                val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.canReuseCurrentStream(
+                    contentId = movie.id,
+                    mediaType = movie.type,
+                    selectedContentId = selectedMovieId,
+                    selectedContentType = selectedMovieType,
+                    selectedPlaybackId = selectedPlaybackId,
+                    videoUrl = selectedVideoUrl,
+                    hasCurrentStream = playerState.currentStream != null,
+                    history = history
+                )
+                selectedMovieId = movie.id
+                selectedMovieType = movie.type
+                selectedMovieTitle = movie.name
+                selectedMoviePoster = movie.poster.orEmpty()
+                selectedMovieBackground = movie.background.orEmpty()
+                selectedMovieLogo = movie.logo.orEmpty()
+                selectedAddonBaseUrl = movie.addonBaseUrl
+                detailsResumePlaybackHint = movie.resumePlaybackId
+                if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
+                selectedPlaybackType = movie.type
+                selectedPlaybackTitle = movie.name
+                selectedPlaybackPoster = movie.poster.orEmpty()
+                autoResumeFromContinue = !canResumeOpenStream
+                previousView = ShellView.Menu
+                if (!canResumeOpenStream) {
+                    selectedVideoUrl = ""
+                    torrentProgress = TorrentProgress("Finding your source...")
+                }
+                activeView = if (canResumeOpenStream) ShellView.Player else ShellView.Resume
+            }
 
 
             LaunchedEffect(currentProfile?.id) {
@@ -901,14 +1004,8 @@ class MainActivity : ComponentActivity() {
                     LocalWatchlistIds provides watchlistIds
                 ) {
                 SaabTvBackground {
-                    // Last-resort guard for every route. Screen/dialog handlers
-                    // registered below still handle ordinary back navigation first.
-                    BackHandler { showExitConfirmation = true }
+                    BackNavigationHost(onUnhandledBack = { showExitConfirmation = true }) {
                     if (currentProfile == null) {
-                        BackHandler {
-                            showExitConfirmation = true
-                        }
-
                         val isRestoringSession = sessionProfileId != null
                         if (!isRestoringSession) {
                             // PROFILE SELECTION / CREATION
@@ -929,8 +1026,13 @@ class MainActivity : ComponentActivity() {
                         }
                     } else {
                         // MAIN APP CONTENT
+                        // Keep an interrupted/crashed view session from restoring focus into
+                        // a stale screen. The last active profile is restored independently.
                         var currentNav by remember { mutableStateOf(NavDestination.Home) }
-                        SideEffect { allowAccountRefresh = activeView in listOf("menu", "details", "grid") && currentNav != NavDestination.Settings && currentNav != NavDestination.Profile }
+                        SideEffect {
+                            allowAccountRefresh = (activeView == ShellView.Menu || activeView == ShellView.Details || activeView == ShellView.Grid) &&
+                                currentNav != NavDestination.Settings && currentNav != NavDestination.Profile
+                        }
                         LaunchedEffect(currentNav) {
                             AppDiagnostics.event(this@MainActivity, "Navigation", "Main Section", "section=$currentNav")
                         }
@@ -939,17 +1041,31 @@ class MainActivity : ComponentActivity() {
                         var gridViewTitle by rememberSaveable { mutableStateOf("") }
                         var gridViewItems by remember { mutableStateOf<List<MetaItem>>(emptyList()) }
                         var gridViewConfigId by rememberSaveable { mutableStateOf("") }
-                        val gridRestoreState = remember { GridRestoreState() }
+                        var searchGridMediaType by rememberSaveable { mutableStateOf("all") }
+                        var gridRestoreState by rememberSaveable(stateSaver = GridRestoreStateSaver) {
+                            mutableStateOf(GridRestoreState())
+                        }
 
                         // Search focus restoration
                         val searchMoviesViewMoreRequester = remember { FocusRequester() }
                         val searchSeriesViewMoreRequester = remember { FocusRequester() }
                         val searchResultsRequester = remember { FocusRequester() }
-                        var searchFocusTarget by remember { mutableStateOf<String?>(null) }
-                        var searchLastFocusedId by remember { mutableStateOf<String?>(null) }
+                        var searchFocusTarget by rememberSaveable { mutableStateOf<String?>(null) }
+                        var searchLastFocusedId by rememberSaveable { mutableStateOf<String?>(null) }
 
                         // Track where we came from for proper back navigation
                         val uiScope = rememberCoroutineScope()
+                        val rememberAndSyncSource: (String, String, Stream) -> Unit = { playbackId, mediaType, stream ->
+                            sourceSelectionStore.rememberSelection(playbackId, stream, mediaType)
+                            val profileId = currentProfile?.id
+                            val portableSelection = sourceSelectionStore.portableSelection(playbackId, mediaType, stream)
+                            if (profileId != null && portableSelection != null) {
+                                uiScope.launch {
+                                    userStateCommands.saveSourceSelection(profileId, portableSelection)
+                                    accountSync.requestSync()
+                                }
+                            }
+                        }
 
                         // Focus Traffic Control
                         val drawerRequesters = remember { NavDestination.values().associateWith { FocusRequester() } }
@@ -961,90 +1077,77 @@ class MainActivity : ComponentActivity() {
 
                         // STATE CHANGE TRIGGER:
                         LaunchedEffect(currentNav, activeView) {
-                            if (activeView != "menu") return@LaunchedEffect
-                            when(currentNav) {
+                            if (activeView != ShellView.Menu) return@LaunchedEffect
+                            when (NavigationDestinations.contentFocusTarget(currentNav)) {
                                 // HomeScreen requests focus itself once data is ready.
                                 // Avoid requesting early into the loading placeholder, which can
                                 // cause a brief nav -> content -> nav -> content flicker.
-                                NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> Unit
-                                NavDestination.Search -> {
-                                    delay(200) // Increased for stability
+                                NavigationDestinations.ContentFocusTarget.Catalog -> Unit
+                                NavigationDestinations.ContentFocusTarget.Search -> {
                                     val target = searchFocusTarget
                                     if (target != null) {
                                         searchFocusTarget = null
                                         when (target) {
-                                            "movies" -> searchMoviesViewMoreRequester.requestFocusSafely()
-                                            "series" -> searchSeriesViewMoreRequester.requestFocusSafely()
-                                            "poster" -> searchResultsRequester.requestFocusSafely()
+                                            "movies" -> searchMoviesViewMoreRequester.requestFocusWhenAttached()
+                                            "series" -> searchSeriesViewMoreRequester.requestFocusWhenAttached()
+                                            "poster" -> searchResultsRequester.requestFocusWhenAttached()
                                         }
                                     } else {
                                         searchEntryRequester.requestFocusWhenAttached()
                                     }
                                 }
-                                NavDestination.Settings -> {
-                                    delay(200) // Increased for stability
+                                NavigationDestinations.ContentFocusTarget.Settings -> {
                                     settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused }
                                 }
-                                NavDestination.Watchlist -> {
-                                    delay(200)
+                                NavigationDestinations.ContentFocusTarget.Library -> {
                                     watchlistEntryRequester.requestFocusWhenAttached()
                                 }
-                                else -> Unit
+                                null -> Unit
                             }
                         }
 
                         // Focus restoration after navPosition change (Crossfade animation)
                         val navPosition = currentProfile?.navPosition ?: "left"
                         LaunchedEffect(navPosition) {
-                            if (activeView == "menu" && currentNav == NavDestination.Settings) {
-                                delay(220) // Allow the short navigation transition to settle.
+                            if (activeView == ShellView.Menu && currentNav == NavDestination.Settings) {
                                 settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused }
                             }
                         }
 
 
+                        com.saab.tv.ui.navigation.NavigationFocusHandoffHost {
                         CompositionLocalProvider(com.saab.tv.ui.trailer.LocalTrailerStartWatching provides { movie ->
-                            selectedMovieId = movie.id
-                            selectedMovieType = movie.type
-                            selectedMovieTitle = movie.name
-                            selectedMoviePoster = movie.poster ?: ""
-                            selectedMovieBackground = movie.background ?: ""
-                            selectedMovieLogo = movie.logo ?: ""
-                            selectedAddonBaseUrl = movie.addonBaseUrl
-                            detailsResumePlaybackHint = null
-                            selectedPlaybackId = movie.id
-                            selectedPlaybackType = movie.type
-                            selectedPlaybackTitle = movie.name
+                            applyCatalogDetailsSelection(movie.toCatalogPlaybackSelection(activeView, previousView))
                             autoResumeFromContinue = true
-                            previousView = com.saab.tv.ui.navigation.BrowseReturnPolicy.forPlayback(activeView, previousView)
                             selectedVideoUrl = ""
                             torrentProgress = TorrentProgress("")
-                            activeView = "resume"
+                            activeView = ShellView.Resume
                         }) {
                             com.saab.tv.ui.trailer.ManualTrailerHost(profileId = currentProfile?.id ?: 0) {
                             // CONDITIONAL NAVIGATION RENDERING (no animation)
                             val view = activeView
-                            if (view == "menu") {
-                                var settingsContentFocused by remember { mutableStateOf(false) }
-
+                            if (view == ShellView.Menu) {
                                 val pendingEntry = remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
                                 DisposableEffect(Unit) { onDispose { pendingEntry[0]?.cancel() } }
-                                val handleEnterContent: () -> Unit = {
+                                val focusDestinationContent: (NavDestination) -> Unit = { destination ->
                                     pendingEntry[0]?.cancel()
-                                    val destination = currentNav
                                     pendingEntry[0] = uiScope.launch {
                                         androidx.compose.runtime.withFrameNanos { }
-                                        if (currentNav != destination || activeView != "menu") return@launch
-                                        when (destination) {
-                                            NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott ->
+                                        if (currentNav != destination || activeView != ShellView.Menu) return@launch
+                                        when (NavigationDestinations.contentFocusTarget(destination)) {
+                                            NavigationDestinations.ContentFocusTarget.Catalog ->
                                                 homeEntryRequester.requestFocusWhenAttached()
-                                            NavDestination.Search -> searchEntryRequester.requestFocusWhenAttached()
-                                            NavDestination.Settings -> settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused }
-                                            NavDestination.Watchlist -> watchlistEntryRequester.requestFocusWhenAttached()
+                                            NavigationDestinations.ContentFocusTarget.Search ->
+                                                searchEntryRequester.requestFocusWhenAttached()
+                                            NavigationDestinations.ContentFocusTarget.Settings ->
+                                                settingsEntryRequester.requestFocusWhenAttached { settingsScreenFocused }
+                                            NavigationDestinations.ContentFocusTarget.Library ->
+                                                watchlistEntryRequester.requestFocusWhenAttached()
                                             else -> Unit
                                         }
                                     }
                                 }
+                                val handleEnterContent: () -> Unit = { focusDestinationContent(currentNav) }
                                 val handleNavigate: (NavDestination) -> Unit = { destination ->
                                     pendingEntry[0]?.cancel()
                                     if (destination == NavDestination.Exit) {
@@ -1053,9 +1156,11 @@ class MainActivity : ComponentActivity() {
                                         handleEnterContent()
                                     } else {
                                         if (currentNav == NavDestination.Search) searchFocusTarget = null
-                                        if (currentNav == NavDestination.Settings) settingsContentFocused = false
                                         if (destination == NavDestination.Search) searchSessionId++
                                         currentNav = destination
+                                        // The state-change effect above owns entry focus after the
+                                        // destination composes. A second request here races it and
+                                        // can leave remote focus jumping between the screen and nav.
                                     }
                                 }
 
@@ -1080,10 +1185,152 @@ class MainActivity : ComponentActivity() {
                                             } else false
                                         }
                                 ) {
-                                Crossfade(targetState = navPosition, animationSpec = tween(180), label = "NavSwitcher") { position ->
+                                val destinationContent: @Composable () -> Unit = {
+                                    when (currentNav) {
+                                        NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> {
+                                            val vm = hiltViewModel<HomeViewModel>()
+                                            val tab = when (currentNav) {
+                                                NavDestination.Home -> "home"
+                                                NavDestination.Movies -> "movies"
+                                                NavDestination.Series -> "series"
+                                                NavDestination.Ott -> "ott"
+                                                else -> "home"
+                                            }
+                                            val dashboardTab = DashboardTab.fromString(tab)
+
+                                            key(tab) {
+                                                LaunchedEffect(tab, currentProfile?.id) { vm.loadScreen(tab, currentProfile) }
+                                                HomeScreen(
+                                                    onPreviewActiveChanged = { backdropTrailerActive = it },
+                                                    tab = dashboardTab,
+                                                    screenNameOverride = tab.takeIf { it == "ott" },
+                                                    viewModel = vm,
+                                                    currentProfile = currentProfile,
+                                                    entryRequester = homeEntryRequester,
+                                                    drawerRequester = drawerRequesters[currentNav]!!,
+                                                    onMovieClick = openCatalogTitleDetails,
+                                                    onContinueClick = { movie -> openContinueTitle(movie, vm.state.value.history) },
+                                                    onTrailerClick = { youtubeKey, trailerName ->
+                                                        YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
+                                                    },
+                                                    onViewMore = { title, items, configId ->
+                                                        gridRestoreState = gridRestoreState.forSource(
+                                                            gridRestoreSourceKey(title, configId)
+                                                        )
+                                                        gridViewTitle = title
+                                                        gridViewItems = items
+                                                        gridViewConfigId = configId
+                                                        activeView = ShellView.Grid
+                                                    },
+                                                    onHubLoaded = { title, items, configId ->
+                                                        if (activeView == ShellView.Grid && gridViewConfigId == configId) {
+                                                            gridRestoreState = gridRestoreState.forSource(
+                                                                gridRestoreSourceKey(title, configId)
+                                                            )
+                                                            gridViewTitle = title
+                                                            gridViewItems = items
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                        }
+                                        NavDestination.Search -> {
+                                            val searchHomeVm = hiltViewModel<HomeViewModel>()
+                                            SearchScreen(
+                                                searchSessionId = searchSessionId,
+                                                currentProfile = currentProfile,
+                                                onTrailerClick = { youtubeKey, trailerName ->
+                                                    YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
+                                                },
+                                                watchedIds = searchHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
+                                                onMovieClick = { movie ->
+                                                    searchFocusTarget = "poster"
+                                                    openCatalogTitleDetails(movie)
+                                                },
+                                                onViewMore = { title, items ->
+                                                    val mediaType = if (title == "Movies") "movie" else "series"
+                                                    val localizedTitle = if (mediaType == "movie") {
+                                                        getString(R.string.nav_movies)
+                                                    } else {
+                                                        getString(R.string.nav_series)
+                                                    }
+                                                    gridRestoreState = gridRestoreState.forSource(
+                                                        gridRestoreSourceKey("Search $mediaType", "__search__")
+                                                    )
+                                                    searchFocusTarget = if (mediaType == "movie") "movies" else "series"
+                                                    searchGridMediaType = mediaType
+                                                    gridViewTitle = localizedTitle
+                                                    gridViewItems = items
+                                                    gridViewConfigId = "__search__"
+                                                    activeView = ShellView.Grid
+                                                },
+                                                moviesViewMoreRequester = searchMoviesViewMoreRequester,
+                                                seriesViewMoreRequester = searchSeriesViewMoreRequester,
+                                                resultsRequester = searchResultsRequester,
+                                                lastFocusedId = searchLastFocusedId,
+                                                onFocusedIdChange = { searchLastFocusedId = it },
+                                                entryRequester = searchEntryRequester,
+                                                drawerRequester = drawerRequesters[NavDestination.Search]!!
+                                            )
+                                        }
+                                        NavDestination.Profile -> {
+                                            sessionProfileId = null
+                                            sessionRestoreAttemptedProfileId = null
+                                            activeView = ShellView.Menu
+                                            themeManager.resetTheme()
+                                            mainViewModel.logout()
+                                        }
+                                        NavDestination.Watchlist -> {
+                                            val watchlistHomeVm = hiltViewModel<HomeViewModel>()
+                                            WatchlistScreen(
+                                                onPreviewActiveChanged = { backdropTrailerActive = it },
+                                                currentProfile = currentProfile,
+                                                entryRequester = watchlistEntryRequester,
+                                                drawerRequester = drawerRequesters[NavDestination.Watchlist]!!,
+                                                onTrailerClick = { youtubeKey, trailerName ->
+                                                    YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
+                                                },
+                                                watchedIds = watchlistHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
+                                                onContinueClick = { movie -> openContinueTitle(movie, watchlistHomeVm.state.value.history) },
+                                                onMovieClick = openCatalogTitleDetails
+                                            )
+                                        }
+                                        NavDestination.Settings -> {
+                                            val homeVm = hiltViewModel<HomeViewModel>()
+                                            SettingsScreen(
+                                                currentProfile = currentProfile,
+                                                onBack = {
+                                                    currentNav = NavDestination.Home
+                                                    drawerRequesters[NavDestination.Home]?.requestFocusSafely()
+                                                },
+                                                entryRequester = settingsEntryRequester,
+                                                drawerRequester = drawerRequesters[NavDestination.Settings]!!,
+                                                onDashboardChanged = { homeVm.invalidate() },
+                                                onScreenFocusChanged = { settingsScreenFocused = it }
+                                            )
+                                        }
+                                        NavDestination.Exit -> { /* App closes */ }
+                                    }
+                                }
+                                Box(
+                                    modifier = Modifier.fillMaxSize().zIndex(
+                                        if (backdropTrailerActive ||
+                                            com.saab.tv.ui.trailer.InlineTrailerAnchor.fullscreenActive ||
+                                            com.saab.tv.ui.trailer.InlineTrailerAnchor.session != null) 3f else 0f
+                                    )
+                                ) {
+                                    destinationContent()
+                                }
+
+                                Crossfade(
+                                    targetState = navPosition,
+                                    animationSpec = SaabMotion.navigationRevealSpec(),
+                                    label = "NavSwitcher"
+                                ) { position ->
                                 if (position == "top") {
                                     TopNavigationBar(
                                         hideNavigation = backdropTrailerActive,
+                                        navigationActive = position == navPosition,
                                         currentDestination = currentNav,
                                         currentProfile = currentProfile,
                                         topNavRequesters = drawerRequesters,
@@ -1093,490 +1340,137 @@ class MainActivity : ComponentActivity() {
                                             sessionProfileId = null
                                             sessionRestoreAttemptedProfileId = null
 
-                                            activeView = "menu"
+                                            activeView = ShellView.Menu
                                             themeManager.resetTheme()
                                             mainViewModel.logout()
                                         },
                                         onExit = { showExitConfirmation = true },
-                                        content = {
-                                            when (currentNav) {
-                                                NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> {
-                                                    val vm = hiltViewModel<HomeViewModel>()
-                                                    val tab = when (currentNav) {
-                                                        NavDestination.Home -> "home"
-                                                        NavDestination.Movies -> "movies"
-                                                        NavDestination.Series -> "series"
-                                                        NavDestination.Ott -> "ott"
-                                                        else -> "home"
-                                                    }
-                                                    val dashboardTab = DashboardTab.fromString(tab)
-
-                                                    key(tab) {
-                                                        LaunchedEffect(tab, currentProfile?.id) { vm.loadScreen(tab, currentProfile) }
-                                                        HomeScreen(
-                                                            onPreviewActiveChanged = { backdropTrailerActive = it },
-                                                            tab = dashboardTab,
-                                                            screenNameOverride = tab.takeIf { it == "ott" },
-                                                            viewModel = vm,
-                                                            currentProfile = currentProfile,
-                                                            entryRequester = homeEntryRequester,
-                                                            drawerRequester = drawerRequesters[currentNav]!!,
-                                                            onMovieClick = { movie ->
-                                                                autoResumeFromContinue = false
-                                                                selectedMovieId = movie.id
-                                                                selectedMovieType = movie.type
-                                                                selectedMovieTitle = movie.name
-                                                                selectedMoviePoster = movie.poster ?: ""
-                                                                selectedMovieBackground = movie.background ?: ""
-                                                                selectedMovieLogo = movie.logo ?: ""
-                                                                selectedAddonBaseUrl = movie.addonBaseUrl
-                                                                detailsResumePlaybackHint = null
-                                                                selectedPlaybackId = movie.id
-                                                                selectedPlaybackType = movie.type
-                                                                selectedPlaybackTitle = movie.name
-                                                                selectedPlaybackPoster = movie.poster ?: ""
-                                                                previousView = "menu"
-                                                                activeView = "details"
-                                                            },
-                                                            onContinueClick = { movie ->
-                                                                val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.mayReuseOpenStream(movie.type) && selectedMovieId == movie.id &&
-                                                                    selectedMovieType == movie.type &&
-                                                                    selectedVideoUrl.startsWith("https://") &&
-                                                                    playerState.currentStream != null &&
-                                                                    vm.state.value.history.any { history ->
-                                                                        !history.watched && history.id == selectedPlaybackId &&
-                                                                            (movie.type != "series" || seriesIdFromPlaybackId(history.id) == movie.id)
-                                                                    }
-                                                                selectedMovieId = movie.id
-                                                                selectedMovieType = movie.type
-                                                                selectedMovieTitle = movie.name
-                                                                selectedMoviePoster = movie.poster ?: ""
-                                                                selectedMovieBackground = movie.background ?: ""
-                                                                selectedMovieLogo = movie.logo ?: ""
-                                                                selectedAddonBaseUrl = movie.addonBaseUrl
-                                                                detailsResumePlaybackHint = movie.resumePlaybackId
-                                                                if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
-                                                                selectedPlaybackType = movie.type
-                                                                selectedPlaybackTitle = movie.name
-                                                                autoResumeFromContinue = !canResumeOpenStream
-                                                                previousView = "menu"
-                                                                if (!canResumeOpenStream) {
-                                                                    selectedVideoUrl = ""
-                                                                    torrentProgress = TorrentProgress("Finding your source...")
-                                                                }
-                                                                activeView = if (canResumeOpenStream) "player" else "resume"
-                                                            },
-                                                            onTrailerClick = { youtubeKey, trailerName ->
-                                                                YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
-                                                            },
-                                                            onViewMore = { title, items, configId ->
-                                                                gridViewTitle = title
-                                                                gridViewItems = items
-                                                                gridViewConfigId = configId.takeUnless { it.startsWith("tmdb-") }.orEmpty()
-                                                                activeView = "grid"
-                                                            }
-                                                        )
-                                                    }
-                                                }
-                                                NavDestination.Search -> {
-                                                    val searchHomeVm = hiltViewModel<HomeViewModel>()
-                                                    SearchScreen(
-                                                        onPreviewActiveChanged = { backdropTrailerActive = it },
-                                                        searchSessionId = searchSessionId,
-                                                        currentProfile = currentProfile,
-                                                        onTrailerClick = { youtubeKey, trailerName ->
-                                                            YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
-                                                        },
-                                                        watchedIds = searchHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
-                                                        onMovieClick = { movie ->
-                                                            selectedMovieId = movie.id
-                                                            selectedMovieType = movie.type
-                                                            selectedMovieTitle = movie.name
-                                                            selectedMoviePoster = movie.poster ?: ""
-                                                            selectedMovieBackground = movie.background ?: ""
-                                                            selectedMovieLogo = movie.logo ?: ""
-                                                            selectedAddonBaseUrl = movie.addonBaseUrl
-                                                            detailsResumePlaybackHint = null
-                                                            selectedPlaybackId = movie.id
-                                                            selectedPlaybackType = movie.type
-                                                            selectedPlaybackTitle = movie.name
-                                                            selectedPlaybackPoster = movie.poster ?: ""
-                                                            searchFocusTarget = "poster"
-                                                            previousView = "menu"
-                                                            activeView = "details"
-                                                        },
-                                                        onViewMore = { title, items ->
-                                                            searchFocusTarget = if (title == "Movies") "movies" else "series"
-                                                            gridViewTitle = title
-                                                            gridViewItems = items
-                                                            gridViewConfigId = ""
-                                                            activeView = "grid"
-                                                        },
-                                                        moviesViewMoreRequester = searchMoviesViewMoreRequester,
-                                                        seriesViewMoreRequester = searchSeriesViewMoreRequester,
-                                                        resultsRequester = searchResultsRequester,
-                                                        lastFocusedId = searchLastFocusedId,
-                                                        onFocusedIdChange = { searchLastFocusedId = it },
-                                                        entryRequester = searchEntryRequester,
-                                                        drawerRequester = drawerRequesters[NavDestination.Search]!!
-                                                    )
-                                                }
-                                                NavDestination.Profile -> {
-                                                    sessionProfileId = null
-                                                    sessionRestoreAttemptedProfileId = null
-                                                    activeView = "menu"
-                                                    themeManager.resetTheme()
-                                                    mainViewModel.logout()
-                                                }
-                                                NavDestination.Watchlist -> {
-                                                    val watchlistHomeVm = hiltViewModel<HomeViewModel>()
-                                                    WatchlistScreen(
-                                                        onPreviewActiveChanged = { backdropTrailerActive = it },
-                                                        currentProfile = currentProfile,
-                                                        entryRequester = watchlistEntryRequester,
-                                                        drawerRequester = drawerRequesters[NavDestination.Watchlist]!!,
-                                                        onTrailerClick = { youtubeKey, trailerName ->
-                                                            YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
-                                                        },
-                                                        watchedIds = watchlistHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
-                                                        onContinueClick = { movie ->
-                                                            val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.mayReuseOpenStream(movie.type) && selectedMovieId == movie.id &&
-                                                                selectedMovieType == movie.type && selectedVideoUrl.startsWith("https://") &&
-                                                                playerState.currentStream != null && watchlistHomeVm.state.value.history.any { history ->
-                                                                    !history.watched && history.id == selectedPlaybackId &&
-                                                                        (movie.type != "series" || seriesIdFromPlaybackId(history.id) == movie.id)
-                                                                }
-                                                            selectedMovieId = movie.id
-                                                            selectedMovieType = movie.type
-                                                            selectedMovieTitle = movie.name
-                                                            selectedMoviePoster = movie.poster ?: ""
-                                                            selectedMovieBackground = movie.background ?: ""
-                                                            selectedMovieLogo = movie.logo ?: ""
-                                                            selectedAddonBaseUrl = movie.addonBaseUrl
-                                                            detailsResumePlaybackHint = movie.resumePlaybackId
-                                                            if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
-                                                            selectedPlaybackType = movie.type
-                                                            selectedPlaybackTitle = movie.name
-                                                            selectedPlaybackPoster = movie.poster ?: ""
-                                                            autoResumeFromContinue = !canResumeOpenStream
-                                                            previousView = "menu"
-                                                            if (!canResumeOpenStream) {
-                                                                selectedVideoUrl = ""
-                                                                torrentProgress = TorrentProgress("Finding your source...")
-                                                            }
-                                                            activeView = if (canResumeOpenStream) "player" else "resume"
-                                                        },
-                                                        onMovieClick = { movie ->
-                                                            selectedMovieId = movie.id
-                                                            selectedMovieType = movie.type
-                                                            selectedMovieTitle = movie.name
-                                                            selectedMoviePoster = movie.poster ?: ""
-                                                            selectedMovieBackground = movie.background ?: ""
-                                                            selectedMovieLogo = movie.logo ?: ""
-                                                            selectedAddonBaseUrl = movie.addonBaseUrl
-                                                            detailsResumePlaybackHint = null
-                                                            selectedPlaybackId = movie.id
-                                                            selectedPlaybackType = movie.type
-                                                            selectedPlaybackTitle = movie.name
-                                                            selectedPlaybackPoster = movie.poster ?: ""
-                                                            previousView = "menu"
-                                                            activeView = "details"
-                                                        }
-                                                    )
-                                                }
-                                                NavDestination.Settings -> {
-                                                    val homeVm = hiltViewModel<HomeViewModel>()
-                                                    SettingsScreen(
-                                                        currentProfile = currentProfile,
-                                                        onBack = {
-                                                            currentNav = NavDestination.Home
-                                                            drawerRequesters[NavDestination.Home]?.requestFocusSafely()
-                                                        },
-                                                        entryRequester = settingsEntryRequester,
-                                                        drawerRequester = drawerRequesters[NavDestination.Settings]!!,
-                                                        onDashboardChanged = { homeVm.invalidate() },
-                                                        onScreenFocusChanged = { settingsScreenFocused = it },
-                                                        onContentFocusChanged = { settingsContentFocused = it }
-                                                    )
-                                                }
-                                                NavDestination.Exit -> { /* App closes */ }
-                                            }
-                                        }
+                                        content = {}
                                     )
                                 } else { // position == "left"
                                     NavDrawer(
                                         hideNavigation = backdropTrailerActive,
+                                        navigationActive = position == navPosition,
                                         currentDestination = currentNav,
                                         currentProfile = currentProfile,
                                         drawerRequesters = drawerRequesters,
                                         onNavigate = handleNavigate,
                                         onClose = handleEnterContent,
-                                        content = {
-                                            when (currentNav) {
-                                                NavDestination.Home, NavDestination.Movies, NavDestination.Series, NavDestination.Ott -> {
-                                                    val vm = hiltViewModel<HomeViewModel>()
-                                                    val tab = when (currentNav) {
-                                                        NavDestination.Home -> "home"
-                                                        NavDestination.Movies -> "movies"
-                                                        NavDestination.Series -> "series"
-                                                        NavDestination.Ott -> "ott"
-                                                        else -> "home"
-                                                    }
-                                                    val dashboardTab = DashboardTab.fromString(tab)
-
-                                                    key(tab) {
-                                                        LaunchedEffect(tab, currentProfile?.id) { vm.loadScreen(tab, currentProfile) }
-                                                        HomeScreen(
-                                                            onPreviewActiveChanged = { backdropTrailerActive = it },
-                                                            tab = dashboardTab,
-                                                            screenNameOverride = tab.takeIf { it == "ott" },
-                                                            viewModel = vm,
-                                                            currentProfile = currentProfile,
-                                                            entryRequester = homeEntryRequester,
-                                                            drawerRequester = drawerRequesters[currentNav]!!,
-                                                            onMovieClick = { movie ->
-                                                                autoResumeFromContinue = false
-                                                                selectedMovieId = movie.id
-                                                                selectedMovieType = movie.type
-                                                                selectedMovieTitle = movie.name
-                                                                selectedMoviePoster = movie.poster ?: ""
-                                                                selectedMovieBackground = movie.background ?: ""
-                                                                selectedMovieLogo = movie.logo ?: ""
-                                                                selectedAddonBaseUrl = movie.addonBaseUrl
-                                                                detailsResumePlaybackHint = null
-                                                                selectedPlaybackId = movie.id
-                                                                selectedPlaybackType = movie.type
-                                                                selectedPlaybackTitle = movie.name
-                                                                selectedPlaybackPoster = movie.poster ?: ""
-                                                                previousView = "menu"
-                                                                activeView = "details"
-                                                            },
-                                                            onContinueClick = { movie ->
-                                                                val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.mayReuseOpenStream(movie.type) && selectedMovieId == movie.id &&
-                                                                    selectedMovieType == movie.type &&
-                                                                    selectedVideoUrl.startsWith("https://") &&
-                                                                    playerState.currentStream != null &&
-                                                                    vm.state.value.history.any { history ->
-                                                                        !history.watched && history.id == selectedPlaybackId &&
-                                                                            (movie.type != "series" || seriesIdFromPlaybackId(history.id) == movie.id)
-                                                                    }
-                                                                selectedMovieId = movie.id
-                                                                selectedMovieType = movie.type
-                                                                selectedMovieTitle = movie.name
-                                                                selectedMoviePoster = movie.poster ?: ""
-                                                                selectedMovieBackground = movie.background ?: ""
-                                                                selectedMovieLogo = movie.logo ?: ""
-                                                                selectedAddonBaseUrl = movie.addonBaseUrl
-                                                                detailsResumePlaybackHint = movie.resumePlaybackId
-                                                                if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
-                                                                selectedPlaybackType = movie.type
-                                                                selectedPlaybackTitle = movie.name
-                                                                autoResumeFromContinue = !canResumeOpenStream
-                                                                previousView = "menu"
-                                                                if (!canResumeOpenStream) {
-                                                                    selectedVideoUrl = ""
-                                                                    torrentProgress = TorrentProgress("Finding your source...")
-                                                                }
-                                                                activeView = if (canResumeOpenStream) "player" else "resume"
-                                                            },
-                                                            onTrailerClick = { youtubeKey, trailerName ->
-                                                                YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
-                                                            },
-                                                            onViewMore = { title, items, configId ->
-                                                                gridViewTitle = title
-                                                                gridViewItems = items
-                                                                gridViewConfigId = configId.takeUnless { it.startsWith("tmdb-") }.orEmpty()
-                                                                activeView = "grid"
-                                                            }
-                                                        )
-                                                    }
-                                                }
-                                                NavDestination.Search -> {
-                                                    val searchHomeVm = hiltViewModel<HomeViewModel>()
-                                                    SearchScreen(
-                                                        onPreviewActiveChanged = { backdropTrailerActive = it },
-                                                        searchSessionId = searchSessionId,
-                                                        currentProfile = currentProfile,
-                                                        onTrailerClick = { youtubeKey, trailerName ->
-                                                            YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
-                                                        },
-                                                        watchedIds = searchHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
-                                                        onMovieClick = { movie ->
-                                                            selectedMovieId = movie.id
-                                                            selectedMovieType = movie.type
-                                                            selectedMovieTitle = movie.name
-                                                            selectedMoviePoster = movie.poster ?: ""
-                                                            selectedMovieBackground = movie.background ?: ""
-                                                            selectedMovieLogo = movie.logo ?: ""
-                                                            selectedAddonBaseUrl = movie.addonBaseUrl
-                                                            detailsResumePlaybackHint = null
-                                                            selectedPlaybackId = movie.id
-                                                            selectedPlaybackType = movie.type
-                                                            selectedPlaybackTitle = movie.name
-                                                            selectedPlaybackPoster = movie.poster ?: ""
-                                                            searchFocusTarget = "poster"
-                                                            previousView = "menu"
-                                                            activeView = "details"
-                                                        },
-                                                        onViewMore = { title, items ->
-                                                            searchFocusTarget = if (title == "Movies") "movies" else "series"
-                                                            gridViewTitle = title
-                                                            gridViewItems = items
-                                                            gridViewConfigId = ""
-                                                            activeView = "grid"
-                                                        },
-                                                        moviesViewMoreRequester = searchMoviesViewMoreRequester,
-                                                        seriesViewMoreRequester = searchSeriesViewMoreRequester,
-                                                        resultsRequester = searchResultsRequester,
-                                                        lastFocusedId = searchLastFocusedId,
-                                                        onFocusedIdChange = { searchLastFocusedId = it },
-                                                        entryRequester = searchEntryRequester,
-                                                        drawerRequester = drawerRequesters[NavDestination.Search]!!
-                                                    )
-                                                }
-                                                NavDestination.Profile -> {
-                                                    sessionProfileId = null
-                                                    sessionRestoreAttemptedProfileId = null
-                                                    activeView = "menu"
-                                                    themeManager.resetTheme()
-                                                    mainViewModel.logout()
-                                                }
-                                                NavDestination.Watchlist -> {
-                                                    val watchlistHomeVm = hiltViewModel<HomeViewModel>()
-                                                    WatchlistScreen(
-                                                        onPreviewActiveChanged = { backdropTrailerActive = it },
-                                                        currentProfile = currentProfile,
-                                                        entryRequester = watchlistEntryRequester,
-                                                        drawerRequester = drawerRequesters[NavDestination.Watchlist]!!,
-                                                        onTrailerClick = { youtubeKey, trailerName ->
-                                                            YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
-                                                        },
-                                                        watchedIds = watchlistHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
-                                                        onContinueClick = { movie ->
-                                                            val canResumeOpenStream = com.saab.tv.ui.home.ContinueResumePolicy.mayReuseOpenStream(movie.type) && selectedMovieId == movie.id &&
-                                                                selectedMovieType == movie.type && selectedVideoUrl.startsWith("https://") &&
-                                                                playerState.currentStream != null && watchlistHomeVm.state.value.history.any { history ->
-                                                                    !history.watched && history.id == selectedPlaybackId &&
-                                                                        (movie.type != "series" || seriesIdFromPlaybackId(history.id) == movie.id)
-                                                                }
-                                                            selectedMovieId = movie.id
-                                                            selectedMovieType = movie.type
-                                                            selectedMovieTitle = movie.name
-                                                            selectedMoviePoster = movie.poster ?: ""
-                                                            selectedMovieBackground = movie.background ?: ""
-                                                            selectedMovieLogo = movie.logo ?: ""
-                                                            selectedAddonBaseUrl = movie.addonBaseUrl
-                                                            detailsResumePlaybackHint = movie.resumePlaybackId
-                                                            if (!canResumeOpenStream) selectedPlaybackId = movie.resumePlaybackId ?: movie.id
-                                                            selectedPlaybackType = movie.type
-                                                            selectedPlaybackTitle = movie.name
-                                                            selectedPlaybackPoster = movie.poster ?: ""
-                                                            autoResumeFromContinue = !canResumeOpenStream
-                                                            previousView = "menu"
-                                                            if (!canResumeOpenStream) {
-                                                                selectedVideoUrl = ""
-                                                                torrentProgress = TorrentProgress("Finding your source...")
-                                                            }
-                                                            activeView = if (canResumeOpenStream) "player" else "resume"
-                                                        },
-                                                        onMovieClick = { movie ->
-                                                            selectedMovieId = movie.id
-                                                            selectedMovieType = movie.type
-                                                            selectedMovieTitle = movie.name
-                                                            selectedMoviePoster = movie.poster ?: ""
-                                                            selectedMovieBackground = movie.background ?: ""
-                                                            selectedMovieLogo = movie.logo ?: ""
-                                                            selectedAddonBaseUrl = movie.addonBaseUrl
-                                                            detailsResumePlaybackHint = null
-                                                            selectedPlaybackId = movie.id
-                                                            selectedPlaybackType = movie.type
-                                                            selectedPlaybackTitle = movie.name
-                                                            selectedPlaybackPoster = movie.poster ?: ""
-                                                            previousView = "menu"
-                                                            activeView = "details"
-                                                        }
-                                                    )
-                                                }
-                                                NavDestination.Settings -> {
-                                                    val homeVm = hiltViewModel<HomeViewModel>()
-                                                    SettingsScreen(
-                                                        currentProfile = currentProfile,
-                                                        onBack = {
-                                                            currentNav = NavDestination.Home
-                                                            drawerRequesters[NavDestination.Home]?.requestFocusSafely()
-                                                        },
-                                                        entryRequester = settingsEntryRequester,
-                                                        drawerRequester = drawerRequesters[NavDestination.Settings]!!,
-                                                        onDashboardChanged = { homeVm.invalidate() },
-                                                        onScreenFocusChanged = { settingsScreenFocused = it },
-                                                        onContentFocusChanged = { settingsContentFocused = it }
-                                                    )
-                                                }
-                                                NavDestination.Exit -> { /* App closes */ }
-                                            }
-                                        }
+                                        content = {}
                                     )
                                 }
                                 } // Crossfade end
                                 } // Double-back Box end
-                        } else if (view == "grid") {
+                        } else if (view == ShellView.Grid) {
                             val gridVm = hiltViewModel<HomeViewModel>()
+                            val searchGridVm = hiltViewModel<com.saab.tv.ui.search.SearchViewModel>()
+                            val vmState by gridVm.state.collectAsStateWithLifecycle()
+                            val searchGridState by searchGridVm.state.collectAsStateWithLifecycle()
+                            val loadGridPage = {
+                                if (gridViewConfigId == "__search__") {
+                                    searchGridVm.loadMoreResults()
+                                } else if (gridViewConfigId.isNotEmpty()) {
+                                    gridVm.loadMoreItems(gridViewConfigId)
+                                }
+                            }
+                            val retryHubLoad = {
+                                if (gridViewConfigId.isNotEmpty() && gridViewConfigId != "__search__") {
+                                    gridVm.openHub(
+                                        com.saab.tv.domain.HubItem(
+                                            id = gridViewConfigId,
+                                            title = gridViewTitle,
+                                            categoryId = gridViewConfigId
+                                        )
+                                    ) { resolvedTitle, resolvedItems ->
+                                        if (activeView == ShellView.Grid && gridViewConfigId != "__search__") {
+                                            gridViewTitle = resolvedTitle
+                                            gridViewItems = resolvedItems
+                                        }
+                                    }
+                                }
+                            }
                             GridViewScreen(
                                 allowTrailerAutoplay = currentNav != NavDestination.Search,
                                 title = gridViewTitle,
                                 items = gridViewItems,
-                                profileId = currentProfile?.id ?: 1,
+                                gridStateKey = gridRestoreState.sourceKey ?: gridRestoreSourceKey(gridViewTitle, gridViewConfigId),
+                                initialFilter = when (currentNav) {
+                                    NavDestination.Movies -> com.saab.tv.ui.home.CatalogMediaFilter.MOVIES
+                                    NavDestination.Series -> com.saab.tv.ui.home.CatalogMediaFilter.SERIES
+                                    else -> if (gridViewConfigId == "__search__") when (searchGridMediaType) {
+                                        "movie" -> com.saab.tv.ui.home.CatalogMediaFilter.MOVIES
+                                        "series" -> com.saab.tv.ui.home.CatalogMediaFilter.SERIES
+                                        else -> com.saab.tv.ui.home.CatalogMediaFilter.ALL
+                                    } else when (gridViewTitle.trim().lowercase()) {
+                                        "movies" -> com.saab.tv.ui.home.CatalogMediaFilter.MOVIES
+                                        "series" -> com.saab.tv.ui.home.CatalogMediaFilter.SERIES
+                                        else -> com.saab.tv.ui.home.CatalogMediaFilter.ALL
+                                    }
+                                },
+                                profileId = currentProfile?.id ?: 0,
                                 onTrailerClick = { youtubeKey, trailerName ->
                                     YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
                                 },
                                 lastFocusedIndex = gridRestoreState.focusedIndex,
-                                onFocusChange = { gridRestoreState.focusedIndex = it },
+                                lastFocusedItemKey = gridRestoreState.focusedItemKey,
+                                onFocusChange = { index, itemKey ->
+                                    gridRestoreState = gridRestoreState.copy(
+                                        focusedIndex = index,
+                                        focusedItemKey = itemKey
+                                    )
+                                },
                                 onMovieClick = { movie ->
-                                    selectedMovieId = movie.id
-                                    selectedMovieType = movie.type
-                                    selectedMovieTitle = movie.name
-                                    selectedMoviePoster = movie.poster ?: ""
-                                    selectedMovieBackground = movie.background ?: ""
-                                    selectedMovieLogo = movie.logo ?: ""
-                                    selectedAddonBaseUrl = movie.addonBaseUrl
-                                    detailsResumePlaybackHint = null
-                                    selectedPlaybackId = movie.id
-                                    selectedPlaybackType = movie.type
-                                    selectedPlaybackTitle = movie.name
-                                    selectedPlaybackPoster = movie.poster ?: ""
-                                    previousView = "grid"
-                                    activeView = "details"
+                                    selectCatalogTitleDetails(movie, ShellView.Grid)
                                 },
                                 onBack = {
-                                    gridRestoreState.focusedIndex = null  // Reset for next time
-                                    gridRestoreState.scrollIndex = 0  // Reset scroll position
-                                    gridRestoreState.scrollOffset = 0
-                                    activeView = "menu"
+                                    gridRestoreState = GridRestoreState()
+                                    activeView = ShellView.Menu
                                 },
-                                onLoadMore = {
-                                    if (gridViewConfigId.isNotEmpty()) {
-                                        gridVm.loadMoreItems(gridViewConfigId)
-                                    }
-                                },
+                                onLoadMore = loadGridPage,
+                                onRetryLoadMore = loadGridPage,
+                                hasMoreItems = if (gridViewConfigId == "__search__") {
+                                    searchGridState.hasMoreResults
+                                } else gridViewConfigId in vmState.loadableRowIds,
+                                isLoadingMore = if (gridViewConfigId == "__search__") {
+                                    searchGridState.isLoadingMoreResults
+                                } else gridViewConfigId in vmState.loadingRowIds,
+                                hasLoadMoreError = if (gridViewConfigId == "__search__") {
+                                    searchGridState.loadMoreResultsFailed
+                                } else gridViewConfigId in vmState.loadMoreErrorRowIds,
+                                isInitialLoading = gridViewConfigId in vmState.loadingHubIds,
+                                hasInitialLoadError = gridViewConfigId in vmState.hubErrorIds,
+                                onRetryInitialLoad = retryHubLoad,
                                 initialScrollIndex = gridRestoreState.scrollIndex,
                                 initialScrollOffset = gridRestoreState.scrollOffset,
                                 onScrollPositionChange = { index, offset ->
-                                    gridRestoreState.scrollIndex = index
-                                    gridRestoreState.scrollOffset = offset
+                                    gridRestoreState = gridRestoreState.copy(
+                                        scrollIndex = index,
+                                        scrollOffset = offset
+                                    )
                                 },
-                                watchedIds = gridVm.state.collectAsStateWithLifecycle().value.watchedIds
+                                watchedIds = vmState.watchedIds
                             )
                             // Sync gridViewItems when ViewModel state updates (after loadMoreItems)
-                            val vmState by gridVm.state.collectAsStateWithLifecycle()
-                            LaunchedEffect(vmState.rows) {
-                                if (gridViewConfigId.isNotEmpty()) {
-                                    val updatedRow = vmState.rows.find { it.configId == gridViewConfigId }
+                            LaunchedEffect(vmState.rows, vmState.personalizedRows) {
+                                if (gridViewConfigId.isNotEmpty() && gridViewConfigId != "__search__") {
+                                    val updatedRow = (vmState.rows + vmState.personalizedRows)
+                                        .find { it.id == gridViewConfigId }
                                     if (updatedRow != null && updatedRow.items.size > gridViewItems.size) {
-                                        gridViewItems = updatedRow.items
+                                        gridViewItems = updatedRow.items.map(com.saab.tv.domain.schema.CatalogCardProjection::asActionItem)
                                     }
                                 }
                             }
-                        } else if (view == "details" || view == "resume" || (view == "player" && selectedPlaybackId.startsWith("trailer_"))) {
+                            LaunchedEffect(searchGridState.results, gridViewConfigId, searchGridMediaType) {
+                                if (gridViewConfigId == "__search__") {
+                                    val matchingItems = when (searchGridMediaType) {
+                                        "movie" -> searchGridState.movies
+                                        "series" -> searchGridState.series
+                                        else -> searchGridState.results
+                                    }
+                                    gridViewItems = matchingItems.map { it.asMetaItem() }
+                                }
+                            }
+                        } else if (view == ShellView.Details || view == ShellView.Resume || (view == ShellView.Player && selectedPlaybackId.startsWith("trailer_"))) {
                             val detailsNavController = rememberNavController()
                             val startRoute = "detail/${java.net.URLEncoder.encode(selectedMovieType, "UTF-8")}/${java.net.URLEncoder.encode(selectedMovieId, "UTF-8")}?addon=${java.net.URLEncoder.encode(selectedAddonBaseUrl ?: "", "UTF-8")}&resume=${java.net.URLEncoder.encode(detailsResumePlaybackHint ?: "", "UTF-8")}"
 
@@ -1590,26 +1484,33 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            BackHandler {
+                            AppBackHandler(priority = AppBackPriority.Route) {
                                 if (!detailsNavController.popBackStack()) {
                                     autoResumeFromContinue = false
                                     activeView = com.saab.tv.ui.navigation.BrowseReturnPolicy.onBack(previousView)
-                                }
+                    }
                             }
 
                             // Shared onPlayClick lambda for all detail screens
-                            val onPlayClick: (String, String, String, String, String, String, com.saab.tv.data.model.stremio.Stream, List<com.saab.tv.domain.AddonSubtitle>, List<com.saab.tv.data.model.stremio.Stream>, List<com.saab.tv.data.model.stremio.MetaVideo>) -> Unit = { url, playbackId, playbackType, playbackTitle, seriesTitle, logo, stream, addonSubtitles, availableStreams, episodes ->
-                                val resolvedPlaybackTitle = playbackTitle.ifBlank { selectedMovieTitle }
-                                val resolvedSeriesTitle = seriesTitle.ifBlank { selectedMovieTitle }
-                                val isSeriesPlayback = playbackType.equals("series", ignoreCase = true) ||
-                                    playbackType.equals("tv", ignoreCase = true)
-                                if (isSeriesPlayback && resolvedSeriesTitle.isNotBlank()) {
-                                    selectedMovieTitle = resolvedSeriesTitle
-                                }
-                                if (isSeriesPlayback) {
-                                    selectedMovieId = seriesIdFromPlaybackId(playbackId)
-                                    selectedMovieType = "series"
-                                }
+                            val onPlayClick: (String, String, String, String, String, String, com.saab.tv.data.model.stremio.Stream, List<com.saab.tv.domain.AddonSubtitle>, List<com.saab.tv.data.model.stremio.Stream>, List<com.saab.tv.data.model.stremio.MetaVideo>, String, String, String) -> Unit = { url, playbackId, playbackType, playbackTitle, seriesTitle, logo, stream, addonSubtitles, availableStreams, episodes, detailContentId, detailContentType, detailPoster ->
+                                val shellSelection = playbackShellSelection(
+                                    contentId = detailContentId,
+                                    contentType = detailContentType,
+                                    playbackId = playbackId,
+                                    playbackType = playbackType,
+                                    playbackTitle = playbackTitle,
+                                    seriesTitle = seriesTitle,
+                                    currentTitle = selectedMovieTitle,
+                                    detailPoster = detailPoster,
+                                    currentPoster = selectedMoviePoster
+                                )
+                                // A nested related/filmography route may have changed the playable
+                                // title without changing the outer shell route. Keep player context
+                                // (especially next-episode identity) tied to the actual selection.
+                                selectedMovieId = shellSelection.content.contentId
+                                selectedMovieType = shellSelection.content.contentType
+                                if (shellSelection.contentTitle.isNotBlank()) selectedMovieTitle = shellSelection.contentTitle
+                                if (shellSelection.poster.isNotBlank()) selectedMoviePoster = shellSelection.poster
                                 if (logo.isNotBlank()) selectedMovieLogo = logo
                                 playerState.currentEpisodeList = normalizeEpisodeList(episodes)
                                 playerState.currentStream = stream
@@ -1617,7 +1518,7 @@ class MainActivity : ComponentActivity() {
                                 val sourcePayloadInput = if (availableStreams.isNotEmpty()) availableStreams else listOf(stream)
                                 val sourcePayload = buildSourcePayload(
                                     streams = sourcePayloadInput,
-                                    contentTitle = resolvedPlaybackTitle
+                                    contentTitle = shellSelection.playbackTitle
                                 )
                                 playerState.pendingSourceSelection = PendingSourceSelection(
                                     playbackId = playbackId,
@@ -1627,15 +1528,15 @@ class MainActivity : ComponentActivity() {
                                 if (url.startsWith("magnet:")) {
                                     uiScope.launch {
                                         selectedPlaybackId = playbackId
-                                        selectedPlaybackType = playbackType
-                                        selectedPlaybackTitle = resolvedPlaybackTitle
+                                        selectedPlaybackType = shellSelection.content.contentType
+                                        selectedPlaybackTitle = shellSelection.playbackTitle
                                         selectedPlaybackPoster = selectedMoviePoster
                                         selectedTrailerAudioUrl = ""
                                         selectedTrailerVariants = emptyList()
                                         selectedVideoUrl = ""
                                         torrentProgress = TorrentProgress("Connecting to peers...")
                                         autoResumeFromContinue = false
-                                        activeView = "player"
+                                        activeView = ShellView.Player
                                         startTorrentWithFallback(
                                             selectedStream = stream,
                                             rankedStreams = sourcePayloadInput,
@@ -1652,7 +1553,7 @@ class MainActivity : ComponentActivity() {
                                                 )
                                                 playerState.selectedPlayerSources = buildSourcePayload(
                                                     sourcePayloadInput,
-                                                    resolvedPlaybackTitle
+                                                    shellSelection.playbackTitle
                                                 )
                                                 selectedVideoUrl = ""
                                                 torrentProgress = TorrentProgress(
@@ -1676,8 +1577,8 @@ class MainActivity : ComponentActivity() {
                                     stopService(Intent(this@MainActivity, TorrentService::class.java))
                                     uiScope.launch {
                                         selectedPlaybackId = playbackId
-                                        selectedPlaybackType = playbackType
-                                        selectedPlaybackTitle = resolvedPlaybackTitle
+                                        selectedPlaybackType = shellSelection.content.contentType
+                                        selectedPlaybackTitle = shellSelection.playbackTitle
                                         selectedPlaybackPoster = selectedMoviePoster
                                         selectedTrailerAudioUrl = ""
                                         selectedTrailerVariants = emptyList()
@@ -1696,17 +1597,17 @@ class MainActivity : ComponentActivity() {
                                             }
                                             else -> {
                                                 autoResumeFromContinue = false
-                                                activeView = "player"
+                                                activeView = ShellView.Player
                                             }
                                         }
+                        }
                                     }
                                 }
-                            }
 
                             NavHost(
                                 navController = detailsNavController,
                                 startDestination = "detail_start",
-                                modifier = Modifier.alpha(if (view == "resume") 0f else 1f),
+                                modifier = Modifier.alpha(if (view == ShellView.Resume) 0f else 1f),
                             ) {
                                 composable("detail_start") { }
                                 composable(
@@ -1732,16 +1633,31 @@ class MainActivity : ComponentActivity() {
                                         onAutoResumeNeedsSelection = {
                                             autoResumeFromContinue = false
                                             torrentProgress = null
-                                            activeView = "details"
+                                            activeView = ShellView.Details
                                         },
                                         autoSelectSource = currentProfile?.autoSelectSource ?: false,
                                         rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true,
-                                        onPosterResolved = { selectedMoviePoster = it },
+                                        onPosterResolved = {
+                                            if (selectedMovieId == detailId &&
+                                                selectedMovieType.equals(detailType, ignoreCase = true)
+                                            ) {
+                                                selectedMoviePoster = it
+                                                selectedPlaybackPoster = it
+                                            }
+                                        },
                                         onPlayClick = onPlayClick,
+                                        onStartWatching = { item ->
+                                            applyCatalogDetailsSelection(item.toCatalogPlaybackSelection(activeView, previousView))
+                                            detailsResumePlaybackHint = item.resumePlaybackId
+                                            autoResumeFromContinue = true
+                                            selectedVideoUrl = ""
+                                            torrentProgress = TorrentProgress("")
+                                            item.trailerHandoffRoute(detailType, detailId, detailAddon, detailResume)
+                                                ?.let(detailsNavController::navigate)
+                                            activeView = ShellView.Resume
+                                        },
                                         onNavigateToDetails = { navType, navId ->
-                                            autoResumeFromContinue = false
-                                            val route = "detail/${java.net.URLEncoder.encode(navType, "UTF-8")}/${java.net.URLEncoder.encode(navId, "UTF-8")}"
-                                            detailsNavController.navigate(route)
+                                            detailsNavController.navigate(catalogDetailsRoute(navType, navId))
                                         },
                                         onNavigateToCastDetail = { castPersonId, castPersonName ->
                                             val route = "cast_detail/$castPersonId/${java.net.URLEncoder.encode(castPersonName, "UTF-8")}"
@@ -1808,6 +1724,7 @@ class MainActivity : ComponentActivity() {
                                         entityKind = studioEntityKind,
                                         entityName = studioEntityName,
                                         sourceType = studioSourceType,
+                                        currentProfile = currentProfile,
                                         onBackPress = { detailsNavController.popBackStack() },
                                         onNavigateToDetails = { navType, navId ->
                                             val route = "detail/${java.net.URLEncoder.encode(navType, "UTF-8")}/${java.net.URLEncoder.encode(navId, "UTF-8")}"
@@ -1817,9 +1734,9 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        if (view == "player" || view == "resume") {
+                                if (view == ShellView.Player || view == ShellView.Resume) {
                             if (selectedVideoUrl.isBlank() && torrentProgress == null) {
-                                LaunchedEffect(Unit) { activeView = "details" }
+                                LaunchedEffect(Unit) { activeView = ShellView.Details }
                             } else {
                             var playbackStarted by remember(selectedPlaybackId, selectedVideoUrl) { mutableStateOf(false) }
                             LaunchedEffect(playbackStarted, selectedPlaybackId) {
@@ -1958,7 +1875,7 @@ class MainActivity : ComponentActivity() {
                                         playerState.pendingSourceSelection = playerState.pendingSourceSelection
                                             ?.copy(launchedStream = chosen)
                                         if (currentProfile?.rememberSourceSelection != false) {
-                                            sourceSelectionStore.rememberSelection(selectedPlaybackId, chosen)
+                                            rememberAndSyncSource(selectedPlaybackId, selectedPlaybackType, chosen)
                                         }
                                     }
                                 },
@@ -1974,7 +1891,6 @@ class MainActivity : ComponentActivity() {
                                     frameRateMatching = currentProfile?.frameRateMatching ?: false,
                                     seekTimeIntervalSeconds = currentProfile?.seekTimeIntervalSeconds ?: 10,
                                     seekThumbnailsEnabled = currentProfile?.seekThumbnailsEnabled ?: true,
-                                    seekThumbnailIntervalSeconds = currentProfile?.seekTimeIntervalSeconds ?: 10,
                                     autoplayNextEpisode = currentProfile?.autoplayNextEpisode ?: false,
                                     skipIntroEnabled = currentProfile?.skipIntro ?: true,
                                     skipRecapEnabled = currentProfile?.skipRecap ?: true,
@@ -1986,9 +1902,9 @@ class MainActivity : ComponentActivity() {
                                     autoplayThresholdPercent = currentProfile?.autoplayThresholdPercent ?: 95,
                                     autoplayThresholdSeconds = currentProfile?.autoplayThresholdSeconds ?: 30,
                                     watchedThresholdPercent = currentProfile?.watchedThreshold ?: 95,
-                                    preferredAudioLanguage = currentProfile?.sourceLanguagePriority1 ?: "",
-                                    preferredAudioLanguageSecondary = currentProfile?.sourceLanguagePriority2 ?: "",
-                                    preferredAudioLanguageTertiary = currentProfile?.sourceLanguagePriority3 ?: "",
+                                    preferredAudioLanguage = preferredAudioLanguages.getOrNull(0).orEmpty(),
+                                    preferredAudioLanguageSecondary = preferredAudioLanguages.getOrNull(1).orEmpty(),
+                                    preferredAudioLanguageTertiary = preferredAudioLanguages.getOrNull(2).orEmpty(),
                                     preferredSubtitleLanguage = currentProfile?.preferredSubtitleLanguage ?: "",
                                     preferredSubtitleLanguageSecondary = currentProfile?.preferredSubtitleLanguageSecondary ?: "",
                                     subtitleSize = currentProfile?.subtitleSize ?: 100,
@@ -2020,7 +1936,9 @@ class MainActivity : ComponentActivity() {
                                             pendingSourceSelection = playerState.pendingSourceSelection,
                                             onConsumePendingSelection = { playerState.pendingSourceSelection = null },
                                             onResumeHintResolved = { detailsResumePlaybackHint = it },
-                                            rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true
+                                            rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true,
+                                            selectedMediaType = selectedPlaybackType,
+                                            onSourceSelectionCommitted = rememberAndSyncSource
                                         )
 
                                         val nextPlaybackId = episodePlaybackId(selectedMovieId, nextEpisode)
@@ -2034,7 +1952,7 @@ class MainActivity : ComponentActivity() {
                                             val autoSelect = currentProfile?.autoSelectSource == true
                                             val rememberSource = currentProfile?.rememberSourceSelection ?: true
                                             val hasRememberedSource = rememberSource &&
-                                                sourceSelectionStore.hasRememberedSelection(nextPlaybackId)
+                                                sourceSelectionStore.hasRememberedSelection(nextPlaybackId, "series")
                                             val currentContinuityStream = playerState.currentStream
                                                 ?: playerState.pendingSourceSelection?.launchedStream
                                             val hasTorrentContinuity = currentContinuityStream != null &&
@@ -2071,7 +1989,7 @@ class MainActivity : ComponentActivity() {
                                             val episodeStreams = if (rawStreams.isEmpty() && nextStreamId != nextPlaybackId) {
                                                 addonRepository.getStreams("series", nextPlaybackId)
                                             } else rawStreams
-                                            if (switchRequestId != playerState.episodeSwitchRequestId || activeView != "player") {
+                                            if (switchRequestId != playerState.episodeSwitchRequestId || activeView != ShellView.Player) {
                                                 return@launch
                                             }
 
@@ -2090,11 +2008,7 @@ class MainActivity : ComponentActivity() {
                                                     excludedFormats = excludedF,
                                                     seasonPackTorrentsOnly = currentProfile?.sourceSeasonPacksOnly == true,
                                                     hideZeroSeeders = currentProfile?.sourceHideZeroSeeders == true,
-                                                    preferredAudioLanguages = StreamSortingService.smartLanguagePreferences(
-                                                        currentProfile?.sourceLanguagePriority1,
-                                                        currentProfile?.sourceLanguagePriority2,
-                                                        currentProfile?.sourceLanguagePriority3
-                                                    )
+                                                    preferredAudioLanguages = preferredAudioLanguages
                                                 )
                                             } else episodeStreams.filter { stream ->
                                                 currentProfile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
@@ -2102,11 +2016,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                             val streams = StreamScoreCalculator.sortDescending(
                                                 filteredStreams,
-                                                StreamSortingService.smartLanguagePreferences(
-                                                    currentProfile?.sourceLanguagePriority1,
-                                                    currentProfile?.sourceLanguagePriority2,
-                                                    currentProfile?.sourceLanguagePriority3
-                                                )
+                                                preferredAudioLanguages
                                             )
 
                                             if (streams.isEmpty()) {
@@ -2133,7 +2043,9 @@ class MainActivity : ComponentActivity() {
                                             // Keep the exact torrent when its next-episode file is available.
                                             val continuityMatch = EpisodeStreamContinuity.findContinuation(actualStream, streams)
                                             // Priority 2: Remembered source
-                                            val preferred = if (rememberSource) sourceSelectionStore.findPreferredStream(nextPlaybackId, streams) else null
+                                            val preferred = if (rememberSource) {
+                                                sourceSelectionStore.findPreferredStream(nextPlaybackId, "series", streams)
+                                            } else null
                                             // Priority 3: First playable (only when autoSelectSource is on)
                                             val streamToPlay = continuityMatch
                                                 ?: preferred
@@ -2251,7 +2163,7 @@ class MainActivity : ComponentActivity() {
                                             val autoSelect = currentProfile?.autoSelectSource == true
                                             val rememberSource = currentProfile?.rememberSourceSelection ?: true
                                             val hasRememberedSource = rememberSource &&
-                                                sourceSelectionStore.hasRememberedSelection(epPlaybackId)
+                                                sourceSelectionStore.hasRememberedSelection(epPlaybackId, "series")
                                             val currentContinuityStream = playerState.currentStream
                                                 ?: playerState.pendingSourceSelection?.launchedStream
                                             val hasTorrentContinuity = currentContinuityStream != null &&
@@ -2288,7 +2200,7 @@ class MainActivity : ComponentActivity() {
                                             val episodeStreams = if (rawStreams2.isEmpty() && epStreamId != epPlaybackId) {
                                                 addonRepository.getStreams("series", epPlaybackId)
                                             } else rawStreams2
-                                            if (switchRequestId != playerState.episodeSwitchRequestId || activeView != "player") {
+                                            if (switchRequestId != playerState.episodeSwitchRequestId || activeView != ShellView.Player) {
                                                 return@launch
                                             }
 
@@ -2307,11 +2219,7 @@ class MainActivity : ComponentActivity() {
                                                     excludedFormats = excludedF,
                                                     seasonPackTorrentsOnly = currentProfile?.sourceSeasonPacksOnly == true,
                                                     hideZeroSeeders = currentProfile?.sourceHideZeroSeeders == true,
-                                                    preferredAudioLanguages = StreamSortingService.smartLanguagePreferences(
-                                                        currentProfile?.sourceLanguagePriority1,
-                                                        currentProfile?.sourceLanguagePriority2,
-                                                        currentProfile?.sourceLanguagePriority3
-                                                    )
+                                                    preferredAudioLanguages = preferredAudioLanguages
                                                 )
                                             } else episodeStreams.filter { stream ->
                                                 currentProfile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
@@ -2319,11 +2227,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                             val streams = StreamScoreCalculator.sortDescending(
                                                 filteredStreams,
-                                                StreamSortingService.smartLanguagePreferences(
-                                                    currentProfile?.sourceLanguagePriority1,
-                                                    currentProfile?.sourceLanguagePriority2,
-                                                    currentProfile?.sourceLanguagePriority3
-                                                )
+                                                preferredAudioLanguages
                                             )
 
                                             if (streams.isEmpty()) {
@@ -2352,7 +2256,7 @@ class MainActivity : ComponentActivity() {
 
                                             // Priority 2: source remembered for this movie/series.
                                             val preferred = if (rememberSource) {
-                                                sourceSelectionStore.findPreferredStream(epPlaybackId, streams)
+                                                sourceSelectionStore.findPreferredStream(epPlaybackId, "series", streams)
                                             } else null
                                             // Priority 3: Auto-select first available (only when autoSelectSource is on)
                                             val streamToPlay = continuityMatch
@@ -2410,7 +2314,9 @@ class MainActivity : ComponentActivity() {
                                                 pendingSourceSelection = playerState.pendingSourceSelection,
                                                 onConsumePendingSelection = { playerState.pendingSourceSelection = null },
                                                 onResumeHintResolved = { detailsResumePlaybackHint = it },
-                                                rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true
+                                                rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true,
+                                                selectedMediaType = selectedPlaybackType,
+                                                onSourceSelectionCommitted = rememberAndSyncSource
                                             )
 
                                             val subtitlePayload = buildSubtitlePayload(streamToPlay, addonSubs)
@@ -2512,7 +2418,9 @@ class MainActivity : ComponentActivity() {
                                             pendingSourceSelection = playerState.pendingSourceSelection,
                                             onConsumePendingSelection = { playerState.pendingSourceSelection = null },
                                             onResumeHintResolved = { detailsResumePlaybackHint = it },
-                                            rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true
+                                            rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true,
+                                            selectedMediaType = selectedPlaybackType,
+                                            onSourceSelectionCommitted = rememberAndSyncSource
                                         )
 
                                         val subtitlePayload = buildSubtitlePayload(streamToPlay, pending.addonSubs)
@@ -2635,13 +2543,15 @@ class MainActivity : ComponentActivity() {
                                         pendingSourceSelection = playerState.pendingSourceSelection,
                                         onConsumePendingSelection = { playerState.pendingSourceSelection = null },
                                         onResumeHintResolved = { detailsResumePlaybackHint = it },
-                                        rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true
+                                        rememberSourceSelection = currentProfile?.rememberSourceSelection ?: true,
+                                        selectedMediaType = selectedPlaybackType,
+                                        onSourceSelectionCommitted = rememberAndSyncSource
                                     )
                                     stopService(Intent(this@MainActivity, TorrentService::class.java))
                                     if (selectedPlaybackId.startsWith("trailer_")) {
                                         trailerReturnToken++
                                     }
-                                    activeView = "details"
+                                    activeView = ShellView.Details
                                 }
                             )
                             }
@@ -2657,7 +2567,7 @@ class MainActivity : ComponentActivity() {
                         PlayerChoiceDialog(
                             onInternal = {
                                 playerState.showPlayerChoiceDialog = false
-                                activeView = "player"
+                                activeView = ShellView.Player
                             },
                             onExternal = {
                                 playerState.showPlayerChoiceDialog = false
@@ -2712,7 +2622,9 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 }
+                }
             }
+        }
         }
 
         // Attach native splash overlay on top of Compose content — renders immediately

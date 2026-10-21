@@ -12,6 +12,8 @@ import org.robolectric.*
 import org.robolectric.annotation.Config
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28],application=Application::class)
@@ -54,18 +56,30 @@ class OttRepositoryOrchestrationP1Test {
         assertTrue(requests.any { it.url.host=="apis.justwatch.com" });assertEquals(1,cinemeta.get())
         val before=requests.size;assertEquals(rows.map { it.configId },repo.getCatalogRows().map { it.configId });assertEquals(before,requests.size)
     }
+    @Test fun concurrentExpiredCacheReadsShareOneRefreshWithoutHoldingCacheLockAcrossNetwork()= kotlinx.coroutines.runBlocking {
+        val repo=repository()
+        val (first,second)=coroutineScope {
+            val a=async { repo.getCatalogRows() };val b=async { repo.getCatalogRows() }
+            a.await() to b.await()
+        }
+        assertEquals(first.map { it.configId },second.map { it.configId })
+        assertEquals(1,cinemeta.get())
+        assertEquals(26,requests.count { it.url.host=="apis.justwatch.com" })
+    }
     @Test fun unresolvedIMDbIdentityIsNeverShownAsCatalogTitle()= kotlinx.coroutines.runBlocking {
         unresolved=true
         try { repository().getCatalogRows();fail("Unresolved results should not produce catalogs") }
         catch(e:OttCatalogException) { assertTrue(e.message!!.contains("temporarily unavailable")) }
         assertEquals(0,cinemeta.get())
     }
-    @Test fun partialProviderFailureKeepsHealthyRowsAndForceRefreshBypassesCache()= kotlinx.coroutines.runBlocking {
+    @Test fun partialProviderFailureKeepsHealthyRowsAndOpenCircuitAvoidsForcedRefreshStorm()= kotlinx.coroutines.runBlocking {
         failNetflix=true
         val repo=repository();val rows=repo.getCatalogRows()
         assertTrue(rows.isNotEmpty());assertFalse(rows.any { it.title.startsWith("Netflix Top 10") })
         assertEquals(1,cinemeta.get())
-        val before=requests.size;repo.getCatalogRows(forceRefresh=true);assertTrue(requests.size>before)
+        val before=requests.size
+        assertEquals(rows.map { it.configId },repo.getCatalogRows(forceRefresh=true).map { it.configId })
+        assertEquals("Open circuit serves last-good data without hammering the undocumented endpoint",before,requests.size)
     }
     @Test fun failedRefreshFallsBackToLastGoodRows()= kotlinx.coroutines.runBlocking {
         val repo=repository();val rows=repo.getCatalogRows();failNetflix=true;unresolved=true

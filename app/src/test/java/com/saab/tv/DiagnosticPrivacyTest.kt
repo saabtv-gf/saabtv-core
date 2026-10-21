@@ -4,6 +4,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DiagnosticPrivacyTest {
+    @Test fun accountErrorsExposeSafeStatusAndKnownCodeWithoutResponseMessages() {
+        val trace = DiagnosticPrivacy.stack(com.saab.tv.data.account.AccountApiException(
+            429, "private server response token=secret", "PT429"
+        ))
+        assertTrue(trace.contains("httpStatus=429 serviceCode=PT429"))
+        assertFalse(trace.contains("private server response"))
+        assertFalse(trace.contains("secret"))
+        val unknownCode = DiagnosticPrivacy.stack(com.saab.tv.data.account.AccountApiException(500, "secret", "SECRET_TOKEN"))
+        assertFalse(unknownCode.contains("SECRET_TOKEN"))
+    }
+
+    @Test fun cryptoAndDetachedFocusAreClassifiedWithoutArbitraryMessages() {
+        assertTrue(DiagnosticPrivacy.stack(javax.crypto.AEADBadTagException("private cipher"))
+            .contains("category=authentication_tag"))
+        val trace = DiagnosticPrivacy.stack(IllegalStateException("FocusRequester is not initialized. private detail"))
+        assertTrue(trace.contains("category=focus_target_uninitialized"))
+        assertFalse(trace.contains("private detail"))
+    }
     @Test fun cancellationIsClassifiedWithoutLeakingMessage() {
         assertTrue(DiagnosticPrivacy.stack(java.io.IOException("Canceled")).contains("category=cancelled"))
         assertTrue(DiagnosticPrivacy.stack(java.net.SocketTimeoutException("secret")).contains("category=timeout"))

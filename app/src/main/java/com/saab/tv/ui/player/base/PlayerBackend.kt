@@ -24,7 +24,12 @@ interface PlayerPlaybackController {
     fun setPlaybackSpeed(speed: Float)
 
     fun selectSource(sourceId: String)
+    /** Switches sources while applying this one-time language choice to that stream. */
+    fun selectSourceForAudioLanguage(sourceId: String, language: String) {
+        selectSource(sourceId)
+    }
     fun selectAudioTrack(trackId: String?)
+    fun setPreferredAudioLanguages(languages: List<String>) {}
     fun selectSubtitleTrack(trackId: String?)
 
     fun setSubtitleVerticalOffset(percent: Int)

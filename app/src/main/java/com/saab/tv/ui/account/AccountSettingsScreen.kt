@@ -1,8 +1,8 @@
 package com.saab.tv.ui.account
 
 import android.app.Activity
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.graphics.Color
@@ -23,6 +24,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.saab.tv.data.account.AccountAuthManager
 import com.saab.tv.data.account.AccountSyncManager
+import com.saab.tv.R
 import com.saab.tv.ui.components.SetupButton
 import com.saab.tv.ui.components.SetupHeader
 import com.saab.tv.ui.addons.VoidDialog
@@ -31,20 +33,29 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+internal fun accountSyncStatusResource(status: String): Int? = when (status) {
+    "Not synced yet" -> R.string.account_sync_not_yet
+    "Checking cloud copy…" -> R.string.account_sync_checking_cloud
+    "Cloud copy restored; reopening…" -> R.string.account_sync_restored_reopening
+    "Syncing…" -> R.string.account_sync_in_progress
+    "Synced" -> R.string.account_sync_synced
+    else -> null // Keep actionable server errors intact for troubleshooting.
+}
+
 @HiltViewModel
 class AccountSettingsViewModel @Inject constructor(val auth: AccountAuthManager, val sync: AccountSyncManager) : ViewModel() {
     var busy by mutableStateOf(false)
         private set
-    var error by mutableStateOf<String?>(null)
+    var error by mutableStateOf(false)
         private set
 
     fun run(action: suspend () -> Unit) {
         if (busy) return
-        busy = true; error = null
+        busy = true; error = false
         viewModelScope.launch {
             try { action() }
             catch (e: CancellationException) { throw e }
-            catch (_: Exception) { error = "Unable to complete account operation. Local data is safe. Try again." }
+            catch (_: Exception) { error = true }
             finally { busy = false }
         }
     }
@@ -52,23 +63,33 @@ class AccountSettingsViewModel @Inject constructor(val auth: AccountAuthManager,
 
 @Composable
 fun AccountSettingsScreen(onBack: () -> Unit, viewModel: AccountSettingsViewModel = hiltViewModel()) {
-    BackHandler(onBack = onBack)
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Screen, onBack = onBack)
     val context = LocalContext.current
     val status by viewModel.sync.status.collectAsStateWithLifecycle()
+    val statusResource = accountSyncStatusResource(status)
+    val statusLabel = if (statusResource == null) status else stringResource(statusResource)
     var confirmation by remember { mutableStateOf<String?>(null) }
     val syncFocus = remember { FocusRequester() }
-    Column(Modifier.fillMaxSize().onPreviewKeyEvent {
+    LaunchedEffect(syncFocus) {
+        withFrameNanos { }
+        syncFocus.requestFocus()
+    }
+    Column(Modifier.fillMaxSize().focusGroup().onPreviewKeyEvent {
         if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) { onBack(); true } else false
     }.verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        SetupHeader("Your Account", "Signed in as ${viewModel.auth.username}", "SAAB TV")
+        SetupHeader(
+            stringResource(R.string.account_title),
+            stringResource(R.string.account_signed_in_as, viewModel.auth.username),
+            "SAAB TV"
+        )
         Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Encrypted Cloud Backup", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-            Text(status, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-            Text("Meaningful changes sync automatically. Playback progress is batched; pausing, leaving playback and leaving the app flush pending changes. Backups are encrypted before upload.",
+            Text(stringResource(R.string.account_cloud_backup), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+            Text(statusLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+            Text(stringResource(R.string.account_sync_description),
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            SetupButton(text = if (viewModel.busy) "Please Wait…" else "Sync Now", enabled = !viewModel.busy,
+            SetupButton(text = if (viewModel.busy) stringResource(R.string.common_please_wait) else stringResource(R.string.account_sync_now), enabled = !viewModel.busy,
                 onClick = { viewModel.run {
                     if (viewModel.sync.syncAndReconcile()) {
                         viewModel.sync.stop()
@@ -78,32 +99,37 @@ fun AccountSettingsScreen(onBack: () -> Unit, viewModel: AccountSettingsViewMode
                 modifier = Modifier.widthIn(min = 200.dp))
             if (viewModel.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         }
-        viewModel.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Text("Manage Your Backup", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-        AccountAction("Restore Backup", "Replace this TV’s data with your cloud backup. Unsynced changes will be replaced.", !viewModel.busy) { confirmation = "cloud" }
-        AccountAction("Use This TV’s Data", "Replace the cloud backup with this TV’s data. Use this to resolve a sync conflict.", !viewModel.busy) { confirmation = "local" }
-        AccountAction("Sign Out", "Your account’s local data stays on this TV, separate from other accounts.", !viewModel.busy, destructive = true) { confirmation = "logout" }
-        Text("Keep your password safe. Password recovery is not available yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        SetupButton("Back", onBack, modifier = Modifier.width(160.dp))
+        if (viewModel.error) Text(stringResource(R.string.account_operation_failed), color = MaterialTheme.colorScheme.error)
+        Text(stringResource(R.string.account_manage_backup), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+        AccountAction(stringResource(R.string.account_restore_backup), stringResource(R.string.account_restore_description), !viewModel.busy) { confirmation = "cloud" }
+        AccountAction(stringResource(R.string.account_use_local_data), stringResource(R.string.account_use_local_description), !viewModel.busy) { confirmation = "local" }
+        AccountAction(stringResource(R.string.common_sign_out), stringResource(R.string.account_sign_out_description), !viewModel.busy, destructive = true) { confirmation = "logout" }
+        Text(stringResource(R.string.account_recovery_unavailable), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SetupButton(stringResource(R.string.common_back), onBack, modifier = Modifier.width(160.dp))
     }
     confirmation?.let { operation ->
         VoidDialog(onDismissRequest = { confirmation = null }, title = when (operation) {
-            "cloud" -> "Replace Local Data?"
-            "local" -> "Replace Cloud Data?"
-            else -> "Sign Out?"
+            "cloud" -> stringResource(R.string.account_replace_local_title)
+            "local" -> stringResource(R.string.account_replace_cloud_title)
+            else -> stringResource(R.string.account_sign_out_title)
         }) {
             val cancelFocus = remember { FocusRequester() }
             LaunchedEffect(operation) { withFrameNanos { }; cancelFocus.requestFocus() }
             Text(when (operation) {
-                "cloud" -> "Replace this account’s local data with the cloud backup. Unsynced local changes will be lost. Saab TV will restart."
-                "local" -> "Use this TV’s data as the cloud copy. Changes made on other devices may be replaced."
-                "logout-offline" -> "Sign out without uploading pending changes? They will remain on this TV under this account, but will not yet be available on other devices."
-                else -> "Sync first, then sign out and restart Saab TV? If sync fails, you can choose to sign out without syncing."
+                "cloud" -> stringResource(R.string.account_replace_local_confirm)
+                "local" -> stringResource(R.string.account_replace_cloud_confirm)
+                "logout-offline" -> stringResource(R.string.account_sign_out_offline_confirm)
+                else -> stringResource(R.string.account_sign_out_confirm)
             })
             Spacer(Modifier.height(20.dp))
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SetupButton(text = "Cancel", onClick = { confirmation = null }, primary = true, focusRequester = cancelFocus, modifier = Modifier.fillMaxWidth())
-                SetupButton(text = when(operation) { "cloud" -> "Restore Backup"; "local" -> "Replace Cloud Backup"; "logout-offline" -> "Sign Out Without Sync"; else -> "Sync And Sign Out" },
+                SetupButton(text = stringResource(R.string.common_cancel), onClick = { confirmation = null }, primary = true, focusRequester = cancelFocus, modifier = Modifier.fillMaxWidth())
+                SetupButton(text = when(operation) {
+                    "cloud" -> stringResource(R.string.account_restore_backup)
+                    "local" -> stringResource(R.string.account_replace_cloud_backup)
+                    "logout-offline" -> stringResource(R.string.account_sign_out_without_sync)
+                    else -> stringResource(R.string.account_sync_and_sign_out)
+                },
                     destructive = true, modifier = Modifier.fillMaxWidth(), onClick = {
                     confirmation = null
                     viewModel.run {

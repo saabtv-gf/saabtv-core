@@ -12,19 +12,22 @@ import com.saab.tv.data.model.StreamQuality
 import com.saab.tv.data.player.PlaybackTrackSelectionStore
 import com.saab.tv.data.player.SourceSelectionStore
 import com.saab.tv.data.profile.ProfileConfigurationManager
+import com.saab.tv.data.profile.AudioLanguagePreferencePolicy
 import com.saab.tv.data.repository.AddonRepository
 import com.saab.tv.data.repository.SubtitleRepository
 import com.saab.tv.data.stream.StreamSortingService
 import com.saab.tv.data.stream.StreamScoreCalculator
 import com.saab.tv.data.tmdb.TmdbEnrichment
 import com.saab.tv.data.tmdb.TmdbEpisodeEnrichment
-import com.saab.tv.data.tmdb.TmdbMetaPreview
 import com.saab.tv.data.tmdb.TmdbMetadataService
 import com.saab.tv.data.tmdb.TmdbService
 import com.saab.tv.data.tmdb.TmdbVideoInfo
 import com.saab.tv.domain.AddonSubtitle
 import com.saab.tv.domain.episodeStreamId
 import com.saab.tv.domain.normalizeEpisodeList
+import com.saab.tv.domain.schema.addonInstallationKey
+import com.saab.tv.domain.schema.TitleCardProjection
+import com.saab.tv.domain.schema.toCanonicalProjection
 import com.saab.tv.data.trakt.TraktSyncManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import com.saab.tv.data.model.SeriesNextUpEntity
@@ -36,6 +39,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -46,7 +50,34 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
+
+/** Extract season/episode from IMDb- and TMDB-prefixed playback IDs, ignoring file suffixes. */
+internal fun playbackEpisodeCoordinates(playbackId: String): Pair<Int, Int>? {
+    val parts = playbackId.split(':')
+    val offset = if (parts.firstOrNull().equals("tmdb", ignoreCase = true)) 2 else 1
+    if (parts.size <= offset + 1) return null
+    val season = parts[offset].toIntOrNull()?.takeIf { it > 0 } ?: return null
+    val episode = parts[offset + 1].toIntOrNull()?.takeIf { it > 0 } ?: return null
+    return season to episode
+}
+
+/** TMDB augments the canonical Cinemeta payload without replacing populated fields. */
+internal fun mergeTmdbDetailsFallback(current: MetaItem, enrichment: TmdbEnrichment): MetaItem = current.copy(
+    name = current.name.takeIf(String::isNotBlank) ?: enrichment.localizedTitle?.takeIf(String::isNotBlank) ?: current.name,
+    description = current.description?.takeIf(String::isNotBlank)
+        ?: enrichment.description?.takeIf(String::isNotBlank),
+    logo = current.logo?.takeIf(String::isNotBlank) ?: enrichment.logo?.takeIf(String::isNotBlank),
+    background = current.background?.takeIf(String::isNotBlank) ?: enrichment.backdrop?.takeIf(String::isNotBlank),
+    poster = current.poster?.takeIf(String::isNotBlank) ?: enrichment.poster?.takeIf(String::isNotBlank),
+    genres = current.genres?.takeIf(List<String>::isNotEmpty)
+        ?: enrichment.genres.takeIf(List<String>::isNotEmpty),
+    releaseInfo = current.releaseInfo?.takeIf(String::isNotBlank)
+        ?: enrichment.releaseInfo?.takeIf(String::isNotBlank),
+    runtime = current.runtime?.takeIf(String::isNotBlank)
+        ?: enrichment.runtimeMinutes?.takeIf { it > 0 }?.let { "${it}m" }
+)
 
 @HiltViewModel
 class DetailsViewModel @Inject constructor(
@@ -62,7 +93,8 @@ class DetailsViewModel @Inject constructor(
     private val traktSyncManager: TraktSyncManager,
     private val seekThumbnailCache: SeekThumbnailCache,
     private val deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences,
-    private val accountSync: com.saab.tv.data.account.AccountSyncManager
+    private val accountSync: com.saab.tv.data.account.AccountSyncManager,
+    private val userStateCommands: com.saab.tv.data.account.UserStateCommandRepository
 ) : ViewModel() {
 
     /** Per-episode watch progress for the episodes sidebar. */
@@ -72,11 +104,18 @@ class DetailsViewModel @Inject constructor(
     )
 
     data class DetailsState(
-        val meta: MetaItem? = null,
+        /** Canonical, provider-independent fields used to render the title surface. */
+        val contentProjection: TitleCardProjection? = null,
+        /** Provider payload retained only for episode/trailer descriptors and exact addon actions. */
+        val providerMetadata: MetaItem? = null,
+        val canonicalIdentityKey: String? = null,
         val resolvedId: String? = null, // IMDb ID resolved from tmdb: prefixes, used for stream/subtitle fetching
         val contentKey: String? = null, // Tracks which item this state belongs to
         val isLoading: Boolean = true,
+        /** Metadata lookup failed; local state and the current route remain intact for retry. */
+        val detailsLoadFailed: Boolean = false,
         val isLoadingStreams: Boolean = false,
+        val canSelectPartialSources: Boolean = false,
         val resumePlaybackId: String? = null,
         val resumeStateReady: Boolean = false,
         val resumeIsNextEpisode: Boolean = false,
@@ -93,11 +132,26 @@ class DetailsViewModel @Inject constructor(
         val tmdbEnabled: Boolean = false,
         val tmdbLoading: Boolean = false,
         val tmdbEnrichment: TmdbEnrichment? = null,
-        val tmdbRecommendations: List<TmdbMetaPreview> = emptyList(),
+        val tmdbRecommendations: List<TitleCardProjection> = emptyList(),
         val trailer: TmdbVideoInfo? = null,
-        val tmdbCollection: List<TmdbMetaPreview> = emptyList(),
+        val tmdbCollection: List<TitleCardProjection> = emptyList(),
         val tmdbCollectionName: String? = null
-    )
+    ) {
+        /** Compatibility adapter for existing playback/actions until their APIs accept typed content. */
+        val meta: MetaItem?
+            get() {
+                val provider = providerMetadata ?: return contentProjection?.asMetaItem()
+                val canonical = contentProjection?.asMetaItem() ?: provider
+                return canonical.copy(
+                    videos = provider.videos,
+                    trailers = provider.trailers,
+                    trailerStreams = provider.trailerStreams,
+                    progress = provider.progress,
+                    resumePlaybackId = provider.resumePlaybackId,
+                    hasNewEpisode = provider.hasNewEpisode
+                )
+            }
+    }
 
     private val _state = MutableStateFlow(DetailsState())
     val state: StateFlow<DetailsState> = _state
@@ -106,24 +160,50 @@ class DetailsViewModel @Inject constructor(
     /** Reactive watchlist status — emits true/false as the current item's watchlist state changes. */
     @OptIn(ExperimentalCoroutinesApi::class)
     val isInWatchlist: StateFlow<Boolean> = combine(
-        _state.map { it.resolvedId ?: it.meta?.id },
+        _state.map { current ->
+            buildSet {
+                current.meta?.id?.let(::add)
+                current.meta?.toCanonicalProjection()?.identity?.stableKey?.let(::add)
+                current.canonicalIdentityKey?.let(::add)
+            }
+        },
         activeProfileId
-    ) { id, profileId -> profileId to id }
-        .flatMapLatest { (profileId, id) ->
-            if (profileId != null && id != null) dao.isInWatchlistFlow(profileId, id) else flowOf(false)
+    ) { identityKeys, profileId -> profileId to identityKeys }
+        .flatMapLatest { (profileId, identityKeys) ->
+            if (profileId != null && identityKeys.isNotEmpty()) {
+                dao.getWatchlistBadgeKeysForProfile(profileId).map { keys -> identityKeys.any(keys::contains) }
+            } else flowOf(false)
         }
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), false)
 
     private var loadDetailsJob: Job? = null
     private var loadStreamsJob: Job? = null
+    private var streamRequestGeneration = 0L
+
+    /** Keeps a best-language choice in the source picker in sync with player audio preferences. */
+    fun promoteAudioLanguagePreference(language: String) {
+        val profileId = activeProfileId.value ?: return
+        viewModelScope.launch(Dispatchers.IO + NonCancellable) {
+            val profile = dao.getProfileById(profileId) ?: return@launch
+            val updated = AudioLanguagePreferencePolicy.promote(profile, language)
+            if (updated == profile) return@launch
+            userStateCommands.saveProfile(updated)
+            _state.update {
+                it.copy(sourceLanguagePreferences = AudioLanguagePreferencePolicy.forProfile(updated))
+            }
+        }
+    }
     private var tmdbEnrichmentJob: Job? = null
+    private var cinemetaTrailerJob: Job? = null
     private var loadRequestVersion: Long = 0L
     private var loadedContentKey: String? = null
     private var resumeRefreshJob: Job? = null
 
     init {
         viewModelScope.launch {
-            dao.getWatchHistory().collect { refreshResumeStateIfNeeded(_state.value.meta) }
+            activeProfileId.flatMapLatest { profileId ->
+                profileId?.let(dao::getWatchHistoryForProfile) ?: flowOf(emptyList())
+            }.collect { refreshResumeStateIfNeeded(_state.value.meta) }
         }
     }
 
@@ -149,18 +229,37 @@ class DetailsViewModel @Inject constructor(
             refreshResumeStateIfNeeded(_state.value.meta)
             if (!playbackOnly) warmTrailer(_state.value.trailer)
             if (_state.value.sidebarState !is SidebarState.Closed) {
-                _state.value = _state.value.copy(sidebarState = SidebarState.Closed)
+                closeSidebar()
             }
             return
         }
 
         loadDetailsJob?.cancel()
+        tmdbEnrichmentJob?.cancel()
+        tmdbEnrichmentJob = null
+        cinemetaTrailerJob?.cancel()
+        cinemetaTrailerJob = null
+        trailerWarmupJob?.cancel()
+        trailerWarmupJob = null
+        resumeRefreshJob?.cancel()
+        resumeRefreshJob = null
+        streamRequestGeneration++
+        loadStreamsJob?.cancel()
+        loadStreamsJob = null
+        prefetchStreamsJob?.cancel()
+        prefetchStreamsJob = null
+        prefetchSubtitlesJob?.cancel()
+        prefetchSubtitlesJob = null
+        prefetchedStreamKey = null
+        prefetchedStreams = null
+        prefetchedSubtitles = null
         loadRequestVersion += 1
         val requestVersion = loadRequestVersion
 
         // Reset immediately so previous movie details never flash for a new item.
         _state.value = DetailsState(
             isLoading = true,
+            detailsLoadFailed = false,
             resumePlaybackId = null,
             autoPlayStream = null,
             addonSubtitles = emptyList(),
@@ -181,8 +280,12 @@ class DetailsViewModel @Inject constructor(
 
                 // Movie source lookup does not depend on decorative metadata.
                 if (type == "movie" && resolvedId.startsWith("tt")) prefetchStreams(type, resolvedId)
-                val details = repository.resolveMetaDetails(type, resolvedId, addonBaseUrl)
+                val fetchedDetails = repository.resolveMetaDetails(type, resolvedId, addonBaseUrl)
                     ?: throw Exception("No meta found")
+                // Reuse the same verified canonical title/artwork projection as cards and search;
+                // this is a local-cache read and does not delay the lazy TMDB details request.
+                val details = repository.canonicalizeCatalogItems(listOf(fetchedDetails)).firstOrNull()
+                    ?: fetchedDetails
                 if (requestVersion != loadRequestVersion) return@launch
                 loadedContentKey = requestKey
                 // Use resolved ID for streams — guarantees IMDb format for stream addons
@@ -192,7 +295,9 @@ class DetailsViewModel @Inject constructor(
                 // and TMDB enrichment continue independently, so neither delays the
                 // first usable details screen.
                 _state.value = _state.value.copy(
-                    meta = details,
+                    contentProjection = details.toCanonicalProjection(),
+                    providerMetadata = details,
+                    canonicalIdentityKey = repository.canonicalIdentityKey(details),
                     resolvedId = streamFetchId,
                     contentKey = requestKey,
                     isLoading = false,
@@ -208,35 +313,46 @@ class DetailsViewModel @Inject constructor(
                 }
 
                 if (details.type == "series") computeAndStoreNextUp(streamFetchId, details.name, details.poster, details.videos)
-                val episodeProgressMap = if (details.type == "series") buildEpisodeProgressMap(streamFetchId) else emptyMap()
+                val episodeProgressMap = if (details.type == "series") {
+                    buildEpisodeProgressMap(streamFetchId, details.addonBaseUrl)
+                } else emptyMap()
                 val lastPlayedEpisodeId = if (details.type == "series")
-                    freshSeriesHistory(streamFetchId).maxByOrNull { it.lastWatched }?.id else null
+                    freshSeriesHistory(streamFetchId, details.addonBaseUrl).maxByOrNull { it.lastWatched }?.id else null
                 val resumePlaybackId = if (details.type == "series") {
-                    val latest = freshSeriesHistory(streamFetchId).maxByOrNull { it.lastWatched }
-                    if (latest != null && !latest.watched && !episodeHistoryIsWatched(streamFetchId, latest.id, episodeProgressMap)) {
+                    val latest = freshSeriesHistory(streamFetchId, details.addonBaseUrl).maxByOrNull { it.lastWatched }
+                    if (latest != null && !latest.watched && !episodeHistoryIsWatched(latest.id, episodeProgressMap)) {
                         latest.id // In-progress episode — resume it
                     } else {
                         // All episodes watched or no history — use next-up if aired
-                        val nextUp = dao.getSeriesNextUp(streamFetchId)
+                        val profileId = activeProfileId.value
+                        val nextUp = profileId?.let { nextUpForSeries(it, streamFetchId, details.addonBaseUrl) }
                         val today = java.time.LocalDate.now().toString()
                         val hasAired = nextUp != null && !nextUp.isComplete &&
                             (nextUp.nextReleased == null || nextUp.nextReleased <= today)
-                        if (hasAired && nextUp != null) {
+                        if (hasAired) {
                             "${streamFetchId}:${nextUp.nextSeason}:${nextUp.nextEpisode}"
                         } else null
                     }
                 } else {
-                    val movieHistory = dao.getHistoryItem(streamFetchId)
+                    val movieHistory = activeProfileId.value?.let {
+                        historyForPlayback(it, streamFetchId, details.type, details.addonBaseUrl)
+                    }
                     if (movieHistory?.watched == true) null else movieHistory?.id
                 }
                 val isMovieWatched = if (details.type != "series") {
-                    dao.getHistoryItem(streamFetchId)?.watched == true
+                    activeProfileId.value?.let {
+                        historyForPlayback(it, streamFetchId, details.type, details.addonBaseUrl)?.watched
+                    } == true
                 } else false
 
                 _state.value = _state.value.copy(
                     resumePlaybackId = resumePlaybackId,
                     resumeStateReady = true,
-                    resumeIsNextEpisode = details.type == "series" && resumePlaybackId != null && dao.getHistoryItem(resumePlaybackId)?.let { !it.watched && it.position > 0 } != true,
+                    resumeIsNextEpisode = details.type == "series" && resumePlaybackId != null &&
+                        activeProfileId.value?.let {
+                            historyForPlayback(it, resumePlaybackId, details.type, details.addonBaseUrl)
+                        }
+                            ?.let { !it.watched && it.position > 0 } != true,
                     lastPlayedEpisodeId = lastPlayedEpisodeId,
                     isMovieWatched = isMovieWatched,
                     episodeProgressMap = episodeProgressMap,
@@ -263,8 +379,10 @@ class DetailsViewModel @Inject constructor(
                 if (requestVersion != loadRequestVersion) return@launch
                 loadedContentKey = null
                 _state.value = _state.value.copy(
-                    meta = null,
+                    contentProjection = null,
+                    providerMetadata = null,
                     isLoading = false,
+                    detailsLoadFailed = true,
                     resumePlaybackId = null,
                     autoPlayStream = null,
                     addonSubtitles = emptyList(),
@@ -287,34 +405,43 @@ class DetailsViewModel @Inject constructor(
         resumeRefreshJob = viewModelScope.launch {
             val seriesId = _state.value.resolvedId ?: meta.id
             if (meta.type == "series") computeAndStoreNextUp(seriesId, meta.name, meta.poster, meta.videos)
-            val episodeProgressMap = if (meta.type == "series") buildEpisodeProgressMap(seriesId) else emptyMap()
+            val episodeProgressMap = if (meta.type == "series") buildEpisodeProgressMap(seriesId, meta.addonBaseUrl) else emptyMap()
             val lastPlayedEpisodeId = if (meta.type == "series")
-                freshSeriesHistory(seriesId).maxByOrNull { it.lastWatched }?.id else null
+                freshSeriesHistory(seriesId, meta.addonBaseUrl).maxByOrNull { it.lastWatched }?.id else null
             val resumePlaybackId = if (meta.type == "series") {
-                val latest = freshSeriesHistory(seriesId).maxByOrNull { it.lastWatched }
-                if (latest != null && !latest.watched && !episodeHistoryIsWatched(seriesId, latest.id, episodeProgressMap)) {
+                val latest = freshSeriesHistory(seriesId, meta.addonBaseUrl).maxByOrNull { it.lastWatched }
+                if (latest != null && !latest.watched && !episodeHistoryIsWatched(latest.id, episodeProgressMap)) {
                     latest.id
                 } else {
-                    val nextUp = dao.getSeriesNextUp(seriesId)
+                    val profileId = activeProfileId.value
+                    val nextUp = profileId?.let { nextUpForSeries(it, seriesId, meta.addonBaseUrl) }
                     val today = java.time.LocalDate.now().toString()
                     val hasAired = nextUp != null && !nextUp.isComplete &&
                         (nextUp.nextReleased == null || nextUp.nextReleased <= today)
-                    if (hasAired && nextUp != null) {
+                    if (hasAired) {
                         "$seriesId:${nextUp.nextSeason}:${nextUp.nextEpisode}"
                     } else null
                 }
             } else {
-                val movieHistory = dao.getHistoryItem(seriesId)
+                val movieHistory = activeProfileId.value?.let {
+                    historyForPlayback(it, seriesId, meta.type, meta.addonBaseUrl)
+                }
                 if (movieHistory?.watched == true) null else movieHistory?.id
             }
             val isMovieWatched = if (meta.type != "series") {
-                dao.getHistoryItem(seriesId)?.watched == true
+                activeProfileId.value?.let {
+                    historyForPlayback(it, seriesId, meta.type, meta.addonBaseUrl)?.watched
+                } == true
             } else false
             if (_state.value.meta?.id == meta.id && _state.value.meta?.type == meta.type) {
                 _state.value = _state.value.copy(
                     resumePlaybackId = resumePlaybackId,
                     resumeStateReady = true,
-                    resumeIsNextEpisode = meta.type == "series" && resumePlaybackId != null && dao.getHistoryItem(resumePlaybackId)?.let { !it.watched && it.position > 0 } != true,
+                    resumeIsNextEpisode = meta.type == "series" && resumePlaybackId != null &&
+                        activeProfileId.value?.let {
+                            historyForPlayback(it, resumePlaybackId, meta.type, meta.addonBaseUrl)
+                        }
+                            ?.let { !it.watched && it.position > 0 } != true,
                     lastPlayedEpisodeId = lastPlayedEpisodeId,
                     isMovieWatched = isMovieWatched,
                     autoPlayStream = null,
@@ -328,38 +455,54 @@ class DetailsViewModel @Inject constructor(
         refreshResumeStateIfNeeded(_state.value.meta)
     }
 
-    private fun episodeHistoryIsWatched(seriesId: String, playbackId: String, progress: Map<String, EpisodeProgress>): Boolean {
-        val parts = playbackId.removePrefix("$seriesId:").split(":")
-        if (parts.size < 2) return false
-        return progress["S${parts[0]}:E${parts[1]}"]?.watched == true
+    private suspend fun historyForPlayback(
+        profileId: Int,
+        playbackId: String,
+        type: String,
+        addonBaseUrl: String?
+    ): WatchHistoryEntity? = dao.getHistoryItemForProfile(profileId, playbackId)
+        ?: repository.canonicalPlayableIdentityKey(playbackId, type, addonBaseUrl)
+            ?.let { dao.getHistoryItemByCanonicalIdentity(profileId, it) }
+
+    private suspend fun nextUpForSeries(
+        profileId: Int,
+        seriesId: String,
+        addonBaseUrl: String?
+    ): SeriesNextUpEntity? = dao.getSeriesNextUpForProfile(profileId, seriesId)
+        ?: repository.canonicalIdentityKey(seriesId, "series", addonBaseUrl)
+            ?.let { dao.getSeriesNextUpByCanonicalIdentity(profileId, it) }
+
+    private fun episodeHistoryIsWatched(playbackId: String, progress: Map<String, EpisodeProgress>): Boolean {
+        val (season, episode) = playbackEpisodeCoordinates(playbackId) ?: return false
+        return progress["S$season:E$episode"]?.watched == true
     }
 
     /**
      * Build a map of "S{season}:E{episode}" → EpisodeProgress from watch history.
      * Checks both with and without stream index suffix.
      */
-    private suspend fun freshSeriesHistory(seriesId: String): List<WatchHistoryEntity> {
-        val profileId = profileConfigurationManager.getLastActiveProfileId() ?: return emptyList()
-        val local = dao.getSeriesEpisodeHistory("$seriesId:%")
+    private suspend fun freshSeriesHistory(seriesId: String, addonBaseUrl: String? = _state.value.meta?.addonBaseUrl): List<WatchHistoryEntity> {
+        val profileId = activeProfileId.value ?: profileConfigurationManager.getLastActiveProfileId() ?: return emptyList()
+        val matchingIdRows = dao.getSeriesEpisodeHistoryForProfile(profileId, "$seriesId:%")
+        val canonicalRoot = repository.canonicalIdentityKey(seriesId, "series", addonBaseUrl)
+        val canonicalRows = canonicalRoot?.let {
+            dao.getSeriesEpisodeHistoryByCanonicalPrefix(profileId, "episode/$it/")
+        }.orEmpty()
+        val local = (matchingIdRows + canonicalRows).distinctBy { it.id }
         return accountSync.freshestPlaybackHistory(local, profileId)
-            .filter { it.type == "series" && it.id.startsWith("$seriesId:") }
+            .filter { it.type == "series" && playbackEpisodeCoordinates(it.id) != null }
     }
 
-    private suspend fun buildEpisodeProgressMap(seriesId: String): Map<String, EpisodeProgress> {
-        val historyItems = freshSeriesHistory(seriesId)
+    private suspend fun buildEpisodeProgressMap(
+        seriesId: String,
+        addonBaseUrl: String? = _state.value.meta?.addonBaseUrl
+    ): Map<String, EpisodeProgress> {
+        val historyItems = freshSeriesHistory(seriesId, addonBaseUrl)
         if (historyItems.isEmpty()) return emptyMap()
 
         val map = mutableMapOf<String, EpisodeProgress>()
         for (item in historyItems) {
-            // Strip the known series prefix first. This remains correct for IDs such as
-            // "tmdb:123:1:2" where counting numeric components from the end is ambiguous.
-            val episodeParts = item.id
-                .removePrefix("$seriesId:")
-                .split(":")
-            if (episodeParts.size < 2) continue
-            val season = episodeParts[0].toIntOrNull() ?: continue
-            val episode = episodeParts[1].toIntOrNull() ?: continue
-            if (season <= 0 || episode <= 0) continue
+            val (season, episode) = playbackEpisodeCoordinates(item.id) ?: continue
             val key = "S${season}:E${episode}"
 
             // Watched wins across stream variants; otherwise retain the highest progress.
@@ -384,31 +527,34 @@ class DetailsViewModel @Inject constructor(
         title: String,
         poster: String?,
         videos: List<MetaVideo>?
-    ) {
-        if (videos.isNullOrEmpty()) return
+    ): SeriesNextUpEntity? {
+        if (videos.isNullOrEmpty()) return null
 
         // Get all watched episodes for this series
-        val progressMap = buildEpisodeProgressMap(seriesId)
+        val addonBaseUrl = _state.value.meta?.addonBaseUrl
+        val progressMap = buildEpisodeProgressMap(seriesId, addonBaseUrl)
+        val profileId = activeProfileId.value ?: profileConfigurationManager.getLastActiveProfileId() ?: return null
+        val existing = nextUpForSeries(profileId, seriesId, addonBaseUrl)
 
         // If no episodes have been watched, remove the next-up entry entirely
         val hasAnyWatched = progressMap.values.any { it.watched }
         if (!hasAnyWatched) {
-            dao.deleteSeriesNextUp(seriesId)
-            return
+            if (existing != null) {
+                userStateCommands.saveSeriesNextUp(profileId, seriesId, null)
+            }
+            return null
         }
 
         // Sort episodes by season then episode number
         val sortedEpisodes = normalizeEpisodeList(videos)
 
-        if (sortedEpisodes.isEmpty()) return
+        if (sortedEpisodes.isEmpty()) return null
 
         // Find the first unwatched episode
         val nextEpisode = sortedEpisodes.firstOrNull { ep ->
             val key = "S${ep.season}:E${ep.episode}"
             progressMap[key]?.watched != true
         }
-
-        val existing = dao.getSeriesNextUp(seriesId)
 
         if (nextEpisode != null) {
             val epTitle = nextEpisode.title.takeIf { it.isNotBlank() && it != "Episode" }
@@ -426,8 +572,7 @@ class DetailsViewModel @Inject constructor(
                 unchanged -> existing?.isNewEpisode ?: false
                 else -> false
             }
-            dao.upsertSeriesNextUp(
-                SeriesNextUpEntity(
+            val nextUp = SeriesNextUpEntity(
                     seriesId = seriesId,
                     title = title,
                     poster = poster ?: existing?.poster,
@@ -439,16 +584,14 @@ class DetailsViewModel @Inject constructor(
                     isNewEpisode = badgeState,
                     updatedAt = if (unchanged) existing.updatedAt else System.currentTimeMillis()
                 )
-            )
+            val scoped = nextUp.copy(profileId = profileId)
+            if (scoped != existing) userStateCommands.saveSeriesNextUp(profileId, seriesId, scoped)
+            return scoped
         } else {
             // All local episodes watched — mark as complete locally.
             // If Trakt knows about a future episode, syncSeriesNextUp will correct this.
-            activeProfileId.value?.let { profileId ->
-                dao.removeFromWatchlist(profileId, seriesId)
-            }
             val alreadyComplete = existing?.isComplete == true
-            dao.upsertSeriesNextUp(
-                SeriesNextUpEntity(
+            val nextUp = SeriesNextUpEntity(
                     seriesId = seriesId,
                     title = title,
                     poster = poster ?: existing?.poster,
@@ -459,7 +602,9 @@ class DetailsViewModel @Inject constructor(
                     isComplete = true,
                     updatedAt = if (alreadyComplete) existing.updatedAt else System.currentTimeMillis()
                 )
-            )
+            val scoped = nextUp.copy(profileId = profileId)
+            if (scoped != existing) userStateCommands.saveSeriesNextUp(profileId, seriesId, scoped)
+            return scoped
         }
     }
 
@@ -467,15 +612,17 @@ class DetailsViewModel @Inject constructor(
         tmdbEnrichmentJob?.cancel()
         tmdbEnrichmentJob = viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (_state.value.contentKey != contentKey) return@launch
                 // Check if TMDB is enabled for the active profile
                 val profileId = profileConfigurationManager.getLastActiveProfileId()
                 val profile = profileId?.let { dao.getProfileById(it) }
                 if (profile?.tmdbEnabled != true) {
-                    _state.value = _state.value.copy(tmdbEnabled = false, tmdbLoading = false)
+                    updateForContent(contentKey) { it.copy(tmdbEnabled = false, tmdbLoading = false) }
                     return@launch
                 }
 
-                _state.value = _state.value.copy(tmdbEnabled = true, tmdbLoading = true)
+                updateForContent(contentKey) { it.copy(tmdbEnabled = true, tmdbLoading = true) }
+                if (_state.value.contentKey != contentKey) return@launch
 
                 val language = profile.tmdbLanguage.ifBlank { null } ?: "en"
                 val mediaType = tmdbService.normalizeMediaType(type)
@@ -483,9 +630,10 @@ class DetailsViewModel @Inject constructor(
                 // Resolve TMDB ID — if unresolvable (e.g. Kitsu IDs), stop loading and show addon data
                 val tmdbId = tmdbService.ensureTmdbId(videoId, mediaType)
                 if (tmdbId == null) {
-                    _state.value = _state.value.copy(tmdbLoading = false)
+                    updateForContent(contentKey) { it.copy(tmdbLoading = false) }
                     return@launch
                 }
+                if (_state.value.contentKey != contentKey) return@launch
 
                 // Fetch enrichment, recommendations, and videos in parallel
                 val enrichmentDeferred = async { tmdbMetadataService.fetchEnrichment(tmdbId, mediaType, language) }
@@ -497,27 +645,24 @@ class DetailsViewModel @Inject constructor(
 
                 // Publish the useful detail payload as soon as it is ready. A slow
                 // recommendations/trailer request must not hold back title/cast data.
-                val currentMeta = _state.value.meta
-                val enrichedMeta = if (currentMeta != null && enrichment != null) {
-                    currentMeta.copy(
-                        name = enrichment.localizedTitle ?: currentMeta.name,
-                        description = enrichment.description ?: currentMeta.description,
-                        logo = enrichment.logo ?: currentMeta.logo,
-                        background = enrichment.backdrop ?: currentMeta.background,
-                        poster = enrichment.poster ?: currentMeta.poster,
-                        genres = enrichment.genres.ifEmpty { currentMeta.genres },
-                        releaseInfo = enrichment.releaseInfo ?: currentMeta.releaseInfo,
-                        runtime = enrichment.runtimeMinutes?.let { "${it}m" } ?: currentMeta.runtime
+                val currentMeta = _state.value.takeIf { it.contentKey == contentKey }?.meta
+                    ?: return@launch
+                val enrichedMeta = enrichment?.let { mergeTmdbDetailsFallback(currentMeta, it) } ?: currentMeta
+                updateForContent(contentKey) {
+                    it.copy(
+                        contentProjection = enrichedMeta.toCanonicalProjection(),
+                        providerMetadata = enrichedMeta,
+                        tmdbEnrichment = enrichment
                     )
-                } else currentMeta
-                _state.value = _state.value.copy(meta = enrichedMeta, tmdbEnrichment = enrichment)
+                }
+                if (_state.value.contentKey != contentKey) return@launch
 
                 val collectionDeferred = async {
                     enrichment?.collectionId?.let { tmdbMetadataService.fetchCollection(it, language) }.orEmpty()
                 }
                 val episodeEnrichmentDeferred = async {
                     if (mediaType != "tv") return@async emptyMap()
-                    val seasons = enrichedMeta?.videos
+                    val seasons = enrichedMeta.videos
                         ?.filter { it.season > 0 }
                         ?.map { it.season }
                         ?.distinct().orEmpty()
@@ -532,21 +677,27 @@ class DetailsViewModel @Inject constructor(
                 val episodeEnrichmentMap = episodeEnrichmentDeferred.await()
                 if (_state.value.contentKey != contentKey) return@launch
 
-                _state.value = _state.value.copy(
-                    tmdbLoading = false,
-                    tmdbRecommendations = recommendations,
-                    trailer = _state.value.trailer ?: trailer,
-                    tmdbCollection = collection,
-                    tmdbCollectionName = enrichment?.collectionName,
-                    episodeEnrichmentMap = episodeEnrichmentMap
-                )
+                updateForContent(contentKey) {
+                    it.copy(
+                        tmdbLoading = false,
+                        tmdbRecommendations = recommendations,
+                        trailer = it.trailer ?: trailer,
+                        tmdbCollection = collection,
+                        tmdbCollectionName = enrichment?.collectionName,
+                        episodeEnrichmentMap = episodeEnrichmentMap
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.w("DetailsViewModel", "TMDB enrichment failed: ${e.message}")
-                _state.value = _state.value.copy(tmdbLoading = false)
+                updateForContent(contentKey) { it.copy(tmdbLoading = false) }
             }
         }
+    }
+
+    private fun updateForContent(contentKey: String, transform: (DetailsState) -> DetailsState) {
+        _state.update { current -> if (current.contentKey == contentKey) transform(current) else current }
     }
 
     private var trailerWarmupJob: Job? = null
@@ -564,7 +715,7 @@ class DetailsViewModel @Inject constructor(
     private fun loadCinemetaTrailer(type: String, videoId: String, contentKey: String) {
         if (!videoId.startsWith("tt")) return
 
-        viewModelScope.launch(Dispatchers.IO) {
+        cinemetaTrailerJob = viewModelScope.launch(Dispatchers.IO) {
             val canonicalType = if (type.equals("series", ignoreCase = true) ||
                 type.equals("tv", ignoreCase = true)) "series" else "movie"
             val meta = runCatching {
@@ -575,8 +726,8 @@ class DetailsViewModel @Inject constructor(
             val trailer = meta?.bestAvailableTrailer() ?: return@launch
 
             if (_state.value.contentKey == contentKey) {
-                _state.value = _state.value.copy(trailer = trailer)
-                warmTrailer(trailer)
+                updateForContent(contentKey) { it.copy(trailer = trailer) }
+                if (_state.value.contentKey == contentKey) warmTrailer(trailer)
             }
         }
     }
@@ -603,12 +754,20 @@ class DetailsViewModel @Inject constructor(
 
         viewModelScope.launch(Dispatchers.IO) {
             if (isCurrentlyWatched) {
-                dao.deleteHistoryItem(itemId)
+                val profileId = activeProfileId.value ?: profileConfigurationManager.getLastActiveProfileId()
+                    ?: return@launch
+                val existing = profileId?.let { dao.getHistoryItemForProfile(it, itemId) }
+                userStateCommands.unmarkWatched(
+                    profileId, itemId, "movie",
+                    listOfNotNull(existing?.copy(watched = false, lastWatched = System.currentTimeMillis()))
+                )
                 accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushMovieUnwatched(itemId)
             } else {
-                dao.upsertHistory(
-                    WatchHistoryEntity(
+                val profileId = activeProfileId.value ?: profileConfigurationManager.getLastActiveProfileId()
+                    ?: return@launch
+                val entry = WatchHistoryEntity(
+                        profileId = profileId,
                         id = itemId,
                         title = meta.name,
                         poster = meta.poster,
@@ -619,10 +778,8 @@ class DetailsViewModel @Inject constructor(
                         watched = true,
                         scrobbled = true
                     )
-                )
-                activeProfileId.value?.let { profileId ->
-                    dao.removeFromWatchlist(profileId, itemId)
-                }
+                userStateCommands.markWatched(profileId, itemId, "movie", listOf(entry),
+                    addonInstallationId = meta.addonBaseUrl?.let(::addonInstallationKey))
                 accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushMovieWatched(itemId)
             }
@@ -645,19 +802,35 @@ class DetailsViewModel @Inject constructor(
 
         viewModelScope.launch(Dispatchers.IO) {
             val playbackId = "$streamId:${episode.season}:${episode.episode}"
+            val profileId = activeProfileId.value ?: profileConfigurationManager.getLastActiveProfileId()
+                ?: return@launch
+            var syncHistory = emptyList<WatchHistoryEntity>()
             if (isCurrentlyWatched) {
-                // Unmark: remove watched entry from history
-                dao.deleteHistoryItem(playbackId)
-                // Also try with stream index variants
-                dao.getSeriesEpisodeHistory("$playbackId:%").forEach {
-                    dao.deleteHistoryItem(it.id)
-                }
+                // Preserve an explicit false state so a delayed watch event cannot revive it.
+                val previous = dao.getHistoryItemForProfile(profileId, playbackId)
+                val variants = dao.getSeriesEpisodeHistoryForProfile(profileId, "$playbackId:%")
+                val changed = (listOfNotNull(previous) + variants).distinctBy { it.id }
+                    .map { it.copy(watched = false, lastWatched = System.currentTimeMillis()) }
+                syncHistory = changed.ifEmpty { listOf(WatchHistoryEntity(
+                    profileId = profileId,
+                    id = playbackId,
+                    title = episode.title.takeIf { it.isNotBlank() && it != "Episode" }
+                        ?: "S${episode.season}:E${episode.episode} - ${meta.name}",
+                    poster = meta.poster,
+                    position = 0L,
+                    duration = 0L,
+                    lastWatched = System.currentTimeMillis(),
+                    type = "series",
+                    watched = false,
+                    scrobbled = false
+                )) }
+                userStateCommands.setEpisodeWatched(profileId, playbackId, false, syncHistory)
                 accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushEpisodeUnwatched(streamId, episode.season, episode.episode)
             } else {
                 // Mark as watched: create a watched history entry
-                dao.upsertHistory(
-                    WatchHistoryEntity(
+                val entry = WatchHistoryEntity(
+                        profileId = profileId,
                         id = playbackId,
                         title = episode.title.takeIf { it.isNotBlank() && it != "Episode" }
                             ?: "S${episode.season}:E${episode.episode} - ${meta.name}",
@@ -669,7 +842,8 @@ class DetailsViewModel @Inject constructor(
                         watched = true,
                         scrobbled = true
                     )
-                )
+                syncHistory = listOf(entry)
+                userStateCommands.setEpisodeWatched(profileId, playbackId, true, syncHistory)
                 accountSync.historyChanged(urgent = true)
                 traktSyncManager.pushEpisodeWatched(streamId, episode.season, episode.episode)
             }
@@ -680,12 +854,26 @@ class DetailsViewModel @Inject constructor(
             // Refresh the progress map and next-up entry
             val updatedMap = buildEpisodeProgressMap(streamId)
             _state.value = _state.value.copy(episodeProgressMap = updatedMap)
-            computeAndStoreNextUp(streamId, meta.name, meta.poster, meta.videos)
+            val nextUp = computeAndStoreNextUp(streamId, meta.name, meta.poster, meta.videos)
+            if (syncHistory.isNotEmpty()) {
+                userStateCommands.updateEpisodeSyncState(
+                    profileId = profileId,
+                    seriesId = streamId,
+                    playbackId = playbackId,
+                    watched = !isCurrentlyWatched,
+                    history = syncHistory,
+                    nextUp = nextUp,
+                    clearNextUp = nextUp == null && updatedMap.values.none { it.watched }
+                )
+            }
         }
     }
 
     // 1. Open Episodes (Series)
     fun openEpisodes() {
+        streamRequestGeneration++
+        loadStreamsJob?.cancel()
+        loadStreamsJob = null
         val videos = _state.value.meta?.videos
             .orEmpty()
             .let(::normalizeEpisodeList)
@@ -736,11 +924,13 @@ class DetailsViewModel @Inject constructor(
         rememberSourceSelection: Boolean = true
     ) {
         loadStreamsJob?.cancel()
+        val requestGeneration = ++streamRequestGeneration
         loadStreamsJob = viewModelScope.launch {
             // Show immediate loading feedback:
             // - Show sources sidebar when user needs to pick manually
             // - Centered spinner when auto-resolve is expected (auto-select or remembered source)
-            val hasRemembered = rememberSourceSelection && sourceSelectionStore.hasRememberedSelection(sourceSelectionId)
+            val hasRemembered = rememberSourceSelection &&
+                sourceSelectionStore.hasRememberedSelection(sourceSelectionId, type)
             val showSidebar = forceSourcePicker || (!autoSelectSource && !hasRemembered)
 
             _state.value = _state.value.copy(
@@ -748,6 +938,8 @@ class DetailsViewModel @Inject constructor(
                 addonSubtitles = emptyList(),
                 availableStreams = emptyList(),
                 isLoadingStreams = true,
+                canSelectPartialSources = false,
+                sourceLanguagePreferences = emptyList(),
                 sidebarState = if (showSidebar) {
                     SidebarState.Sources(displayTitle, null, showBestLanguageOptions = true)
                 }
@@ -755,75 +947,103 @@ class DetailsViewModel @Inject constructor(
             )
 
             try {
+                // Snapshot the profile policy once for this request. Progressive rows and the
+                // final list must use identical quality/format/language/seeder filters and order.
+                val activeProfileId = profileConfigurationManager.getLastActiveProfileId()
+                val profile = activeProfileId?.let { dao.getProfileById(it) }?.let(deviceDisplay::effective)
+                val sourceLanguagePreferences = profile
+                    ?.let(AudioLanguagePreferencePolicy::forProfile)
+                    .orEmpty()
+                val addonSortOrders = dao.getAllAddons().firstOrNull()
+                    ?.associate { it.transportUrl to it.sortOrder } ?: emptyMap()
+                _state.value = _state.value.copy(sourceLanguagePreferences = sourceLanguagePreferences)
+
                 val rawStreams: List<Stream>
                 val addonSubtitles: List<AddonSubtitle>
                 val prefetchKey = "$type:$id"
                 var streamOrigin = "fresh"
 
-                if (prefetchedStreamKey == prefetchKey && prefetchedStreams == null) prefetchStreamsJob?.join()
+                if (showSidebar && prefetchedStreamKey == prefetchKey && prefetchedStreams == null &&
+                    prefetchStreamsJob?.isActive == true) {
+                    // A background warmup can continue until every provider times out. The
+                    // foreground picker cancels that all-or-nothing path and starts progressive
+                    // discovery instead of inheriting its slowest-provider barrier.
+                    prefetchStreamsJob?.cancel()
+                    prefetchStreamsJob = null
+                }
                 val completedPrefetch = prefetchedStreams.takeIf { prefetchedStreamKey == prefetchKey }
                 if (completedPrefetch != null) {
                     streamOrigin = "prefetch"
                     rawStreams = completedPrefetch
                     addonSubtitles = prefetchedSubtitles ?: emptyList()
                 } else {
-                    rawStreams = repository.getStreams(type, id)
+                    rawStreams = if (showSidebar) {
+                        repository.getStreamsProgressively(type, id) { partial ->
+                            val current = _state.value
+                            if (requestGeneration == streamRequestGeneration &&
+                                current.sidebarState is SidebarState.Sources) {
+                                val visiblePartial = filterAndRankStreams(
+                                    partial, type, profile, addonSortOrders, sourceLanguagePreferences
+                                )
+                                _state.value = current.copy(
+                                    availableStreams = visiblePartial,
+                                    canSelectPartialSources = visiblePartial.any(::isPlayableSource),
+                                    sourceLanguagePreferences = sourceLanguagePreferences,
+                                    sidebarState = SidebarState.Sources(
+                                        displayTitle,
+                                        visiblePartial,
+                                        showBestLanguageOptions = true
+                                    )
+                                )
+                            }
+                        }
+                    } else repository.getStreams(type, id)
                     // The player resolves release-matched subtitles after the first frame.
                     addonSubtitles = emptyList()
                 }
 
                 val episodeStreams = if (rawStreams.isEmpty() && !fallbackStreamId.isNullOrBlank() && fallbackStreamId != id) {
                     streamOrigin = "fallback"
-                    repository.getStreams(type, fallbackStreamId)
+                    if (showSidebar) {
+                        repository.getStreamsProgressively(type, fallbackStreamId) { partial ->
+                            val current = _state.value
+                            if (requestGeneration == streamRequestGeneration &&
+                                current.sidebarState is SidebarState.Sources) {
+                                val visiblePartial = filterAndRankStreams(
+                                    partial, type, profile, addonSortOrders, sourceLanguagePreferences
+                                )
+                                _state.value = current.copy(
+                                    availableStreams = visiblePartial,
+                                    canSelectPartialSources = visiblePartial.any(::isPlayableSource),
+                                    sourceLanguagePreferences = sourceLanguagePreferences,
+                                    sidebarState = SidebarState.Sources(
+                                        displayTitle,
+                                        visiblePartial,
+                                        showBestLanguageOptions = true
+                                    )
+                                )
+                            }
+                        }
+                    } else repository.getStreams(type, fallbackStreamId)
                 } else rawStreams
 
-                // Read sorting preferences from the active profile
-                val activeProfileId = profileConfigurationManager.getLastActiveProfileId()
-                val profile = activeProfileId?.let { dao.getProfileById(it) }?.let(deviceDisplay::effective)
-                val sourceLanguagePreferences = StreamSortingService.smartLanguagePreferences(
-                    profile?.sourceLanguagePriority1,
-                    profile?.sourceLanguagePriority2,
-                    profile?.sourceLanguagePriority3
-                )
-
-                val filteredStreams = if (profile?.sourceSortingEnabled != false) {
-                    val enabledQualities = StreamSortingService.parseEnabledQualities(profile?.sourceEnabledQualities ?: "4k,1080p,720p,unknown")
-                    val excludePhrases = StreamSortingService.parseExcludePhrases(profile?.sourceExcludePhrases ?: "")
-                    val addonSortOrders = dao.getAllAddons().firstOrNull()
-                        ?.associate { it.transportUrl to it.sortOrder } ?: emptyMap()
-                    val excludedFormats = StreamSortingService.parseExcludedFormats(profile?.sourceExcludedFormats ?: "")
-                    streamSortingService.sortAndFilter(
-                        streams = episodeStreams,
-                        enabledQualities = enabledQualities,
-                        excludePhrases = excludePhrases,
-                        addonSortOrders = addonSortOrders,
-                        sortBy = profile?.sourceSortPrimary ?: "quality",
-                        maxSizeGb = profile?.sourceMaxSizeGb ?: 0,
-                        excludedFormats = excludedFormats,
-                        seasonPackTorrentsOnly = type == "series" && profile?.sourceSeasonPacksOnly == true,
-                        hideZeroSeeders = profile?.sourceHideZeroSeeders == true,
-                        preferredAudioLanguages = sourceLanguagePreferences
-                    )
-                } else episodeStreams.filter { stream ->
-                    profile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
-                        com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0
+                val streams = withContext(Dispatchers.Default) {
+                    filterAndRankStreams(episodeStreams, type, profile, addonSortOrders, sourceLanguagePreferences)
                 }
-
-                // Selection and auto-play must use the same exact ranking shown
-                // on source cards, independent of legacy primary-sort settings.
-                val streams = StreamScoreCalculator.sortDescending(filteredStreams, sourceLanguagePreferences)
+                if (requestGeneration != streamRequestGeneration) return@launch
                 com.saab.tv.AppDiagnostics.torBoxEvent("Details Source Picker",
                     "origin=$streamOrigin ${com.saab.tv.data.stream.TorBoxDiagnosticSummary.sources(streams)}")
 
                 val preferredStream = if (forceSourcePicker || !rememberSourceSelection) {
                     null
                 } else {
-                    sourceSelectionStore.findPreferredStream(sourceSelectionId, streams)
+                    sourceSelectionStore.findPreferredStream(sourceSelectionId, type, streams)
                 }
 
                 if (preferredStream != null) {
                     _state.value = _state.value.copy(
                         isLoadingStreams = false,
+                        canSelectPartialSources = false,
                         sidebarState = SidebarState.Closed,
                         autoPlayStream = preferredStream,
                         addonSubtitles = addonSubtitles,
@@ -841,6 +1061,7 @@ class DetailsViewModel @Inject constructor(
                     if (firstPlayable != null) {
                         _state.value = _state.value.copy(
                             isLoadingStreams = false,
+                            canSelectPartialSources = false,
                             sidebarState = SidebarState.Closed,
                             autoPlayStream = firstPlayable,
                             addonSubtitles = addonSubtitles,
@@ -854,6 +1075,7 @@ class DetailsViewModel @Inject constructor(
                 // Update sidebar with results
                 _state.value = _state.value.copy(
                     isLoadingStreams = false,
+                    canSelectPartialSources = false,
                     autoPlayStream = null,
                     addonSubtitles = addonSubtitles,
                     availableStreams = streams,
@@ -865,8 +1087,11 @@ class DetailsViewModel @Inject constructor(
                     )
                 )
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (requestGeneration != streamRequestGeneration) return@launch
                 _state.value = _state.value.copy(
                     isLoadingStreams = false,
+                    canSelectPartialSources = false,
                     autoPlayStream = null,
                     addonSubtitles = emptyList(),
                     availableStreams = emptyList(),
@@ -879,6 +1104,38 @@ class DetailsViewModel @Inject constructor(
             }
         }
     }
+
+    private fun filterAndRankStreams(
+        streams: List<Stream>,
+        type: String,
+        profile: com.saab.tv.data.model.ProfileEntity?,
+        addonSortOrders: Map<String, Int>,
+        sourceLanguagePreferences: List<String>
+    ): List<Stream> {
+        val filtered = if (profile?.sourceSortingEnabled != false) {
+            streamSortingService.sortAndFilter(
+                streams = streams,
+                enabledQualities = StreamSortingService.parseEnabledQualities(
+                    profile?.sourceEnabledQualities ?: "4k,1080p,720p,unknown"
+                ),
+                excludePhrases = StreamSortingService.parseExcludePhrases(profile?.sourceExcludePhrases ?: ""),
+                addonSortOrders = addonSortOrders,
+                sortBy = profile?.sourceSortPrimary ?: "quality",
+                maxSizeGb = profile?.sourceMaxSizeGb ?: 0,
+                excludedFormats = StreamSortingService.parseExcludedFormats(profile?.sourceExcludedFormats ?: ""),
+                seasonPackTorrentsOnly = type == "series" && profile?.sourceSeasonPacksOnly == true,
+                hideZeroSeeders = profile?.sourceHideZeroSeeders == true,
+                preferredAudioLanguages = sourceLanguagePreferences
+            )
+        } else streams.filter { stream ->
+            profile?.sourceHideZeroSeeders != true || stream.torBoxCached == true ||
+                com.saab.tv.data.stream.StreamParser.parse(stream).seeds != 0
+        }
+        return StreamScoreCalculator.sortDescending(filtered, sourceLanguagePreferences)
+    }
+
+    private fun isPlayableSource(stream: Stream): Boolean =
+        !stream.url.isNullOrBlank() || !stream.infoHash.isNullOrBlank()
 
     fun consumeAutoPlayStream() {
         if (_state.value.autoPlayStream == null) return
@@ -893,23 +1150,23 @@ class DetailsViewModel @Inject constructor(
 
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             // Collect items to clear
+            val ownerProfileId = activeProfileId.value ?: profileConfigurationManager.getLastActiveProfileId()
+                ?: return@launch
             val historyItems = if (meta.type == "series") {
-                dao.getSeriesEpisodeHistory("$progressId:%")
-            } else {
-                listOfNotNull(dao.getHistoryItem(progressId))
-            }
+                (dao.getSeriesEpisodeHistoryForProfile(ownerProfileId, "$progressId:%") +
+                    listOfNotNull(dao.getHistoryItemForProfile(ownerProfileId, progressId))).distinctBy { it.id }
+            } else listOfNotNull(dao.getHistoryItemForProfile(ownerProfileId, progressId))
 
-            // Delete from local DB
+            // Delete local progress and emit the corresponding v3 tombstones atomically.
+            userStateCommands.clearTitleProgress(ownerProfileId, progressId, meta.type, historyItems)
+
             if (meta.type == "series") {
-                dao.deleteSeriesHistory("$progressId:%")
-                dao.deleteSeriesNextUp(progressId)
                 sourceSelectionStore.clearSelectionsForPrefix(progressId)
                 playbackTrackSelectionStore.clearSelectionsForPrefix(progressId)
                 activeProfileId.value?.let { profileId ->
                     seekThumbnailCache.clearContentPrefix(profileId, progressId)
                 }
             } else {
-                dao.deleteHistoryItem(progressId)
                 sourceSelectionStore.clearSelection(progressId)
                 playbackTrackSelectionStore.clearSelection(progressId)
                 activeProfileId.value?.let { profileId ->
@@ -958,8 +1215,18 @@ class DetailsViewModel @Inject constructor(
         val itemId = _state.value.resolvedId ?: meta.id
         val profileId = activeProfileId.value ?: profileConfigurationManager.getLastActiveProfileId() ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            if (dao.isInWatchlist(profileId, itemId)) {
-                dao.removeFromWatchlist(profileId, itemId)
+            val added = userStateCommands.toggleLibrary(profileId, WatchlistEntity(
+                    profileId = profileId,
+                    id = itemId,
+                    type = meta.type,
+                    title = meta.name,
+                    poster = meta.poster,
+                    addedAt = System.currentTimeMillis(),
+                    background = meta.background,
+                    logo = meta.logo,
+                    sourceAddonBaseUrl = meta.addonBaseUrl
+                ), meta.addonBaseUrl?.let(::addonInstallationKey))
+            if (!added) {
                 traktSyncManager.pushRemove(itemId, meta.type)
             } else {
                 val entity = WatchlistEntity(
@@ -972,7 +1239,6 @@ class DetailsViewModel @Inject constructor(
                     background = meta.background,
                     logo = meta.logo
                 )
-                dao.addToWatchlist(entity)
                 traktSyncManager.pushAdd(entity)
             }
         }
@@ -980,10 +1246,12 @@ class DetailsViewModel @Inject constructor(
 
     // 3. Close Logic
     fun closeSidebar() {
+        streamRequestGeneration++
         loadStreamsJob?.cancel()
         loadStreamsJob = null
         _state.value = _state.value.copy(
             isLoadingStreams = false,
+            canSelectPartialSources = false,
             autoPlayStream = null,
             availableStreams = emptyList(),
             sidebarState = SidebarState.Closed

@@ -25,6 +25,8 @@ class ProfileOnboardingDefaultsTest {
         val base = ProfileEntity(name = "New", themeId = "custom")
         val languages = base.withOnboardingPreferences(listOf("ml", "kn", "en"))
         assertEquals(listOf("ml", "kn", "en"), listOf(languages.sourceLanguagePriority1, languages.sourceLanguagePriority2, languages.sourceLanguagePriority3))
+        assertEquals("ml", languages.preferredAudioLanguage)
+        assertEquals("kn", languages.preferredAudioLanguageSecondary)
         assertEquals(base.tunnelingEnabled, languages.tunnelingEnabled)
         val fourK = base.withOnboardingPreferences(listOf("te", "hi", "en")).forDeviceDisplay(true)
         assertTrue(fourK.tunnelingEnabled)

@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.ui.unit.dp
 import com.saab.tv.ui.settings.HubCategoryManagerDialog
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -69,7 +70,7 @@ fun CreateHubDialog(
 
     // Main Content (always rendered — sub-dialogs overlay on top)
     HubEditorContent(
-        title = "Create New Hub Row",
+        title = stringResource(com.saab.tv.R.string.dashboard_create_hub_row_title),
         name = name,
         onNameChange = { name = it },
         shape = shape,
@@ -147,7 +148,7 @@ fun SelectCategoriesDialog(
     var currentSelection by remember(selectedIds) { mutableStateOf(selectedIds) }
     val confirmFocusRequester = remember { FocusRequester() }
 
-    VoidDialog(onDismissRequest = onDismiss, title = "Select Categories") {
+    VoidDialog(onDismissRequest = onDismiss, title = stringResource(com.saab.tv.R.string.dashboard_select_categories_title)) {
         LazyColumn(
             modifier = Modifier.heightIn(max = 300.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -176,9 +177,9 @@ fun SelectCategoriesDialog(
 
         Spacer(Modifier.height(24.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            VoidButton("Cancel", onDismiss, Modifier.weight(1f))
-            VoidButton("Confirm", { onConfirm(currentSelection) }, Modifier.weight(1f), isPrimary = true, focusRequester = confirmFocusRequester)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            VoidButton(stringResource(com.saab.tv.R.string.common_cancel), onDismiss, Modifier.weight(1f))
+            VoidButton(stringResource(com.saab.tv.R.string.common_confirm), { onConfirm(currentSelection) }, Modifier.weight(1f), isPrimary = true, focusRequester = confirmFocusRequester)
         }
     }
 }

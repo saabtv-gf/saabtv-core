@@ -26,6 +26,7 @@
     <!-- Keep square launcher artwork distinct from the wide TV home-screen banner. -->
     <application
         android:name=".SaabTvApplication"
+        android:localeConfig="@xml/locales_config"
         android:networkSecurityConfig="@xml/network_security_config"
         android:allowBackup="false"
         android:banner="@drawable/banner_saab_new"

@@ -34,7 +34,7 @@ class ProfileViewModelScenarioTest {
 
     @Before fun setUp() {
         fixture = FeatureFixture(RuntimeEnvironment.getApplication())
-        viewModel = ProfileViewModel(fixture.dao, fixture.app.configuration, fixture.traktAuth, fixture.cache)
+        viewModel = ProfileViewModel(fixture.dao, fixture.app.configuration, fixture.traktAuth, fixture.cache, fixture.userStateCommands)
         awaitAppState { !viewModel.isLoading.value }
     }
 

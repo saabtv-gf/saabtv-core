@@ -1,11 +1,11 @@
 package com.saab.tv.ui.settings
 
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.saab.tv.ui.components.SaabMotion
 
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,7 +30,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -41,6 +40,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -59,6 +59,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import com.saab.tv.data.auth.StremioConnectionState
 import com.saab.tv.data.trakt.DeviceAuthState
+import com.saab.tv.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -82,17 +83,21 @@ fun IntegrationsScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is IntegrationsEvent.LoginSuccess -> {
-                    Toast.makeText(context, "Connected to Stremio!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.integration_stremio_connected_toast), Toast.LENGTH_SHORT).show()
                     showConnectDialog = false
                 }
                 is IntegrationsEvent.LoginError -> {
                     Toast.makeText(context, event.message, Toast.LENGTH_LONG).show()
                 }
                 is IntegrationsEvent.SyncComplete -> {
-                    Toast.makeText(context, "Imported ${event.count} addon(s)", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.integration_stremio_imported_addons, event.count),
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
                 is IntegrationsEvent.Disconnected -> {
-                    Toast.makeText(context, "Disconnected from Stremio", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.integration_stremio_disconnected_toast), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -125,12 +130,12 @@ fun IntegrationsScreen(
     ) {
         // Header
         Text(
-            "Integrations",
+            stringResource(R.string.settings_section_integrations),
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
             color = Color.White
         )
         Text(
-            "Connect external services to enhance your experience.",
+            stringResource(R.string.integration_screen_description),
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = Color.White.copy(0.6f),
             modifier = Modifier.padding(top = 4.dp)
@@ -141,7 +146,8 @@ fun IntegrationsScreen(
         // Stremio Integration Item
         IntegrationItem(
             title = "Stremio",
-            subtitle = if (stremioConnected) stremioEmail ?: "Connected" else "Not Connected",
+            subtitle = if (stremioConnected) stremioEmail ?: stringResource(R.string.integration_status_connected)
+            else stringResource(R.string.integration_status_not_connected),
             isConnected = stremioConnected,
             onClick = {
                 if (stremioConnected) {
@@ -157,7 +163,10 @@ fun IntegrationsScreen(
 
         IntegrationItem(
             title = "TorBox",
-            subtitle = if (state.torBoxConfigured) "Availability Checks Enabled" else "API Key Required",
+            subtitle = stringResource(
+                if (state.torBoxConfigured) R.string.integration_status_availability_enabled
+                else R.string.integration_status_api_key_required
+            ),
             isConnected = state.torBoxConfigured,
             onClick = { showTorBox = true },
             modifier = goBackModifier
@@ -167,14 +176,19 @@ fun IntegrationsScreen(
         // TMDB Integration Item
         IntegrationItem(
             title = "TMDB",
-            subtitle = if (!state.tmdbApiKeyConfigured) {
-                "Setup Required"
-            } else if (state.tmdbEnabled) {
-                val langName = TMDB_LANGUAGE_OPTIONS
-                    .firstOrNull { it.second == state.tmdbLanguage }?.first
-                    ?: "Device Language"
-                "Enabled · $langName"
-            } else "Disabled",
+            subtitle = when {
+                !state.tmdbApiKeyConfigured -> stringResource(R.string.integration_status_setup_required)
+                state.tmdbEnabled -> {
+                    val langName = if (state.tmdbLanguage.isBlank()) {
+                        stringResource(R.string.integration_status_device_language)
+                    } else {
+                        TMDB_LANGUAGE_OPTIONS.firstOrNull { it.second == state.tmdbLanguage }?.first
+                            ?: stringResource(R.string.integration_status_device_language)
+                    }
+                    stringResource(R.string.integration_status_enabled_language, langName)
+                }
+                else -> stringResource(R.string.integration_status_disabled)
+            },
             isConnected = state.tmdbApiKeyConfigured,
             onClick = { showTmdbSettings = true },
             modifier = goBackModifier
@@ -186,9 +200,9 @@ fun IntegrationsScreen(
         IntegrationItem(
             title = "Trakt",
             subtitle = when {
-                state.traktConnected -> "Connected"
-                !state.traktCredentialsConfigured -> "Setup Required"
-                else -> "Not Connected"
+                state.traktConnected -> stringResource(R.string.integration_status_connected)
+                !state.traktCredentialsConfigured -> stringResource(R.string.integration_status_setup_required)
+                else -> stringResource(R.string.integration_status_not_connected)
             },
             isConnected = state.traktConnected,
             onClick = { showTraktDialog = true },
@@ -251,33 +265,36 @@ fun IntegrationsScreen(
         var error by remember { mutableStateOf(false) }
         var showRemoteKeyPaste by remember { mutableStateOf(false) }
         val keyFocus = remember { FocusRequester() }
-        com.saab.tv.ui.addons.VoidDialog(onDismissRequest = { showTorBox = false }, title = "TorBox Availability") {
-            Text("Enter your TorBox API key to check whether torrents are cached. Seeder counts come from source providers, so opening a title does not wait for tracker probes. The key is stored encrypted and synced with your account.")
+        com.saab.tv.ui.addons.VoidDialog(
+            onDismissRequest = { showTorBox = false },
+            title = stringResource(R.string.integration_torbox_title)
+        ) {
+            LaunchedEffect(keyFocus) { withFrameNanos { }; keyFocus.requestFocus() }
+            Text(stringResource(R.string.integration_torbox_description))
             Spacer(Modifier.height(16.dp))
-            com.saab.tv.ui.account.AccountCredentialField(key, { key = it; error = false }, "TorBox API Key",
+            com.saab.tv.ui.account.AccountCredentialField(key, { key = it; error = false }, stringResource(R.string.integration_torbox_api_key),
                 keyFocus, true, password = true, visible = visible, onToggleVisibility = { visible = !visible }, isError = error)
             Spacer(Modifier.height(16.dp))
-            com.saab.tv.ui.components.SetupButton("Paste Key From Phone", { showRemoteKeyPaste = true },
+            com.saab.tv.ui.components.SetupButton(stringResource(R.string.integration_paste_key_from_phone), { showRemoteKeyPaste = true },
                 modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(8.dp))
-            com.saab.tv.ui.components.SetupButton("Save", {
+            com.saab.tv.ui.components.SetupButton(stringResource(R.string.integration_save_key), {
                 if (viewModel.saveTorBoxKey(key.trim())) showTorBox = false else error = true
             }, enabled = key.isNotBlank(), primary = true, modifier = Modifier.fillMaxWidth())
-            if (state.torBoxConfigured) com.saab.tv.ui.components.SetupButton("Remove API Key", {
+            if (state.torBoxConfigured) com.saab.tv.ui.components.SetupButton(stringResource(R.string.integration_remove_api_key), {
                 viewModel.clearTorBoxKey(); showTorBox = false
             }, modifier = Modifier.fillMaxWidth())
-            com.saab.tv.ui.components.SetupButton("Cancel", { showTorBox = false }, modifier = Modifier.fillMaxWidth())
+            com.saab.tv.ui.components.SetupButton(stringResource(R.string.common_cancel), { showTorBox = false }, modifier = Modifier.fillMaxWidth())
         }
         if (showRemoteKeyPaste) {
             com.saab.tv.ui.addons.RemotePasteDialog(
                 onDismissRequest = { showRemoteKeyPaste = false },
                 onUrlReceived = { received -> key = received; error = false; showRemoteKeyPaste = false },
                 mode = com.saab.tv.remote_input.RemoteInputMode.SECRET,
-                title = "Paste TorBox API Key",
-                description = "Scan With Your Phone To Enter The Key Securely"
+                title = stringResource(R.string.remote_paste_torbox_title),
+                description = stringResource(R.string.remote_paste_secret_description)
             )
         }
-        LaunchedEffect(Unit) { withFrameNanos { }; keyFocus.requestFocus() }
     }
 
     // TMDB Settings Dialog
@@ -324,9 +341,9 @@ private fun IntegrationItem(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     
-    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
     val bgColor by animateColorAsState(
-        if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(0.05f)
+        if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(0.05f),
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     val focusedContentColor = MaterialTheme.colorScheme.onPrimary
 
@@ -334,7 +351,6 @@ private fun IntegrationItem(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
-            .scale(scale)
             .clip(RoundedCornerShape(12.dp))
             .background(bgColor)
             .border(
@@ -375,7 +391,7 @@ private fun IntegrationItem(
         // Status indicator
         if (isFocused) {
             Text(
-                if (isConnected) "Manage" else "Connect",
+                stringResource(if (isConnected) R.string.common_manage else R.string.integration_connect_action),
                 color = focusedContentColor,
                 style = MaterialTheme.typography.labelMedium
             )
@@ -432,7 +448,7 @@ private fun ConnectStremioDialog(
                     ) {
                         // Header
                         Text(
-                            "Connect your Stremio account",
+                            stringResource(R.string.integration_stremio_connect_title),
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                             color = Color.White,
                             maxLines = 1,
@@ -440,7 +456,7 @@ private fun ConnectStremioDialog(
                             softWrap = false
                         )
                         Text(
-                            "Import your existing addons from Stremio",
+                            stringResource(R.string.integration_stremio_connect_description),
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.Gray,
                             modifier = Modifier.padding(top = 4.dp, bottom = 20.dp),
@@ -457,7 +473,7 @@ private fun ConnectStremioDialog(
                             IntegrationTextField(
                                 value = email,
                                 onValueChange = { email = it },
-                                placeholder = "Email",
+                                placeholder = stringResource(R.string.integration_email),
                                 keyboardType = KeyboardType.Email,
                                 focusRequester = emailFocusRequester,
                                 modifier = Modifier.fillMaxWidth()
@@ -466,7 +482,7 @@ private fun ConnectStremioDialog(
                             IntegrationTextField(
                                 value = password,
                                 onValueChange = { password = it },
-                                placeholder = "Password",
+                                placeholder = stringResource(R.string.integration_password),
                                 isPassword = true,
                                 keyboardType = KeyboardType.Password,
                                 modifier = Modifier.fillMaxWidth(),
@@ -485,7 +501,7 @@ private fun ConnectStremioDialog(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             IntegrationButton(
-                                text = if (isLoading) "Connecting..." else "Connect",
+                                text = stringResource(if (isLoading) R.string.integration_connecting else R.string.integration_connect_action),
                                 onClick = { onLogin(email, password) },
                                 enabled = email.isNotBlank() && password.isNotBlank() && !isLoading,
                                 isPrimary = true,
@@ -500,7 +516,7 @@ private fun ConnectStremioDialog(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            "Secure Sign-In",
+                            stringResource(R.string.integration_secure_signin_title),
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = 18.sp),
                             color = Color.White,
                             maxLines = 1,
@@ -512,7 +528,7 @@ private fun ConnectStremioDialog(
                         Spacer(Modifier.height(12.dp))
 
                         Text(
-                            "Scan with your phone to securely paste into either field.",
+                            stringResource(R.string.integration_secure_signin_hint),
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.Gray,
                             textAlign = TextAlign.Center
@@ -565,7 +581,7 @@ private fun StremioManagementDialog(
         ) {
             Column {
                 Text(
-                    "Stremio Account",
+                    stringResource(R.string.integration_stremio_account),
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = Color.White
                 )
@@ -582,8 +598,8 @@ private fun StremioManagementDialog(
                 // Sync Addons
                 ManagementMenuItem(
                     icon = Icons.Default.Sync,
-                    title = "Add New Addons",
-                    subtitle = "Import addons from your Stremio account",
+                    title = stringResource(R.string.integration_addons_title),
+                    subtitle = stringResource(R.string.integration_addons_description),
                     onClick = onSyncAddons,
                     focusRequester = syncFocusRequester
                 )
@@ -593,8 +609,8 @@ private fun StremioManagementDialog(
                 // Disconnect
                 ManagementMenuItem(
                     icon = Icons.Default.Logout,
-                    title = "Disconnect Account",
-                    subtitle = "Remove Stremio connection",
+                    title = stringResource(R.string.integration_disconnect_account),
+                    subtitle = stringResource(R.string.integration_remove_connection),
                     onClick = onDisconnect,
                     isDestructive = true
                 )
@@ -606,7 +622,7 @@ private fun StremioManagementDialog(
                     horizontalArrangement = Arrangement.End
                 ) {
                     IntegrationButton(
-                        text = "Close",
+                        text = stringResource(R.string.common_close),
                         onClick = onDismiss,
                         modifier = Modifier.width(100.dp)
                     )
@@ -628,15 +644,16 @@ private fun ManagementMenuItem(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
-    val bgColor by animateColorAsState(if (isFocused) Color.White.copy(0.1f) else Color.White.copy(0.05f))
+    val bgColor by animateColorAsState(
+        if (isFocused) Color.White.copy(0.1f) else Color.White.copy(0.05f),
+        animationSpec = SaabMotion.focusFeedbackSpec()
+    )
     val iconColor = if (isDestructive) Color.Red else if (isFocused) MaterialTheme.colorScheme.primary else Color.Gray
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
             .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
@@ -695,7 +712,7 @@ private fun DisconnectConfirmDialog(
         ) {
             Column {
                 Text(
-                    "Disconnect Stremio?",
+                    stringResource(R.string.integration_disconnect_title),
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = Color.White
                 )
@@ -703,7 +720,7 @@ private fun DisconnectConfirmDialog(
                 Spacer(Modifier.height(12.dp))
 
                 Text(
-                    "Your installed addons will remain, but you won't be able to sync new addons until you reconnect.",
+                    stringResource(R.string.integration_disconnect_description),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray
                 )
@@ -715,13 +732,13 @@ private fun DisconnectConfirmDialog(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     IntegrationButton(
-                        text = "Cancel",
+                        text = stringResource(R.string.common_cancel),
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f)
                     )
 
                     IntegrationButton(
-                        text = "Disconnect",
+                        text = stringResource(R.string.integration_disconnect_action),
                         onClick = onConfirm,
                         isDestructive = true,
                         modifier = Modifier.weight(1f),
@@ -860,13 +877,13 @@ private fun TmdbSettingsDialog(
             ) {
                 Column {
                     Text(
-                        "TMDB Settings",
+                        stringResource(R.string.integration_tmdb_settings),
                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                         color = Color.White
                     )
 
                     Text(
-                        "Enrich metadata with localized info, cast, ratings, and more.",
+                        stringResource(R.string.integration_tmdb_description),
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.Gray,
                         modifier = Modifier.padding(top = 4.dp)
@@ -875,12 +892,12 @@ private fun TmdbSettingsDialog(
                     Spacer(Modifier.height(18.dp))
 
                     Text(
-                        "API Access",
+                        stringResource(R.string.integration_api_access),
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                         color = Color.White
                     )
                     Text(
-                        "Enables optional enhanced TMDB metadata.",
+                        stringResource(R.string.integration_tmdb_api_access_description),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
                         modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
@@ -896,7 +913,7 @@ private fun TmdbSettingsDialog(
                                 IntegrationTextField(
                                     value = apiKey,
                                     onValueChange = { apiKey = it },
-                                    placeholder = "TMDB API Key",
+                                    placeholder = stringResource(R.string.integration_tmdb_api_key),
                                     isPassword = true,
                                     focusRequester = apiKeyFocusRequester,
                                     onDone = {
@@ -909,7 +926,7 @@ private fun TmdbSettingsDialog(
                                 Spacer(Modifier.height(10.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     IntegrationButton(
-                                        text = "Save Key",
+                                        text = stringResource(R.string.integration_tmdb_save_key),
                                         onClick = {
                                             onSaveApiKey(apiKey)
                                             editingApiKey = false
@@ -920,7 +937,7 @@ private fun TmdbSettingsDialog(
                                     )
                                     if (apiKeyConfigured) {
                                         IntegrationButton(
-                                            text = "Cancel",
+                                            text = stringResource(R.string.common_cancel),
                                             onClick = { editingApiKey = false },
                                             modifier = Modifier.width(100.dp)
                                         )
@@ -942,18 +959,18 @@ private fun TmdbSettingsDialog(
                                 modifier = Modifier.size(20.dp)
                             )
                             Text(
-                                "API Key Configured",
+                                stringResource(R.string.integration_api_key_configured),
                                 color = Color.White,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f)
                             )
                             IntegrationButton(
-                                text = "Change Key",
+                                text = stringResource(R.string.integration_change_key),
                                 onClick = { editingApiKey = true },
                                 modifier = Modifier.width(125.dp)
                             )
                             IntegrationButton(
-                                text = "Remove",
+                                text = stringResource(R.string.common_remove),
                                 onClick = {
                                     onClearApiKey()
                                     apiKey = ""
@@ -970,8 +987,8 @@ private fun TmdbSettingsDialog(
 
                         // Enable/Disable toggle
                         TmdbToggleItem(
-                            title = "Enable TMDB",
-                            subtitle = "Fetch enhanced metadata from The Movie Database",
+                            title = stringResource(R.string.integration_enable_tmdb),
+                            subtitle = stringResource(R.string.integration_fetch_tmdb_metadata),
                             isEnabled = enabled,
                             onToggle = { onEnabledChange(!enabled) },
                             focusRequester = toggleFocusRequester
@@ -981,12 +998,12 @@ private fun TmdbSettingsDialog(
 
                         // Language section header
                         Text(
-                            "Metadata Language",
+                            stringResource(R.string.integration_metadata_language),
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                             color = if (enabled) Color.White else Color.White.copy(0.4f)
                         )
                         Text(
-                            "Titles, descriptions, and logos will use this language when available.",
+                            stringResource(R.string.integration_metadata_language_description),
                             style = MaterialTheme.typography.bodySmall,
                             color = if (enabled) Color.Gray else Color.Gray.copy(0.5f),
                             modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
@@ -1042,7 +1059,7 @@ private fun TmdbSettingsDialog(
                                         Spacer(Modifier.width(10.dp))
                                     }
                                     Text(
-                                        text = displayName,
+                                        text = if (code.isBlank()) stringResource(R.string.integration_status_device_language) else displayName,
                                         style = MaterialTheme.typography.bodyMedium.copy(
                                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                                         ),
@@ -1065,7 +1082,7 @@ private fun TmdbSettingsDialog(
                         horizontalArrangement = Arrangement.End
                     ) {
                         IntegrationButton(
-                            text = "Close",
+                            text = stringResource(R.string.common_close),
                             onClick = onDismiss,
                             modifier = Modifier.width(100.dp)
                         )
@@ -1087,14 +1104,15 @@ private fun TmdbToggleItem(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
-    val bgColor by animateColorAsState(if (isFocused) Color.White.copy(0.1f) else Color.White.copy(0.05f))
+    val bgColor by animateColorAsState(
+        if (isFocused) Color.White.copy(0.1f) else Color.White.copy(0.05f),
+        animationSpec = SaabMotion.focusFeedbackSpec()
+    )
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
             .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
@@ -1204,7 +1222,7 @@ private fun IntegrationTextField(
         }
 
         IntegrationButton(
-            text = "Paste From Phone",
+            text = stringResource(R.string.integration_paste_key_from_phone),
             onClick = { showRemotePaste = true },
             modifier = Modifier.width(138.dp)
         )
@@ -1218,8 +1236,8 @@ private fun IntegrationTextField(
                 showRemotePaste = false
             },
             mode = com.saab.tv.remote_input.RemoteInputMode.SECRET,
-            title = "Paste $placeholder From Phone",
-            description = "Encrypted pairing · Expires after 5 minutes"
+            title = stringResource(R.string.remote_paste_field_title, placeholder),
+            description = stringResource(R.string.remote_paste_expiration)
         )
     }
 }
@@ -1234,54 +1252,15 @@ private fun IntegrationButton(
     enabled: Boolean = true,
     focusRequester: FocusRequester? = null
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    val scale by animateFloatAsState(if (isFocused && enabled) 1.05f else 1f)
-
-    val activeColor = when {
-        isDestructive -> Color.Red
-        else -> MaterialTheme.colorScheme.primary
-    }
-
-    val bgColor = when {
-        !enabled -> Color.White.copy(0.05f)
-        isFocused -> activeColor
-        else -> Color.White.copy(0.08f)
-    }
-
-    val textColor = when {
-        !enabled -> Color.White.copy(0.3f)
-        isFocused -> if (isDestructive) Color.White else MaterialTheme.colorScheme.onPrimary
-        isDestructive || isPrimary -> activeColor.copy(alpha = 0.95f)
-        else -> Color.White
-    }
-
-    val borderColor = when {
-        !enabled -> Color.White.copy(0.1f)
-        isFocused -> Color.White
-        isDestructive || isPrimary -> activeColor.copy(alpha = 0.75f)
-        else -> Color.White.copy(0.2f)
-    }
-
-    Box(
-        modifier = modifier
-            .height(50.dp)
-            .scale(scale)
-            .clip(RoundedCornerShape(8.dp))
-            .background(bgColor)
-            .border(if (isFocused) 3.dp else 1.dp, borderColor, RoundedCornerShape(8.dp))
-            .then(if (enabled) Modifier.clickable(interactionSource = interactionSource, indication = null) { onClick() } else Modifier)
-            .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
-            .then(if (enabled) Modifier.focusable(interactionSource = interactionSource) else Modifier),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-            color = textColor
-        )
-    }
+    com.saab.tv.ui.components.SetupButton(
+        text = text,
+        onClick = onClick,
+        modifier = modifier.height(50.dp),
+        primary = isPrimary,
+        destructive = isDestructive,
+        enabled = enabled,
+        focusRequester = focusRequester
+    )
 }
 
 @Composable
@@ -1331,7 +1310,7 @@ private fun TraktAuthDialog(
                     color = Color.White
                 )
                 Text(
-                    "Track what you watch automatically across all your apps.",
+                    stringResource(R.string.integration_trakt_description),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray,
                     modifier = Modifier.padding(top = 4.dp)
@@ -1343,7 +1322,7 @@ private fun TraktAuthDialog(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("Connected to Trakt", color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                        Text(stringResource(R.string.integration_trakt_connected), color = Color.White, style = MaterialTheme.typography.bodyLarge)
                     }
 
                     Spacer(Modifier.height(24.dp))
@@ -1353,21 +1332,24 @@ private fun TraktAuthDialog(
                         horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
                     ) {
                         IntegrationButton(
-                            text = "Disconnect",
+                            text = stringResource(R.string.integration_disconnect_action),
                             onClick = onDisconnect,
                             isDestructive = true,
                             modifier = Modifier.width(130.dp),
                             focusRequester = focusRequester
                         )
                         IntegrationButton(
-                            text = "Close",
+                            text = stringResource(R.string.common_close),
                             onClick = onDismiss,
                             modifier = Modifier.width(100.dp)
                         )
                     }
                 } else if (showCredentialEditor) {
                     Text(
-                        "This custom build needs credentials from a Trakt API app. Create or view one at app.trakt.tv/settings/apps.",
+                        stringResource(
+                            R.string.integration_trakt_credentials_description,
+                            "app.trakt.tv/settings/apps"
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.White.copy(alpha = 0.76f)
                     )
@@ -1383,14 +1365,14 @@ private fun TraktAuthDialog(
                             IntegrationTextField(
                                 value = clientId,
                                 onValueChange = { clientId = it },
-                                placeholder = "Trakt Client ID",
+                                placeholder = stringResource(R.string.integration_trakt_client_id),
                                 focusRequester = clientIdFocusRequester
                             )
                             Spacer(Modifier.height(12.dp))
                             IntegrationTextField(
                                 value = clientSecret,
                                 onValueChange = { clientSecret = it },
-                                placeholder = "Trakt Client Secret",
+                                placeholder = stringResource(R.string.integration_trakt_client_secret),
                                 isPassword = true,
                                 onDone = {
                                     if (clientId.isNotBlank() && clientSecret.isNotBlank()) {
@@ -1410,7 +1392,7 @@ private fun TraktAuthDialog(
                         horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
                     ) {
                         IntegrationButton(
-                            text = "Save And Connect",
+                            text = stringResource(R.string.integration_trakt_save_connect),
                             onClick = {
                                 showCredentialEditor = false
                                 onConfigureAndConnect(clientId, clientSecret)
@@ -1420,7 +1402,7 @@ private fun TraktAuthDialog(
                             modifier = Modifier.width(170.dp)
                         )
                         IntegrationButton(
-                            text = "Close",
+                            text = stringResource(R.string.common_close),
                             onClick = onDismiss,
                             modifier = Modifier.width(100.dp)
                         )
@@ -1429,7 +1411,7 @@ private fun TraktAuthDialog(
                     when (authState) {
                         is DeviceAuthState.Idle -> {
                             Text(
-                                "Connect your Trakt account to sync your watchlist, watch history, and scrobble playback.",
+                                stringResource(R.string.integration_trakt_connect_description),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.White.copy(0.7f)
                             )
@@ -1441,19 +1423,19 @@ private fun TraktAuthDialog(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
                             ) {
                                 IntegrationButton(
-                                    text = "Connect",
+                                    text = stringResource(R.string.integration_connect_action),
                                     onClick = onConnect,
                                     isPrimary = true,
                                     modifier = Modifier.width(130.dp),
                                     focusRequester = focusRequester
                                 )
                                 IntegrationButton(
-                                    text = "Edit Credentials",
+                                    text = stringResource(R.string.integration_edit_credentials),
                                     onClick = { showCredentialEditor = true },
                                     modifier = Modifier.width(150.dp)
                                 )
                                 IntegrationButton(
-                                    text = "Close",
+                                    text = stringResource(R.string.common_close),
                                     onClick = onDismiss,
                                     modifier = Modifier.width(100.dp)
                                 )
@@ -1462,7 +1444,7 @@ private fun TraktAuthDialog(
 
                         is DeviceAuthState.WaitingForUser -> {
                             Text(
-                                "Go to the URL below and enter the code:",
+                                stringResource(R.string.integration_trakt_authorization_prompt),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.White.copy(0.7f)
                             )
@@ -1507,7 +1489,7 @@ private fun TraktAuthDialog(
                                 ) {
                                     Image(
                                         bitmap = qrBitmap.asImageBitmap(),
-                                        contentDescription = "QR Code",
+                                        contentDescription = stringResource(R.string.integration_trakt_qr_code),
                                         modifier = Modifier.size(120.dp)
                                     )
                                 }
@@ -1515,7 +1497,7 @@ private fun TraktAuthDialog(
                             }
 
                             Text(
-                                "Waiting for authorization...",
+                                stringResource(R.string.integration_trakt_waiting),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.White.copy(0.5f)
                             )
@@ -1527,7 +1509,7 @@ private fun TraktAuthDialog(
                                 horizontalArrangement = Arrangement.End
                             ) {
                                 IntegrationButton(
-                                    text = "Cancel",
+                                    text = stringResource(R.string.common_cancel),
                                     onClick = onDismiss,
                                     modifier = Modifier.width(100.dp),
                                     focusRequester = focusRequester
@@ -1539,7 +1521,7 @@ private fun TraktAuthDialog(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(8.dp))
-                                Text("Successfully connected!", color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                                Text(stringResource(R.string.integration_trakt_connected_success), color = Color.White, style = MaterialTheme.typography.bodyLarge)
                             }
 
                             Spacer(Modifier.height(24.dp))
@@ -1549,7 +1531,7 @@ private fun TraktAuthDialog(
                                 horizontalArrangement = Arrangement.End
                             ) {
                                 IntegrationButton(
-                                    text = "Done",
+                                    text = stringResource(R.string.common_done),
                                     onClick = onDismiss,
                                     isPrimary = true,
                                     modifier = Modifier.width(100.dp),
@@ -1567,14 +1549,14 @@ private fun TraktAuthDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
                             ) {
-                                IntegrationButton(text = "Retry", onClick = onConnect, isPrimary = true, modifier = Modifier.width(100.dp), focusRequester = focusRequester)
-                                IntegrationButton(text = "Edit Credentials", onClick = { showCredentialEditor = true }, modifier = Modifier.width(150.dp))
-                                IntegrationButton(text = "Close", onClick = onDismiss, modifier = Modifier.width(100.dp))
+                                IntegrationButton(text = stringResource(R.string.common_try_again), onClick = onConnect, isPrimary = true, modifier = Modifier.width(100.dp), focusRequester = focusRequester)
+                                IntegrationButton(text = stringResource(R.string.integration_edit_credentials), onClick = { showCredentialEditor = true }, modifier = Modifier.width(150.dp))
+                                IntegrationButton(text = stringResource(R.string.common_close), onClick = onDismiss, modifier = Modifier.width(100.dp))
                             }
                         }
 
                         is DeviceAuthState.Expired -> {
-                            Text("The authorization code has expired. Please try again.", style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.7f))
+                            Text(stringResource(R.string.integration_trakt_auth_expired), style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(0.7f))
 
                             Spacer(Modifier.height(24.dp))
 
@@ -1582,8 +1564,8 @@ private fun TraktAuthDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
                             ) {
-                                IntegrationButton(text = "Retry", onClick = onConnect, isPrimary = true, modifier = Modifier.width(100.dp), focusRequester = focusRequester)
-                                IntegrationButton(text = "Close", onClick = onDismiss, modifier = Modifier.width(100.dp))
+                                IntegrationButton(text = stringResource(R.string.common_try_again), onClick = onConnect, isPrimary = true, modifier = Modifier.width(100.dp), focusRequester = focusRequester)
+                                IntegrationButton(text = stringResource(R.string.common_close), onClick = onDismiss, modifier = Modifier.width(100.dp))
                             }
                         }
                     }

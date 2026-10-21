@@ -1,9 +1,7 @@
 package com.saab.tv.ui.details
 
 import androidx.compose.animation.*
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -35,10 +33,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.saab.tv.R
 import com.saab.tv.ui.home.DpadRepeatGate
 import com.saab.tv.data.model.stremio.MetaVideo
 import com.saab.tv.data.model.stremio.Stream
@@ -51,6 +54,10 @@ import com.saab.tv.data.tmdb.TmdbEpisodeEnrichment
 import com.saab.tv.domain.episodeMatchesPlaybackId
 import com.saab.tv.domain.normalizeEpisodeList
 import com.saab.tv.domain.resolveEpisodePanelPosition
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.components.SetupButton
+import com.saab.tv.ui.navigation.isBackOrEscape
+import com.saab.tv.ui.navigation.isInitialBackPress
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -67,12 +74,17 @@ sealed class SidebarState {
     ) : SidebarState()
 }
 
+private const val ALL_ADDONS_FILTER = "All Addons"
+
 // Handles Back key for sidebar dismissal. Left trapping is handled per-item via focusProperties.
 private fun Modifier.dpadNavigation(onBack: () -> Unit, trapLeft: Boolean = true, repeatGate: DpadRepeatGate? = null) = this.onPreviewKeyEvent {
     if (repeatGate?.shouldConsume(it) == true) return@onPreviewKeyEvent true
     when {
         trapLeft && it.key == Key.DirectionLeft && it.type == KeyEventType.KeyDown -> true
-        it.key == Key.Back && it.type == KeyEventType.KeyUp -> { onBack(); true }
+        it.isBackOrEscape() -> {
+            if (it.isInitialBackPress()) onBack()
+            true
+        }
         else -> false
     }
 }
@@ -88,8 +100,13 @@ fun GlassSidebarScaffold(
     panelPadding: PaddingValues = PaddingValues(start = 24.dp, top = 24.dp, end = 24.dp, bottom = 0.dp),
     overlayAlpha: Float = 0.4f,
     opaquePanel: Boolean = false,
-    enter: EnterTransition = slideInHorizontally { it },
-    exit: ExitTransition = slideOutHorizontally { it },
+    panelAlignment: Alignment = Alignment.CenterEnd,
+    enter: EnterTransition = slideInHorizontally(
+        animationSpec = SaabMotion.navigationRevealSpec()
+    ) { it },
+    exit: ExitTransition = slideOutHorizontally(
+        animationSpec = SaabMotion.navigationRevealSpec()
+    ) { it },
     content: @Composable ColumnScope.() -> Unit
 ) {
     if (visible) {
@@ -126,7 +143,7 @@ fun GlassSidebarScaffold(
             )
         }
 
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+        Box(Modifier.fillMaxSize(), contentAlignment = panelAlignment) {
             Column(
                 Modifier
                     .fillMaxHeight()
@@ -144,6 +161,8 @@ fun GlassSidebarScaffold(
 @Composable
 fun GlassSidebar(
     state: SidebarState,
+    isLoadingSources: Boolean = false,
+    canSelectPartialSources: Boolean = false,
     sourceLanguagePreferences: List<String> = emptyList(),
     currentEpisodeId: String? = null,
     episodeProgressMap: Map<String, DetailsViewModel.EpisodeProgress> = emptyMap(),
@@ -152,6 +171,7 @@ fun GlassSidebar(
     onEpisodeSelected: (MetaVideo) -> Unit,
     onSourceSelected: (Stream) -> Unit,
     onLanguageSourceSelected: (Stream) -> Unit = onSourceSelected,
+    onAudioLanguageSelected: (String) -> Unit = {},
     onBack: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -188,7 +208,11 @@ fun GlassSidebar(
         panelWidth = 620.dp,
         opaquePanel = state is SidebarState.Sources
     ) {
-        Crossfade(targetState = state, label = "Sidebar") { current ->
+        Crossfade(
+            targetState = state,
+            animationSpec = SaabMotion.navigationRevealSpec(),
+            label = "Sidebar"
+        ) { current ->
             when (current) {
                 is SidebarState.Episodes -> EpisodesContent(
                     videos = current.videos,
@@ -210,11 +234,14 @@ fun GlassSidebar(
                     sourceLanguagePreferences = sourceLanguagePreferences,
                     selectedStreamId = current.selectedStreamId,
                     showBestLanguageOptions = current.showBestLanguageOptions,
+                    isLoadingSources = isLoadingSources,
+                    canSelectPartialSources = canSelectPartialSources,
                     languageFilter = sourceLanguageFilter,
                     onLanguageFilterChanged = { sourceLanguageFilter = it },
                     focusRequester = focusRequester,
                     onSourceClick = onSourceSelected,
                     onLanguageSourceClick = onLanguageSourceSelected,
+                    onAudioLanguageSelected = onAudioLanguageSelected,
                     onBack = onBack
                 )
                 else -> {}
@@ -254,6 +281,7 @@ fun EpisodesContent(
     val seasonListState = rememberLazyListState()
     val scope = rememberCoroutineScope() // Needed for manual scrolling
     val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 150L, verticalRepeatIntervalMs = 200L) }
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction(onDismiss)
 
     LaunchedEffect(selectedSeason) { onSeasonChange(selectedSeason) }
 
@@ -273,7 +301,12 @@ fun EpisodesContent(
     }
 
     Column {
-        Text("More Episodes", style = MaterialTheme.typography.headlineSmall, color = Color.White, modifier = Modifier.padding(bottom = 16.dp))
+        Text(
+            stringResource(R.string.details_more_episodes),
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
 
         if (seasons.isNotEmpty()) {
             LazyRow(state = seasonListState, horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
@@ -303,9 +336,12 @@ fun EpisodesContent(
         LazyColumn(
             state = listState, // Using the hoisted state
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.dpadNavigation(onDismiss, trapLeft = false, repeatGate = repeatGate)
+            modifier = Modifier.dpadNavigation(dispatchBackFromKey, trapLeft = false, repeatGate = repeatGate)
+                .testTag("episodes-list")
         ) {
-            if (episodes.isEmpty()) item { Text("No episodes found.", color = Color.Gray) }
+            if (episodes.isEmpty()) {
+                item { Text(stringResource(R.string.details_no_episodes), color = Color.Gray) }
+            }
             else {
                 itemsIndexed(episodes, key = { index, ep -> "${ep.season}:${ep.episode}:${ep.id}:$index" }) { index, ep ->
                     // Focus Logic: Attach requester to saved index; Attach 'Up' navigation to first index
@@ -342,6 +378,8 @@ fun EpisodesContent(
 fun SourcesContent(
     title: String,
     streams: List<Stream>?,
+    isLoadingSources: Boolean = false,
+    canSelectPartialSources: Boolean = false,
     sourceLanguagePreferences: List<String> = emptyList(),
     selectedStreamId: String? = null,
     showBestLanguageOptions: Boolean = false,
@@ -350,22 +388,25 @@ fun SourcesContent(
     focusRequester: FocusRequester,
     onSourceClick: (Stream) -> Unit,
     onLanguageSourceClick: (Stream) -> Unit = onSourceClick,
+    onAudioLanguageSelected: (String) -> Unit = {},
     onBack: () -> Unit
 ) {
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction(onBack)
     // The percentage printed on each card is the final picker contract. Do not
     // let an older profile sort mode or addon response order contradict it.
     val actualStreams = remember(streams, sourceLanguagePreferences) {
         StreamScoreCalculator.sortDescending(streams.orEmpty(), sourceLanguagePreferences)
     }
-    var addonFilter by remember { mutableStateOf("All Addons") }
+    var addonFilter by remember { mutableStateOf(ALL_ADDONS_FILTER) }
+    val allAddonsLabel = stringResource(R.string.source_filter_all_addons)
 
     val addonNames = remember(actualStreams) {
-        listOf("All Addons") + actualStreams.mapNotNull { it.name?.substringAfter("[")?.substringBefore("]") }.distinct()
+        listOf(ALL_ADDONS_FILTER) + actualStreams.mapNotNull { it.name?.substringAfter("[")?.substringBefore("]") }.distinct()
     }
 
     val addonFilteredStreams = remember(actualStreams, addonFilter) {
         actualStreams.filter { stream ->
-            addonFilter == "All Addons" || stream.name?.contains(addonFilter) == true
+            addonFilter == ALL_ADDONS_FILTER || stream.name?.contains(addonFilter) == true
         }
     }
 
@@ -377,6 +418,10 @@ fun SourcesContent(
     val filtered = remember(addonFilteredStreams, languageFilter) {
         if (languageFilter == null) addonFilteredStreams
         else addonFilteredStreams.filter { StreamLanguageSelector.hasLanguage(it, languageFilter) }
+    }
+    val partialFocusIndex = remember(filtered, isLoadingSources, canSelectPartialSources) {
+        if (!isLoadingSources || !canSelectPartialSources) -1
+        else filtered.indexOfFirst(::isPlayableSource)
     }
 
     LaunchedEffect(availableLanguages, languageFilter) {
@@ -411,7 +456,11 @@ fun SourcesContent(
     }
 
     Column {
-        Text("Select Source", style = MaterialTheme.typography.titleLarge, color = Color.White)
+        Text(
+            stringResource(R.string.source_select),
+            style = MaterialTheme.typography.titleLarge,
+            color = Color.White
+        )
         Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(16.dp))
 
@@ -419,40 +468,45 @@ fun SourcesContent(
             Box(
                 Modifier.fillMaxSize()
                     .focusRequester(focusRequester)
-                    .dpadNavigation(onBack)
+                    .dpadNavigation(dispatchBackFromKey)
                     .focusable(),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(16.dp))
-                    Text("Loading streams...", color = Color.LightGray)
+                    Text(stringResource(R.string.source_loading), color = Color.LightGray)
                 }
             }
         } else {
             if (showBestLanguageOptions) {
                 Text(
-                    "Source Language",
+                    stringResource(R.string.source_language),
                     style = MaterialTheme.typography.labelLarge,
                     color = Color.White.copy(alpha = 0.78f)
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     BestLanguageButton(
-                        label = "All",
+                        label = stringResource(R.string.source_language_all),
                         isSelected = languageFilter == null,
+                        enabled = !isLoadingSources,
                         blockLeft = true,
                         onClick = { onLanguageFilterChanged(null) },
-                        modifier = Modifier.focusRequester(focusRequester)
+                        modifier = if (isLoadingSources) Modifier else Modifier.focusRequester(focusRequester)
                     )
                     availableLanguages.forEach { language ->
                         BestLanguageButton(
                             label = language.label,
                             isSelected = languageFilter == language.code,
+                            enabled = !isLoadingSources,
                             onClick = {
                                 onLanguageFilterChanged(language.code)
                                 StreamLanguageSelector.bestAvailable(addonFilteredStreams, language.code)
-                                    ?.let(onLanguageSourceClick)
+                                    ?.let { stream ->
+                                        onAudioLanguageSelected(language.code)
+                                        onLanguageSourceClick(stream)
+                                    }
                             }
                         )
                     }
@@ -466,20 +520,45 @@ fun SourcesContent(
                     .then(
                         if (!showBestLanguageOptions) {
                             Modifier.focusProperties { up = FocusRequester.Cancel }
+                        } else if (isLoadingSources && partialFocusIndex < 0) {
+                            Modifier.focusRequester(focusRequester)
                         } else Modifier
                     )
                     .onPreviewKeyEvent { it.key == Key.DirectionLeft && it.type == KeyEventType.KeyDown },
-                onSelect = { addonFilter = it }
+                onSelect = { addonFilter = it },
+                allAddonsLabel = allAddonsLabel
             )
+            if (isLoadingSources) {
+                Row(
+                    modifier = Modifier.padding(top = 10.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        stringResource(R.string.source_checking_remaining),
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
             Spacer(Modifier.height(16.dp))
             LazyColumn(
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.dpadNavigation(onBack, repeatGate = repeatGate)
+                modifier = Modifier.dpadNavigation(dispatchBackFromKey, repeatGate = repeatGate)
             ) {
                 if (filtered.isEmpty()) item {
                     Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
-                        Text("No streams found.", color = Color.Gray, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            stringResource(R.string.source_no_streams),
+                            color = Color.Gray,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
                     }
                 } else {
                     itemsIndexed(filtered, key = { index, s -> "${index}_${s.url ?: s.addonTransportUrl ?: index}" }) { index, s ->
@@ -488,7 +567,11 @@ fun SourcesContent(
                             stream = s,
                             sourceLanguagePreferences = sourceLanguagePreferences,
                             isPlaying = index == selectedIndex && selectedStreamId != null,
-                            modifier = if (!showBestLanguageOptions && index == selectedIndex) {
+                            enabled = !isLoadingSources || (canSelectPartialSources && isPlayableSource(s)),
+                            modifier = if (
+                                (showBestLanguageOptions && index == partialFocusIndex) ||
+                                (!showBestLanguageOptions && index == selectedIndex)
+                            ) {
                                 Modifier.focusRequester(focusRequester)
                             } else Modifier
                         ) { onSourceClick(s) }
@@ -499,89 +582,77 @@ fun SourcesContent(
     }
 }
 
+private fun isPlayableSource(stream: Stream): Boolean =
+    !stream.url.isNullOrBlank() || !stream.infoHash.isNullOrBlank()
+
 @Composable
 private fun BestLanguageButton(
     label: String,
     isSelected: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     blockLeft: Boolean = false
 ) {
-    var isFocused by remember { mutableStateOf(false) }
-    val primary = MaterialTheme.colorScheme.primary
-    Button(
+    SetupButton(
+        text = label,
         onClick = onClick,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = when {
-                isFocused -> primary
-                isSelected -> primary.copy(alpha = 0.28f)
-                else -> Color.White.copy(alpha = 0.08f)
-            },
-            contentColor = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.White
-        ),
-        border = if (isSelected && !isFocused) {
-            BorderStroke(1.dp, primary.copy(alpha = 0.75f))
-        } else null,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        modifier = modifier
-            .onFocusChanged { isFocused = it.isFocused }
-            .onPreviewKeyEvent {
-                blockLeft && it.key == Key.DirectionLeft && it.type == KeyEventType.KeyDown
-            }
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-        )
-    }
+        modifier = modifier.onPreviewKeyEvent {
+            blockLeft && it.key == Key.DirectionLeft && it.type == KeyEventType.KeyDown
+        },
+        primary = isSelected,
+        enabled = enabled,
+        compact = true
+    )
 }
 
 // --- ITEMS & UI COMPONENTS ---
 
 @Composable
-fun FilterDropdown(currentValue: String, options: List<String>, modifier: Modifier, onSelect: (String) -> Unit) {
+fun FilterDropdown(
+    currentValue: String,
+    options: List<String>,
+    modifier: Modifier,
+    onSelect: (String) -> Unit,
+    allAddonsLabel: String? = null
+) {
     var expanded by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
 
     // Size calculation for symmetry
     var rowWidth by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current
-
+    val displayValue = if (currentValue == ALL_ADDONS_FILTER && allAddonsLabel != null) allAddonsLabel else currentValue
     val primary = MaterialTheme.colorScheme.primary
 
     Box(modifier) {
-        Button(
+        SetupButton(
+            text = displayValue,
             onClick = { expanded = true },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (isFocused) primary else Color.White.copy(0.05f),
-                contentColor = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.LightGray
-            ),
+            primary = false,
+            content = {
+                Text(
+                    displayValue,
+                    color = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.LightGray,
+                    fontWeight = if (isFocused) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    tint = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.Gray
+                )
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .onFocusChanged { isFocused = it.isFocused }
                 .onSizeChanged {
                     // Capture width of the button to apply to dropdown
                     rowWidth = with(density) { it.width.toDp() }
-                }
-                .border(
-                    if (isFocused) 3.dp else 1.dp,
-                    if (isFocused) Color.White else Color.White.copy(alpha = 0.14f),
-                    RoundedCornerShape(8.dp)
-                ),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Text(
-                currentValue,
-                color = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.LightGray,
-                fontWeight = if (isFocused) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
-                modifier = Modifier.weight(1f)
-            )
-            Icon(
-                Icons.Default.ArrowDropDown,
-                null,
-                tint = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.Gray
-            )
-        }
+                },
+            compact = false
+        )
 
         // HACK: DropdownMenu in standard M3 doesn't support 'containerColor' param easily.
         // It uses the internal Surface color. To get transparency, we override the theme
@@ -634,7 +705,7 @@ fun FilterDropdown(currentValue: String, options: List<String>, modifier: Modifi
                     DropdownMenuItem(
                         text = {
                             Text(
-                                text = opt,
+                                text = if (opt == ALL_ADDONS_FILTER && allAddonsLabel != null) allAddonsLabel else opt,
                                 color = if (isItemFocused) primary else Color.White
                             )
                         },
@@ -659,7 +730,11 @@ fun SeasonTab(number: Int, isSelected: Boolean, modifier: Modifier, onClick: () 
             .onFocusChanged { isFocused = it.isFocused }
             .clickable(onClick = onClick).focusable().padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        Text("Season $number", color = if (isSelected || isFocused) Color.Black else Color.White, style = MaterialTheme.typography.labelLarge)
+        Text(
+            stringResource(R.string.episode_season, number),
+            color = if (isSelected || isFocused) Color.Black else Color.White,
+            style = MaterialTheme.typography.labelLarge
+        )
     }
 }
 
@@ -697,7 +772,7 @@ fun EpisodeItem(
     // Use TMDB data when available, fall back to addon data
     val title = enrichment?.title
         ?: episode.title.takeIf { it.isNotBlank() && it != "Episode" }
-        ?: "Episode ${episode.episode}"
+        ?: stringResource(R.string.episode_fallback_title, episode.episode)
     val overview = enrichment?.overview ?: episode.overview
     val thumbnail = enrichment?.thumbnail ?: episode.thumbnail
     val protectSpoilers = com.saab.tv.data.profile.shouldHideEpisodeSpoilers(rememberEpisodeSpoilers(), isWatched)
@@ -736,6 +811,7 @@ fun EpisodeItem(
                 .focusProperties { left = FocusRequester.Cancel; right = if (hasHiddenDescription) descriptionRequester else buttonRequester }
                 .onFocusChanged { thumbnailFocused = it.isFocused }
                 .clickable(onClick = onClick)
+                .testTag("episode-thumbnail-${episode.id}")
                 .focusable()
         ) {
             if (thumbnail != null) {
@@ -811,7 +887,7 @@ fun EpisodeItem(
                 // Synopsis
                 if (hasHiddenDescription) {
                     com.saab.tv.ui.components.SetupButton(
-                        if (descriptionExpanded) "Hide Description" else "Show Description",
+                        stringResource(if (descriptionExpanded) R.string.episode_hide_description else R.string.episode_show_description),
                         { descriptionExpanded = !descriptionExpanded }, compact = true,
                         focusRequester = descriptionRequester,
                         modifier = Modifier.padding(top = 4.dp).focusProperties { left = thumbnailRequester; right = buttonRequester }
@@ -836,7 +912,7 @@ fun EpisodeItem(
                 ) {
                     if (runtime != null) {
                         Text(
-                            "(${runtime} min)",
+                            stringResource(R.string.episode_runtime, runtime),
                             color = Color.White.copy(0.4f),
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -850,7 +926,7 @@ fun EpisodeItem(
                     }
                     if (isPlaying) {
                         Text(
-                            "Playing",
+                            stringResource(R.string.playback_status_playing),
                             style = MaterialTheme.typography.labelSmall,
                             color = primary
                         )
@@ -884,11 +960,12 @@ private fun WatchedToggleButton(
     modifier: Modifier = Modifier
 ) {
     val primary = MaterialTheme.colorScheme.primary
+    val watchedLabel = stringResource(if (isWatched) R.string.episode_watched else R.string.episode_mark_watched)
 
     val targetWidth = if (isFocused) if (isWatched) 100.dp else 138.dp else 24.dp
     val animatedWidth by animateDpAsState(
         targetValue = targetWidth,
-        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        animationSpec = SaabMotion.focusRetargetSpec(),
         label = "watchedBtnWidth"
     )
 
@@ -927,6 +1004,7 @@ private fun WatchedToggleButton(
             }
             .onFocusChanged { onFocusChanged(it.isFocused) }
             .clickable(onClick = onClick)
+            .semantics { contentDescription = watchedLabel }
             .focusable()
             .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -941,7 +1019,7 @@ private fun WatchedToggleButton(
         if (isFocused) {
             Spacer(Modifier.width(4.dp))
             Text(
-                if (isWatched) "Watched" else "Mark as watched",
+                watchedLabel,
                 color = if (isWatched) primary else Color.White,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1
@@ -957,6 +1035,7 @@ fun RawSourceItem(
     stream: Stream,
     sourceLanguagePreferences: List<String> = emptyList(),
     isPlaying: Boolean = false,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
@@ -972,7 +1051,9 @@ fun RawSourceItem(
         colors = CardDefaults.cardColors(containerColor = if (isFocused) Color.White.copy(0.1f) else Color.White.copy(0.05f)),
         modifier = modifier.fillMaxWidth().onFocusChanged { isFocused = it.isFocused }
             .border(if (isFocused) 3.dp else 0.dp, if (isFocused) primary else Color.Transparent, RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
+            // The caller decides whether the row has passed current filters and availability
+            // checks. Keep it focusable for D-pad navigation while gating the click itself.
+            .clickable { if (enabled) onClick() }
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -986,14 +1067,14 @@ fun RawSourceItem(
                 )
                 if (isPlaying) {
                     Text(
-                        "Playing",
+                        stringResource(R.string.playback_status_playing),
                         style = MaterialTheme.typography.labelSmall,
                         color = primary,
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }
                 Text(
-                    "Score $scorePercent%",
+                    stringResource(R.string.source_score, scorePercent),
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                     color = if (isFocused) MaterialTheme.colorScheme.onPrimary else primary,
                     modifier = Modifier

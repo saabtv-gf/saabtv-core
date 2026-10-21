@@ -147,7 +147,6 @@ class ExoPlayerBackend(
     private var decoderStressJob: Job? = null
     private var assHandler: AssHandler? = null
     private val jitterRecoveryPolicy = VideoJitterRecoveryPolicy()
-    private val bufferRecoveryPolicy = PlaybackBufferRecoveryPolicy()
     private val reliabilityStateMachine = PlaybackReliabilityStateMachine()
 
     private fun getOrCreateAssHandler(): AssHandler {
@@ -209,8 +208,17 @@ class ExoPlayerBackend(
     private var loadRequest: PlayerLoadRequest? = null
     private var currentSourceId: String? = null
     private var pendingAudioTrackId: String? = null
+    private var pendingRequestedAudioLanguage: String? = null
     private var pendingSubtitleTrackId: String? = null
     private var hasAppliedAudioLanguagePref = false
+    private var preferredAudioLanguages = AudioTrackPreferencePolicy.normalizePreferences(
+        listOf(
+            playbackSettings.preferredAudioLanguage,
+            playbackSettings.preferredAudioLanguageSecondary,
+            playbackSettings.preferredAudioLanguageTertiary
+        )
+    )
+    private var exoTrackSelector: DefaultTrackSelector? = null
     private var hasAppliedSubtitleLanguagePref = false
     private var manualSubtitleSelection = false
     var resolveStreamSubtitles: (suspend (PlayerSourceOption) -> List<PlayerSubtitleSource>)? = null
@@ -437,7 +445,7 @@ class ExoPlayerBackend(
             transitionReliability(PlaybackReliabilityPhase.FAILED)
             _uiState.update {
                 it.copy(
-                    errorMessage = error.errorCodeName.ifBlank { error.message ?: "Playback error" },
+                    errorMessage = PlaybackErrorPolicy.userMessage(error.errorCodeName, error.message),
                     isBuffering = false,
                     isSeeking = false
                 )
@@ -613,12 +621,18 @@ class ExoPlayerBackend(
 
     override fun load(request: PlayerLoadRequest) {
         if (released) return
-        loadToken++
-        diagnosticsSessionId = request.diagnosticsSessionId
+        // A previous one-shot language switch may have muted the old source while
+        // waiting for its target track. Never carry that temporary state to a new title.
+        setAudioTrackTypeDisabled(false)
+        val requestToken = ++loadToken
+        val intent = request.playbackIntent
+        val resumePositionMs = intent?.resumePositionMs ?: request.startPositionMs
+        diagnosticsSessionId = request.diagnosticsSessionId.ifBlank { intent?.sessionId.orEmpty() }
         diagnostic(
             "Load Requested",
             "source=${PlaybackDiagnostics.describeUrl(request.mediaUrl)} " +
-                "resume=${request.startPositionMs}ms sources=${request.sources.size}"
+                "resume=${resumePositionMs}ms sources=${request.sources.size} " +
+                "intent=${intent?.mediaKind ?: "legacy"}"
         )
 
         // Emit loading state immediately so Compose can render the spinner
@@ -636,7 +650,7 @@ class ExoPlayerBackend(
         scope.launch {
             yield() // Let Compose render loading state before any heavy work
 
-            if (released) return@launch
+            if (released || requestToken != loadToken) return@launch
 
             subtitleFormatHintsByTrackId.clear()
             subtitleFormatHintsByLabelLanguage.clear()
@@ -647,13 +661,19 @@ class ExoPlayerBackend(
                 val normalizedLabel = subtitle.label.ifBlank { "Subtitle ${index + 1}" }
                 subtitle.copy(id = normalizedId, label = normalizedLabel)
             }
-            val normalizedRequest = request.copy(subtitles = normalizedSubtitles)
+            // PlaybackIntent is the domain handoff. Keep the legacy request field as an
+            // adapter input, but prefer its exact resume value when one is present.
+            val normalizedRequest = request.copy(
+                subtitles = normalizedSubtitles,
+                startPositionMs = resumePositionMs.coerceAtLeast(0L)
+            )
 
             loadRequest = normalizedRequest
             externalSubtitleSources = normalizedSubtitles.associateBy { subtitle ->
                 externalSubtitleTrackId(subtitle.id)
             }
             pendingAudioTrackId = normalizedRequest.preferredAudioTrackId
+            pendingRequestedAudioLanguage = null
             pendingSubtitleTrackId = normalizeSubtitleSelectionId(normalizedRequest.preferredSubtitleTrackId)
             forcedSubtitleTrackId = pendingSubtitleTrackId?.takeIf { it in externalSubtitleSources.keys }
             hasAppliedAudioLanguagePref = false
@@ -687,7 +707,7 @@ class ExoPlayerBackend(
                 transitionReliability(PlaybackReliabilityPhase.PREPARING)
                 prepareSource(
                     source = initialSource.copy(url = normalizedRequest.mediaUrl),
-                    startPositionMs = request.startPositionMs,
+                    startPositionMs = normalizedRequest.startPositionMs,
                     autoPlay = request.autoPlay
                 )
             } else {
@@ -698,7 +718,7 @@ class ExoPlayerBackend(
                 transitionReliability(PlaybackReliabilityPhase.PREPARING)
                 prepareSource(
                     source = defaultSource,
-                    startPositionMs = request.startPositionMs,
+                    startPositionMs = normalizedRequest.startPositionMs,
                     autoPlay = request.autoPlay
                 )
             }
@@ -753,6 +773,33 @@ class ExoPlayerBackend(
     }
 
     override fun selectSource(sourceId: String) {
+        pendingRequestedAudioLanguage = null
+        setAudioTrackTypeDisabled(false)
+        applyAudioLanguageOrder(preferredAudioLanguages)
+        selectSourceInternal(sourceId)
+    }
+
+    override fun selectSourceForAudioLanguage(sourceId: String, language: String) {
+        if (released) return
+        val requestedLanguage = AudioTrackPreferencePolicy.normalizeTrackLanguage(language, null)
+            ?: return selectSource(sourceId)
+        if (sourceId != currentSourceId && _sourceOptions.value.none { it.id == sourceId }) return
+        pendingRequestedAudioLanguage = requestedLanguage
+        pendingAudioTrackId = null
+        hasAppliedAudioLanguagePref = false
+        // A source can expose its tracks after prepare(), and ExoPlayer otherwise
+        // starts its default track immediately. Keep audio silent until the requested
+        // language is actually present, so a source switch never leaks another language.
+        setAudioTrackTypeDisabled(true)
+        applyAudioLanguageOrder(listOf(requestedLanguage))
+        if (sourceId == currentSourceId) {
+            applyPendingTrackSelections()
+            return
+        }
+        selectSourceInternal(sourceId)
+    }
+
+    private fun selectSourceInternal(sourceId: String) {
         if (released) return
         if (sourceId == currentSourceId) return
         val source = _sourceOptions.value.firstOrNull { it.id == sourceId } ?: return
@@ -761,6 +808,9 @@ class ExoPlayerBackend(
         if (source.url.startsWith("magnet:")) {
             val handler = onMagnetSourceSelected
             if (handler != null) {
+                // Resolution may finish after another source/title has already taken
+                // over this backend. Treat it like every other async load operation.
+                val resolutionToken = ++loadToken
                 currentSourceId = sourceId
                 _uiState.update { it.copy(currentSourceId = sourceId, isBuffering = true, hasRenderedFirstFrame = false) }
                 handler.invoke(
@@ -768,13 +818,13 @@ class ExoPlayerBackend(
                     source.fileIdx,
                     source.fileName,
                     { resolvedMagnetUrl, localUrl ->
-                        if (!released && currentSourceId == sourceId) {
+                        if (!released && loadToken == resolutionToken && currentSourceId == sourceId) {
                             val resolvedOption = _sourceOptions.value.firstOrNull { it.id == sourceId } ?: source
                             switchToSource(resolvedOption.id, resolvedOption.copy(url = localUrl))
                         }
                     },
                     { message ->
-                        if (!released && currentSourceId == sourceId) {
+                        if (!released && loadToken == resolutionToken && currentSourceId == sourceId) {
                             _uiState.update {
                                 it.copy(
                                     isBuffering = false,
@@ -826,6 +876,7 @@ class ExoPlayerBackend(
     override fun selectAudioTrack(trackId: String?) {
         if (released) return
         val id = trackId?.takeIf { it.isNotBlank() } ?: return
+        pendingRequestedAudioLanguage = null
         val player = exoPlayer ?: return
         val shouldResumeAfterSwitch = player.playWhenReady
         val locator = audioTrackLocators[id]
@@ -846,8 +897,28 @@ class ExoPlayerBackend(
             scheduleAudioSwitchRecovery(player)
         }
         pendingAudioTrackId = null
+        // A user or preference-driven track selection must not be replaced by a
+        // later onTracksChanged callback using ExoPlayer's original default.
+        hasAppliedAudioLanguagePref = true
         _uiState.update { it.copy(selectedAudioTrackId = id) }
         refreshTrackOptions(player.currentTracks)
+    }
+
+    override fun setPreferredAudioLanguages(languages: List<String>) {
+        if (released) return
+        val normalized = AudioTrackPreferencePolicy.normalizePreferences(languages)
+        if (normalized == preferredAudioLanguages) return
+        preferredAudioLanguages = normalized
+        pendingRequestedAudioLanguage = null
+        setAudioTrackTypeDisabled(false)
+        // Reconcile a live selection against the new priority order. If the
+        // selected variant is still in the best language, keep it; otherwise
+        // move to the best available language instead of waiting for another
+        // source/title to be opened.
+        pendingAudioTrackId = _uiState.value.selectedAudioTrackId
+        hasAppliedAudioLanguagePref = false
+        applyAudioLanguageOrder(normalized)
+        applyPendingTrackSelections()
     }
 
     override fun selectSubtitleTrack(trackId: String?) {
@@ -1135,6 +1206,7 @@ class ExoPlayerBackend(
             player.release()
         }
         exoPlayer = null
+        exoTrackSelector = null
         _playerReady.value = null
         playerView = null
         lastCueGroup = null
@@ -1155,7 +1227,6 @@ class ExoPlayerBackend(
         subtitleFormatHintsByTrackId.clear()
         subtitleFormatHintsByLabelLanguage.clear()
         subtitleFormatHintsByLabel.clear()
-        bufferRecoveryPolicy.reset()
         sourcePreparedElapsedMs = 0L
         jitterRecoveryPolicy.reset()
         ioAutoRetrySourceId = null
@@ -1211,7 +1282,6 @@ class ExoPlayerBackend(
 
         audioSwitchRecoveryJob?.cancel()
         audioSwitchRecoveryJob = null
-        bufferRecoveryPolicy.reset()
         sourcePreparedElapsedMs = SystemClock.elapsedRealtime()
         diagnostic(
             "Source Preparing",
@@ -1388,9 +1458,11 @@ class ExoPlayerBackend(
             setParameters(
                 buildUponParameters()
                     .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
+                    .setPreferredAudioLanguages(*preferredAudioLanguages.toTypedArray())
                     .setTunnelingEnabled(playbackSettings.tunnelingEnabled)
             )
         }
+        exoTrackSelector = trackSelector
 
         val activityManager = appContext.getSystemService(ActivityManager::class.java)
         val currentQuality = _sourceOptions.value
@@ -1402,18 +1474,24 @@ class ExoPlayerBackend(
             isLowRamDevice = activityManager?.isLowRamDevice ?: true,
             qualityHeight = currentQuality
         )
+        // Keep first-frame startup fast, but require a useful cushion after a
+        // network stall so marginal sources do not alternate play/buffer every
+        // couple of seconds. The buffer remains capped by the adaptive byte and
+        // duration limits below.
+        val rebufferStartMs = maxOf(bufferConfig.bufferForPlaybackAfterRebufferMs, 5_000)
         diagnostic(
             "Adaptive Buffer",
             "memory=${activityManager?.memoryClass ?: 0}MB lowRam=${activityManager?.isLowRamDevice} " +
                 "quality=${currentQuality ?: 0} max=${bufferConfig.maxBufferMs}ms " +
-                "target=${bufferConfig.targetBufferBytes / (1024 * 1024)}MB"
+                "target=${bufferConfig.targetBufferBytes / (1024 * 1024)}MB " +
+                "rebufferStart=${rebufferStartMs}ms"
         )
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 bufferConfig.minBufferMs,
                 bufferConfig.maxBufferMs,
                 bufferConfig.bufferForPlaybackMs,
-                bufferConfig.bufferForPlaybackAfterRebufferMs
+                rebufferStartMs
             )
             .setTargetBufferBytes(bufferConfig.targetBufferBytes)
             .setBackBuffer(bufferConfig.backBufferMs, false)
@@ -1597,7 +1675,10 @@ class ExoPlayerBackend(
         }
         return okHttpClient ?: OkHttpClient.Builder()
             .connectTimeout(8000, TimeUnit.MILLISECONDS)
-            .readTimeout(8000, TimeUnit.MILLISECONDS)
+            // CDNs/debrid peers can pause between range reads for longer than a
+            // normal API response. An 8 s timeout converted temporary slow reads
+            // into source retries and visible playback stalls.
+            .readTimeout(20_000, TimeUnit.MILLISECONDS)
             .connectionPool(SHARED_PLAYBACK_CONNECTION_POOL)
             .retryOnConnectionFailure(true)
             .followRedirects(true)
@@ -1679,7 +1760,7 @@ class ExoPlayerBackend(
             it.copy(
                 durationMs = duration,
                 positionMs = position,
-                bufferedPositionMs = if (player.isPlaying) buffered else it.bufferedPositionMs,
+                bufferedPositionMs = buffered,
                 isPlaying = player.isPlaying,
                 playWhenReady = player.playWhenReady,
                 isBuffering = player.playbackState == Player.STATE_BUFFERING,
@@ -1689,17 +1770,9 @@ class ExoPlayerBackend(
             )
         }
 
-        if (bufferRecoveryPolicy.shouldRecover(
-                nowMs = SystemClock.elapsedRealtime(),
-                positionMs = position,
-                isBuffering = player.playbackState == Player.STATE_BUFFERING,
-                playWhenReady = player.playWhenReady
-            )
-        ) {
-            player.setSeekParameters(SeekParameters.CLOSEST_SYNC)
-            player.seekTo((position - 750L).coerceAtLeast(0L))
-            player.prepare()
-        }
+        // Do not seek/re-prepare solely because playback position stayed still
+        // during STATE_BUFFERING. A slow but progressing network read naturally
+        // leaves the position fixed; restarting it here discarded that progress.
     }
 
     private fun beginSeekFeedback() {
@@ -1795,12 +1868,15 @@ class ExoPlayerBackend(
             return true
         }
 
-        if (!codeName.startsWith("ERROR_CODE_IO_")) return false
+        if (!PlaybackErrorPolicy.shouldRetryCurrentSource(codeName)) return false
         if (codeName == "ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED") return false
         if (codeName == "ERROR_CODE_IO_NO_PERMISSION") return false
         if (codeName == "ERROR_CODE_IO_FILE_NOT_FOUND") return false
         return true
     }
+
+    private fun shouldFallbackToAnotherSource(error: PlaybackException): Boolean =
+        PlaybackErrorPolicy.shouldTryNextSource(error.errorCodeName) || isRecoverableError(error)
 
     private fun retryFromStartAfter416(error: PlaybackException): Boolean {
         if (hasRetriedCurrentSourceAfter416) return false
@@ -1839,7 +1915,7 @@ class ExoPlayerBackend(
     }
 
     private fun attemptAutomaticSourceFallback(error: PlaybackException): Boolean {
-        if (!isRecoverableError(error)) return false
+        if (!shouldFallbackToAnotherSource(error)) return false
         val player = exoPlayer ?: return false
         val fallbackId = reliabilityStateMachine.nextFallback(
             _sourceOptions.value
@@ -1859,6 +1935,7 @@ class ExoPlayerBackend(
         hasAppliedAudioLanguagePref = false
         hasAppliedSubtitleLanguagePref = false
         loadToken++
+        val resolutionToken = loadToken
         transitionReliability(PlaybackReliabilityPhase.FALLING_BACK)
         diagnostic(
             "Source Fallback",
@@ -1875,7 +1952,7 @@ class ExoPlayerBackend(
                 fallback.fileIdx,
                 fallback.fileName,
                 { resolvedMagnetUrl, localUrl ->
-                    if (released) return@invoke
+                    if (released || loadToken != resolutionToken || currentSourceId != fallback.id) return@invoke
                     val resolvedOption = _sourceOptions.value.firstOrNull { it.id == fallback.id } ?: fallback
                     currentSourceId = resolvedOption.id
                     prepareSource(
@@ -1886,7 +1963,7 @@ class ExoPlayerBackend(
                     )
                 },
                 { message ->
-                    if (released) return@invoke
+                    if (released || loadToken != resolutionToken || currentSourceId != fallback.id) return@invoke
                     transitionReliability(PlaybackReliabilityPhase.FAILED)
                     _uiState.update {
                         it.copy(
@@ -1964,7 +2041,10 @@ class ExoPlayerBackend(
                         audioOptions += PlayerTrackOption(
                             id = id,
                             label = buildAudioTrackLabel(format, audioOptions.size + 1),
-                            language = format.language,
+                            language = AudioTrackPreferencePolicy.normalizeTrackLanguage(
+                                format.language,
+                                format.label
+                            ) ?: format.language,
                             selected = selected,
                             audioFormat = inferAudioFormatTag(format)
                         )
@@ -2069,15 +2149,31 @@ class ExoPlayerBackend(
 
 
     private fun applyPendingTrackSelections() {
-        val audioId = pendingAudioTrackId
-        if (!audioId.isNullOrBlank()) {
-            selectAudioTrack(audioId)
-        } else if (!hasAppliedAudioLanguagePref) {
-            val preferredId = resolvePreferredAudioTrack()
-            if (preferredId != null) {
-                selectAudioTrack(preferredId)
+        val requestedLanguage = pendingRequestedAudioLanguage
+        if (requestedLanguage != null) {
+            val requestedTrackId = AudioTrackPreferencePolicy.trackIdForLanguage(
+                _audioTracks.value,
+                requestedLanguage
+            )
+            if (requestedTrackId != null) {
+                pendingRequestedAudioLanguage = null
                 hasAppliedAudioLanguagePref = true
+                selectAudioTrack(requestedTrackId)
             }
+            // Keep waiting for the requested source track instead of applying a
+            // global preference and briefly playing the wrong language.
+            return
+        }
+
+        val audioId = pendingAudioTrackId
+        val resolvedAudioId = AudioTrackPreferencePolicy.initialTrackId(
+            tracks = _audioTracks.value,
+            preferences = preferredAudioLanguages,
+            rememberedTrackId = audioId
+        )
+        pendingAudioTrackId = null
+        if (!hasAppliedAudioLanguagePref && resolvedAudioId != null) {
+            selectAudioTrack(resolvedAudioId)
         }
 
         val subtitleId = pendingSubtitleTrackId?.takeIf { id ->
@@ -2109,17 +2205,26 @@ class ExoPlayerBackend(
         }
     }
 
-    private fun resolvePreferredAudioTrack(): String? {
-        val priorities = listOf(
-            playbackSettings.preferredAudioLanguage,
-            playbackSettings.preferredAudioLanguageSecondary,
-            playbackSettings.preferredAudioLanguageTertiary
-        ).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        val options = _audioTracks.value
-        for (language in priorities) {
-            findTrackByLanguage(options, language)?.let { return it.id }
+    private fun applyAudioLanguageOrder(languages: List<String>) {
+        exoTrackSelector?.let { selector ->
+            selector.setParameters(
+                selector.buildUponParameters().setPreferredAudioLanguages(*languages.toTypedArray())
+            )
         }
-        return null
+    }
+
+    private fun setAudioTrackTypeDisabled(disabled: Boolean) {
+        val player = exoPlayer ?: return
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, disabled)
+            .build()
+    }
+
+    private fun resolvePreferredAudioTrack(): String? {
+        return AudioTrackPreferencePolicy.preferredTrackId(
+            tracks = _audioTracks.value,
+            preferences = preferredAudioLanguages
+        )
     }
 
     private fun resolvePreferredSubtitleTrack(): String? {
@@ -2176,12 +2281,7 @@ class ExoPlayerBackend(
         trackIndex: Int,
         explicitId: String?
     ): String {
-        val cleanExplicit = explicitId?.trim()?.takeIf { it.isNotEmpty() }
-        return if (cleanExplicit != null) {
-            if (cleanExplicit.startsWith("$prefix:")) cleanExplicit else "$prefix:$cleanExplicit"
-        } else {
-            "$prefix:g$groupIndex:t$trackIndex"
-        }
+        return AudioTrackPreferencePolicy.stableTrackId(prefix, groupIndex, trackIndex, explicitId)
     }
 
     private fun buildAudioTrackLabel(format: Format, fallbackIndex: Int): String {

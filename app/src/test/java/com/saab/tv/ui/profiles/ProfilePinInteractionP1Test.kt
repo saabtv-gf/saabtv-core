@@ -64,7 +64,7 @@ class ProfilePinInteractionP1Test {
         compose.onNodeWithText("Continue").performClick()
         enter("1235")
         compose.onNodeWithText("Confirm").performClick()
-        compose.onNodeWithText("PINs do not match").assertExists()
+        compose.onNodeWithText("PINs do not match.").assertExists()
         compose.runOnIdle { assertEquals(null, setPin) }
         enter("1234")
         compose.onNodeWithText("Confirm").performClick()

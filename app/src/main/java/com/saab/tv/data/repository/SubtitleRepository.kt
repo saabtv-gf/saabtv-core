@@ -3,6 +3,7 @@ package com.saab.tv.data.repository
 import android.net.Uri
 import com.google.gson.JsonElement
 import com.saab.tv.data.local.AddonDao
+import com.saab.tv.data.cache.BoundedExpiringCache
 import com.saab.tv.data.model.AddonEntity
 import com.saab.tv.data.model.stremio.Manifest
 import com.saab.tv.data.model.stremio.StreamSubtitle
@@ -18,7 +19,6 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -51,7 +51,11 @@ class SubtitleRepository @Inject constructor(
         data object Unknown : SubtitleCapability
     }
 
-    private val subtitleCapabilityCache = ConcurrentHashMap<String, SubtitleCapability>()
+    private val subtitleCapabilityCache = BoundedExpiringCache<String, SubtitleCapability>(
+        capacity = 128,
+        ttlMillis = 30 * 60 * 1_000L,
+        nowMillis = System::currentTimeMillis
+    )
 
     suspend fun getSubtitles(
         type: String,

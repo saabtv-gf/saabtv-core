@@ -43,7 +43,7 @@ class ThemeScreenComposeJourneyTest {
         profile = ProfileEntity(id = 72, name = "Themes", themeId = "void")
         app.dao.insertProfile(profile)
         DefaultThemes.ALL.forEach { app.dao.insertTheme(it) }
-        themeManager = ThemeManager(app.dao)
+        themeManager = ThemeManager(app.dao, app.userStateCommands)
         themeManager.setCurrentProfile(profile.id, profile.themeId)
     }
 
@@ -71,6 +71,17 @@ class ThemeScreenComposeJourneyTest {
         compose.onNodeWithText("Neon").assertExists()
         compose.onNodeWithText("Void").assertExists()
         compose.runOnIdle { assertEquals("void", themeManager.currentTheme.value.id) }
+    }
+
+    @Test fun themeCardsAndCreateActionKeepTheirBoundsWhenFocused() {
+        show()
+        listOf("Neon", "Create Custom Theme").forEach { label ->
+            val node = compose.onNodeWithText(label)
+            val initialBounds = node.fetchSemanticsNode().boundsInRoot
+            node.performSemanticsAction(SemanticsActions.RequestFocus)
+            node.assertIsFocused()
+            assertEquals("$label must not resize when focused", initialBounds, node.fetchSemanticsNode().boundsInRoot)
+        }
     }
 
     @Test fun createCustomThemeActionReturnsToTheCaller() {

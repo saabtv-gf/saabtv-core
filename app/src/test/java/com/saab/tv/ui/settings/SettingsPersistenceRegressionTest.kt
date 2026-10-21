@@ -34,6 +34,7 @@ import org.robolectric.annotation.SQLiteMode
 class SettingsPersistenceRegressionTest {
     private lateinit var db: SaabTvDatabase
     private lateinit var vm: SettingsViewModel
+    private lateinit var commands: com.saab.tv.data.account.UserStateCommandRepository
     private var expected = ProfileEntity(id = 1, name = "One")
     private val context get() = RuntimeEnvironment.getApplication()
     @Before fun setUp() = runBlocking {
@@ -48,8 +49,11 @@ class SettingsPersistenceRegressionTest {
         }
         val display = DeviceDisplayPreferences(context)
         val repository = AddonRepository(api, db.addonDao(), TorBoxAvailabilityService(context))
-        val config = ProfileConfigurationManager(context, db.addonDao(), StremioAuthManager(context, StremioAuthService()), repository, display)
-        vm = SettingsViewModel(db.addonDao(), config, SeekThumbnailCache(context), context, display)
+        commands = com.saab.tv.data.account.UserStateCommandRepository(
+            db, com.saab.tv.data.account.AccountAuthManager(context)
+        )
+        val config = ProfileConfigurationManager(context, db.addonDao(), StremioAuthManager(context, StremioAuthService()), repository, display, commands)
+        vm = SettingsViewModel(db.addonDao(), config, SeekThumbnailCache(context), context, display, commands)
     }
     @After fun tearDown() { vm.viewModelScope.cancel(); db.close() }
     private fun change(next: ProfileEntity, action: () -> Unit) = runBlocking {

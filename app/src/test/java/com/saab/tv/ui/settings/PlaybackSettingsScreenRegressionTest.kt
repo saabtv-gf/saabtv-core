@@ -13,6 +13,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.*
 import org.junit.Assert.*
+import org.junit.rules.ExternalResource
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -24,20 +26,25 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [28], application = Application::class, qualifiers = "w1280dp-h720dp-land")
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class PlaybackSettingsScreenRegressionTest {
-    @get:Rule val compose = createComposeRule()
+    private val compose = createComposeRule()
+    @get:Rule val testRules = RuleChain.outerRule(object : ExternalResource() {
+        override fun after() { if (::app.isInitialized) app.close() }
+    }).around(compose)
     private lateinit var app: OfflineAppFixture
     private lateinit var vm: SettingsViewModel
     @Before fun setup() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
         app = OfflineAppFixture(context)
         app.dao.insertProfile(ProfileEntity(id = 1, name = "One"))
-        vm = SettingsViewModel(app.dao, app.configuration, SeekThumbnailCache(context), context, app.display)
+        vm = SettingsViewModel(app.dao, app.configuration, SeekThumbnailCache(context), context, app.display, app.userStateCommands)
         compose.setContent { MaterialTheme {
             val profile = app.dao.getProfileFlow(1).collectAsState(initial = ProfileEntity(id = 1, name = "One"))
             PlaybackSettings(profile.value, vm, {})
         } }
     }
-    @After fun cleanup() { vm.viewModelScope.cancel(); app.close() }
+    @After fun cleanup() {
+        vm.viewModelScope.cancel()
+    }
     @Test fun collapsingDisplaySectionHidesItsControlsAndExpandingRestoresThem() {
         compose.onNodeWithText("Decoder Priority").assertExists()
         compose.onNodeWithText("Display & Player", substring = true).performClick()

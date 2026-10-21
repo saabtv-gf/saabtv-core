@@ -85,6 +85,17 @@ class SeekThumbnailCacheTest {
         assertEquals(targets.size, targets.distinct().size)
     }
 
+    @Test fun openingTenFramesComeFirstThenDecodeInOneForwardPassForEveryInterval() {
+        for (interval in listOf(10, 20, 30)) {
+            val all = SeekThumbnailCache.storyboardTargets(7_200_000L, interval)
+            val targets = SeekThumbnailCache.persistentDecoderTargets(7_200_000L, interval)
+            assertEquals((1L..10L).map { it * interval * 1_000L }, targets.take(10))
+            assertEquals(all.filter { it > 0L }, targets.dropLast(1))
+            assertEquals(0L, targets.last())
+            assertEquals(all.toSet(), targets.toSet())
+        }
+    }
+
     @Test
     fun persistentDecoderPrioritizesResumeWithoutLosingEarlierFrames() {
         val targets = SeekThumbnailCache.persistentDecoderTargets(

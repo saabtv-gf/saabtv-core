@@ -3,7 +3,7 @@ package com.saab.tv.ui.settings
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,18 +23,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.saab.tv.R
 import com.saab.tv.data.model.CatalogConfigEntity
 import com.saab.tv.data.model.HubRowEntity
 import com.saab.tv.data.model.HubRowItemEntity
@@ -45,9 +50,13 @@ import com.saab.tv.domain.HubShape
 import com.saab.tv.domain.heroFor
 import com.saab.tv.domain.layoutFor
 import com.saab.tv.domain.withHero
+import com.saab.tv.domain.TmdbHomeRails
 import com.saab.tv.ui.addons.VoidButton
 import com.saab.tv.ui.addons.VoidDialog
 import com.saab.tv.ui.addons.VoidInput
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.components.ReorderIndicator
+import com.saab.tv.ui.components.scrollToItemUsingSaabMotion
 import com.saab.tv.ui.home.CreateHubDialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -59,10 +68,14 @@ fun DashboardEditorScreen(
     currentProfile: ProfileEntity? = null,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
+    val context = LocalContext.current
     val configs by viewModel.configs.collectAsStateWithLifecycle()
     val hubRows by viewModel.hubRows.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableStateOf("home") }
     var focusedTab by remember { mutableStateOf("home") }
+    var tmdbRailIds by remember(currentProfile?.id) {
+        mutableStateOf(TmdbHomeRails.parse(currentProfile?.homeTmdbRails ?: TmdbHomeRails.defaultIds.joinToString(",")))
+    }
 
     var dialogState by remember { mutableStateOf<DialogState>(DialogState.None) }
 
@@ -101,11 +114,11 @@ fun DashboardEditorScreen(
         } else false
     }
 
-    val editorItems = remember(configs, hubRows, selectedTab) {
-        viewModel.getEditorItems(selectedTab)
+    val editorItems = remember(configs, hubRows, selectedTab, tmdbRailIds) {
+        viewModel.getEditorItems(selectedTab, TmdbHomeRails.encode(tmdbRailIds))
     }
 
-    val availableToAdd = remember(configs, hubRows, selectedTab) {
+    val availableToAdd = remember(configs, hubRows, selectedTab, tmdbRailIds) {
         val unusedConfigs = configs.filter {
             val isUsed = when (selectedTab) {
                 "home" -> it.showInHome
@@ -126,18 +139,25 @@ fun DashboardEditorScreen(
             !isUsed
         }.map { EditorListItem.HubRowItem(it.hub, it.items, 0) }
 
-        (unusedConfigs + unusedHubs).sortedBy {
+        val unusedTmdbRails = if (selectedTab == "home") {
+            TmdbHomeRails.all.filterNot { it.id in tmdbRailIds }.mapIndexed { index, rail ->
+                EditorListItem.TmdbRecommendationItem(rail, index)
+            }
+        } else emptyList()
+
+        (unusedConfigs + unusedHubs + unusedTmdbRails).sortedBy {
             when (it) {
                 is EditorListItem.CategoryItem -> it.config.addonName
                 is EditorListItem.HubRowItem -> it.hub.title
+                is EditorListItem.TmdbRecommendationItem -> it.rail.title
             }
         }
     }
 
     val tabLabel = when (selectedTab) {
-        "home" -> "Home"
-        "movies" -> "Movies"
-        "series" -> "Series"
+        "home" -> stringResource(R.string.dashboard_tab_home)
+        "movies" -> stringResource(R.string.dashboard_tab_movies)
+        "series" -> stringResource(R.string.dashboard_tab_series)
         else -> ""
     }
 
@@ -152,7 +172,7 @@ fun DashboardEditorScreen(
 
             // --- HEADER ---
             Text(
-                "Home Screen Editor",
+                stringResource(R.string.dashboard_editor_title),
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 20.sp
@@ -160,7 +180,7 @@ fun DashboardEditorScreen(
                 color = Color.White
             )
             Text(
-                "Reorder categories or hide unwanted lists.",
+                stringResource(R.string.dashboard_editor_description),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                 color = Color.White.copy(0.6f),
                 modifier = Modifier.padding(top = 4.dp)
@@ -198,7 +218,7 @@ fun DashboardEditorScreen(
             ) {
                 Row(modifier = Modifier.onFocusChanged { isAnyTabFocused.value = it.hasFocus }) {
                     VoidTabBtn(
-                        label = "Home",
+                        label = stringResource(R.string.dashboard_tab_home),
                         isSelected = selectedTab == "home",
                         isTabRowFocused = isAnyTabFocused.value,
                         onClick = { selectedTab = focusedTab },
@@ -211,7 +231,7 @@ fun DashboardEditorScreen(
                     )
 
                     VoidTabBtn(
-                        label = "Movies",
+                        label = stringResource(R.string.dashboard_tab_movies),
                         isSelected = selectedTab == "movies",
                         isTabRowFocused = isAnyTabFocused.value,
                         onClick = { selectedTab = focusedTab },
@@ -223,7 +243,7 @@ fun DashboardEditorScreen(
                     )
 
                     VoidTabBtn(
-                        label = "Series",
+                        label = stringResource(R.string.dashboard_tab_series),
                         isSelected = selectedTab == "series",
                         isTabRowFocused = isAnyTabFocused.value,
                         onClick = { selectedTab = focusedTab },
@@ -240,14 +260,14 @@ fun DashboardEditorScreen(
                     horizontalArrangement = Arrangement.spacedBy(controlButtonSpacing)
                 ) {
                     VoidCompactActionButton(
-                        label = "Add",
+                        label = stringResource(R.string.dashboard_add),
                         onClick = { dialogState = DialogState.AddToTab(selectedTab) },
                         modifier = Modifier
                             .width(addButtonWidth)
                             .then(upBlockModifier)
                     )
                     VoidCompactActionButton(
-                        label = "New Hub",
+                        label = stringResource(R.string.dashboard_new_hub),
                         onClick = { dialogState = DialogState.CreateHub },
                         modifier = Modifier
                             .width(newHubButtonWidth)
@@ -266,16 +286,22 @@ fun DashboardEditorScreen(
                 val heroConfig = currentProfile.heroFor(dashboardTab)
                 val heroLabel = if (heroConfig.categoryId != null) {
                     val cat = configs.find { it.uniqueId == heroConfig.categoryId }
-                    val catName = cat?.customTitle ?: cat?.catalogName ?: cat?.addonName ?: "Unknown"
+                    val catName = cat?.customTitle ?: cat?.catalogName ?: cat?.addonName
                     val catType = cat?.catalogType?.replaceFirstChar { it.uppercase() } ?: ""
-                    if (cat != null) "Hero Carousel · $catName - $catType" else "Hero Carousel · Unknown"
+                    if (cat != null) {
+                        stringResource(
+                            R.string.dashboard_hero_carousel_category,
+                            catName.orEmpty().ifBlank { stringResource(R.string.dashboard_unknown) },
+                            catType
+                        )
+                    } else stringResource(R.string.dashboard_hero_carousel_unknown)
                 } else {
-                    "Hero Carousel · Disabled"
+                    stringResource(R.string.dashboard_hero_carousel_state_disabled)
                 }
                 val heroSubtitle = when {
-                    heroConfig.categoryId != null -> "${heroConfig.posterCount} posters"
-                    isSimple -> "Tap to configure"
-                    else -> "Switch to Simple to configure"
+                    heroConfig.categoryId != null -> stringResource(R.string.dashboard_posters_count, heroConfig.posterCount)
+                    isSimple -> stringResource(R.string.dashboard_tap_to_configure)
+                    else -> stringResource(R.string.dashboard_switch_to_simple_to_configure)
                 }
 
                 Box(
@@ -308,14 +334,14 @@ fun DashboardEditorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         LayoutOptionItem(
-                            label = "Simple",
+                            label = stringResource(R.string.dashboard_layout_simple),
                             onClick = { viewModel.updateTabLayout(currentProfile.id, dashboardTab, "simple") },
                             isSelected = isSimple,
                             modifier = Modifier
                                 .width(simpleButtonWidth)
                         )
                         LayoutOptionItem(
-                            label = "Cinematic",
+                            label = stringResource(R.string.dashboard_layout_cinematic),
                             onClick = { viewModel.updateTabLayout(currentProfile.id, dashboardTab, "cinematic") },
                             isSelected = !isSimple,
                             modifier = Modifier
@@ -339,7 +365,7 @@ fun DashboardEditorScreen(
                         .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
                     Text(
-                        "Reorder mode  ·  ▲▼ move  ·  OK done  ·  Back cancel",
+                        stringResource(R.string.dashboard_reorder_banner),
                         color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
                     )
@@ -349,7 +375,7 @@ fun DashboardEditorScreen(
 
             // --- SECTION LABEL ---
             Text(
-                "$tabLabel rows",
+                stringResource(R.string.dashboard_tab_rows, tabLabel),
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                 color = Color.White.copy(0.5f),
                 modifier = Modifier.padding(bottom = 8.dp)
@@ -368,13 +394,13 @@ fun DashboardEditorScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            "No rows on $tabLabel",
+                            stringResource(R.string.dashboard_no_rows_on_tab, tabLabel),
                             color = Color.White.copy(0.5f),
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Spacer(Modifier.height(12.dp))
                         VoidCompactActionButton(
-                            label = "Add Row",
+                            label = stringResource(R.string.dashboard_add_row),
                             onClick = { dialogState = DialogState.AddToTab(selectedTab) }
                         )
                     }
@@ -419,7 +445,7 @@ fun DashboardEditorScreen(
                                     onClick = {
                                         if (isReordering) {
                                             reorderingHub = null
-                                            showSnackbar("Reorder complete")
+                                            showSnackbar(context.getString(R.string.dashboard_reorder_complete))
                                         } else {
                                             dialogState = DialogState.ManageHub(item)
                                         }
@@ -428,14 +454,14 @@ fun DashboardEditorScreen(
                                         if (index > 0) {
                                             viewModel.moveEditorItem(item, -1, selectedTab)
                                             val target = index - 1
-                                            scope.launch { delay(50); listState.animateScrollToItem((target - 1).coerceAtLeast(0)) }
+                                            scope.launch { delay(50); listState.scrollToItemUsingSaabMotion((target - 1).coerceAtLeast(0)) }
                                         }
                                     },
                                     onMoveDown = {
                                         if (index < editorItems.size - 1) {
                                             viewModel.moveEditorItem(item, 1, selectedTab)
                                             val target = index + 1
-                                            scope.launch { delay(50); listState.animateScrollToItem((target - 1).coerceAtLeast(0)) }
+                                            scope.launch { delay(50); listState.scrollToItemUsingSaabMotion((target - 1).coerceAtLeast(0)) }
                                         }
                                     }
                                 )
@@ -469,7 +495,7 @@ fun DashboardEditorScreen(
                                     onClick = {
                                         if (isReordering) {
                                             reorderingConfig = null
-                                            showSnackbar("Reorder complete")
+                                            showSnackbar(context.getString(R.string.dashboard_reorder_complete))
                                         } else {
                                             dialogState = DialogState.ManageCategory(config)
                                         }
@@ -478,16 +504,23 @@ fun DashboardEditorScreen(
                                         if (index > 0) {
                                             viewModel.moveEditorItem(item, -1, selectedTab)
                                             val target = index - 1
-                                            scope.launch { delay(50); listState.animateScrollToItem((target - 1).coerceAtLeast(0)) }
+                                            scope.launch { delay(50); listState.scrollToItemUsingSaabMotion((target - 1).coerceAtLeast(0)) }
                                         }
                                     },
                                     onMoveDown = {
                                         if (index < editorItems.size - 1) {
                                             viewModel.moveEditorItem(item, 1, selectedTab)
                                             val target = index + 1
-                                            scope.launch { delay(50); listState.animateScrollToItem((target - 1).coerceAtLeast(0)) }
+                                            scope.launch { delay(50); listState.scrollToItemUsingSaabMotion((target - 1).coerceAtLeast(0)) }
                                         }
                                     }
+                                )
+                            }
+
+                            is EditorListItem.TmdbRecommendationItem -> {
+                                VoidSimpleItem(
+                                    text = "TMDB · ${item.rail.title}",
+                                    onClick = { dialogState = DialogState.ManageTmdbRail(item) }
                                 )
                             }
                         }
@@ -526,7 +559,15 @@ fun DashboardEditorScreen(
             val focusRequester = remember { FocusRequester() }
             LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
-            VoidDialog(onDismissRequest = { dialogState = DialogState.None }, title = "Manage Category") {
+            VoidDialog(
+                onDismissRequest = { dialogState = DialogState.None },
+                title = stringResource(R.string.dashboard_manage_category_title),
+                footer = {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        VoidButton(stringResource(R.string.common_close), { dialogState = DialogState.None }, Modifier.width(120.dp))
+                    }
+                }
+            ) {
                 Text(
                     title,
                     color = MaterialTheme.colorScheme.primary,
@@ -534,24 +575,24 @@ fun DashboardEditorScreen(
                     modifier = Modifier.padding(bottom = 24.dp)
                 )
 
-                VoidButton("Move Category", {
+                VoidButton(stringResource(R.string.dashboard_move_category), {
                     reorderingConfig = config
                     dialogState = DialogState.None
-                    showSnackbar("Use ▲▼ to reorder, OK when done")
+                    showSnackbar(context.getString(R.string.dashboard_reorder_hint))
                 }, Modifier.fillMaxWidth(), focusRequester = focusRequester)
 
                 Spacer(Modifier.height(12.dp))
-                VoidButton("Rename", {
+                VoidButton(stringResource(R.string.common_rename), {
                     dialogState = DialogState.RenameCategory(config, title)
                 }, Modifier.fillMaxWidth())
 
                 Spacer(Modifier.height(12.dp))
-                VoidButton("Layout Settings", {
+                VoidButton(stringResource(R.string.dashboard_layout_settings), {
                     dialogState = DialogState.LayoutSettings(config)
                 }, Modifier.fillMaxWidth())
 
                 Spacer(Modifier.height(12.dp))
-                VoidButton("Hide from $tabLabel", {
+                VoidButton(stringResource(R.string.dashboard_hide_from_tab, tabLabel), {
                     val removedKey = "cat:${config.uniqueId}"
                     val idx = editorItems.indexOfFirst { it.key == removedKey }
                     val neighborKey = when {
@@ -562,13 +603,46 @@ fun DashboardEditorScreen(
                     if (neighborKey != null) pendingFocusKey = neighborKey else focusTabAfterRemoval = true
                     viewModel.removeItemFromTab(EditorListItem.CategoryItem(config, 0), selectedTab)
                     dialogState = DialogState.None
-                    showSnackbar("Hidden from $tabLabel")
+                    showSnackbar(context.getString(R.string.dashboard_hidden_from_tab, tabLabel))
                 }, Modifier.fillMaxWidth())
 
-                Spacer(Modifier.height(24.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    VoidButton("Close", { dialogState = DialogState.None }, Modifier.width(120.dp))
+            }
+        }
+
+        is DialogState.ManageTmdbRail -> {
+            val item = state.item
+            val railIndex = tmdbRailIds.indexOf(item.rail.id)
+            val focusRequester = remember { FocusRequester() }
+            LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
+            VoidDialog(
+                onDismissRequest = { dialogState = DialogState.None },
+                title = item.rail.title,
+                footer = {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        VoidButton(stringResource(R.string.common_close), { dialogState = DialogState.None }, Modifier.width(120.dp))
+                    }
                 }
+            ) {
+                Text("TMDB recommendation catalog", color = Color.White.copy(alpha = 0.65f))
+                Spacer(Modifier.height(16.dp))
+                VoidButton("Move up", {
+                    tmdbRailIds = TmdbHomeRails.move(tmdbRailIds, item.rail.id, -1)
+                    currentProfile?.let { viewModel.updateTmdbHomeRails(it.id, tmdbRailIds) }
+                    dialogState = DialogState.None
+                }, Modifier.fillMaxWidth(), enabled = railIndex > 0, focusRequester = focusRequester)
+                Spacer(Modifier.height(10.dp))
+                VoidButton("Move down", {
+                    tmdbRailIds = TmdbHomeRails.move(tmdbRailIds, item.rail.id, 1)
+                    currentProfile?.let { viewModel.updateTmdbHomeRails(it.id, tmdbRailIds) }
+                    dialogState = DialogState.None
+                }, Modifier.fillMaxWidth(), enabled = railIndex in 0 until tmdbRailIds.lastIndex)
+                Spacer(Modifier.height(10.dp))
+                VoidButton(stringResource(R.string.dashboard_hide_from_tab, tabLabel), {
+                    tmdbRailIds = tmdbRailIds - item.rail.id
+                    currentProfile?.let { viewModel.updateTmdbHomeRails(it.id, tmdbRailIds) }
+                    dialogState = DialogState.None
+                    showSnackbar(context.getString(R.string.dashboard_hidden_from_tab, tabLabel))
+                }, Modifier.fillMaxWidth())
             }
         }
 
@@ -578,23 +652,30 @@ fun DashboardEditorScreen(
             val saveFocusRequester = remember { FocusRequester() }
             LaunchedEffect(Unit) { delay(100); runCatching { inputFocusRequester.requestFocus() } }
 
-            VoidDialog(onDismissRequest = { dialogState = DialogState.None }, title = "Rename") {
+            VoidDialog(
+                onDismissRequest = { dialogState = DialogState.None },
+                title = stringResource(R.string.common_rename),
+                footer = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        VoidButton(stringResource(R.string.common_cancel), { dialogState = DialogState.None }, Modifier.weight(1f))
+                        VoidButton(stringResource(R.string.common_save), {
+                            viewModel.renameCatalog(state.config, newName)
+                            dialogState = DialogState.None
+                            showSnackbar(context.getString(R.string.dashboard_category_renamed))
+                        }, Modifier.weight(1f), isPrimary = true, focusRequester = saveFocusRequester)
+                    }
+                }
+            ) {
                 VoidInput(
                     value = newName,
                     onValueChange = { newName = it },
-                    placeholder = "Category Name",
+                    placeholder = stringResource(R.string.dashboard_category_name),
                     onDone = { saveFocusRequester.requestFocus() },
                     focusRequester = inputFocusRequester
                 )
-                Spacer(Modifier.height(24.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    VoidButton("Cancel", { dialogState = DialogState.None }, Modifier.weight(1f))
-                    VoidButton("Save", {
-                        viewModel.renameCatalog(state.config, newName)
-                        dialogState = DialogState.None
-                        showSnackbar("Renamed")
-                    }, Modifier.weight(1f), isPrimary = true, focusRequester = saveFocusRequester)
-                }
             }
         }
 
@@ -609,7 +690,23 @@ fun DashboardEditorScreen(
             var itemCount by remember(config) { mutableFloatStateOf(config.visibleItemCount.toFloat()) }
             var isInfiniteScrolling by remember(config) { mutableStateOf(config.isInfiniteScrollingEnabled) }
 
-            VoidDialog(onDismissRequest = { dialogState = DialogState.None }, title = "Layout Settings") {
+            VoidDialog(
+                onDismissRequest = { dialogState = DialogState.None },
+                title = stringResource(R.string.dashboard_layout_settings),
+                footer = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        VoidButton(stringResource(R.string.common_cancel), { dialogState = DialogState.None }, Modifier.weight(1f))
+                        VoidButton(stringResource(R.string.common_save), {
+                            viewModel.updateLayoutSettings(config, isGridViewEnabled, itemCount.toInt(), isInfiniteScrolling)
+                            dialogState = DialogState.None
+                            showSnackbar(context.getString(R.string.dashboard_layout_updated))
+                        }, Modifier.weight(1f), isPrimary = true)
+                    }
+                }
+            ) {
                 Text(
                     title,
                     color = MaterialTheme.colorScheme.primary,
@@ -618,7 +715,7 @@ fun DashboardEditorScreen(
                 )
 
                 VoidCheckboxRow(
-                    label = "Enable Grid View",
+                    label = stringResource(R.string.dashboard_enable_grid_view),
                     isChecked = isGridViewEnabled,
                     onCheckedChange = { isGridViewEnabled = it },
                     focusRequester = focusRequester
@@ -627,35 +724,27 @@ fun DashboardEditorScreen(
                 if (isGridViewEnabled) {
                     Spacer(Modifier.height(16.dp))
                     VoidCheckboxRow(
-                        label = "Enable Infinite Looping",
+                        label = stringResource(R.string.dashboard_enable_infinite_looping),
                         isChecked = isInfiniteScrolling,
                         onCheckedChange = { isInfiniteScrolling = it }
                     )
 
                     Spacer(Modifier.height(20.dp))
                     Text(
-                        "Items before View More: ${itemCount.toInt()}",
+                        stringResource(R.string.dashboard_items_before_view_more, itemCount.toInt()),
                         color = Color.White.copy(0.8f),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(8.dp))
                     VoidSlider(
                         value = itemCount,
+                        accessibilityLabel = stringResource(R.string.dashboard_items_before_view_more, itemCount.toInt()),
                         onValueChange = { itemCount = it },
                         valueRange = 5f..50f,
                         steps = 44
                     )
                 }
 
-                Spacer(Modifier.height(24.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    VoidButton("Cancel", { dialogState = DialogState.None }, Modifier.weight(1f))
-                    VoidButton("Save", {
-                        viewModel.updateLayoutSettings(config, isGridViewEnabled, itemCount.toInt(), isInfiniteScrolling)
-                        dialogState = DialogState.None
-                        showSnackbar("Layout updated")
-                    }, Modifier.weight(1f), isPrimary = true)
-                }
             }
         }
 
@@ -665,12 +754,20 @@ fun DashboardEditorScreen(
 
             VoidDialog(
                 onDismissRequest = { dialogState = DialogState.None },
-                title = "Add To ${state.tab.lowercase().replaceFirstChar { it.titlecase() }}"
+                title = stringResource(
+                    R.string.dashboard_add_to_tab,
+                    when (state.tab.lowercase()) {
+                        "home" -> stringResource(R.string.dashboard_tab_home)
+                        "movies" -> stringResource(R.string.dashboard_tab_movies)
+                        "series" -> stringResource(R.string.dashboard_tab_series)
+                        else -> state.tab.lowercase().replaceFirstChar { it.titlecase() }
+                    }
+                )
             ) {
                 if (availableToAdd.isEmpty()) {
-                    Text("No hidden items found.", color = Color.Gray)
+                    Text(stringResource(R.string.dashboard_no_hidden_items), color = Color.Gray)
                     Spacer(Modifier.height(24.dp))
-                    VoidButton("Close", { dialogState = DialogState.None }, Modifier.fillMaxWidth(), focusRequester = focusRequester)
+                    VoidButton(stringResource(R.string.common_close), { dialogState = DialogState.None }, Modifier.fillMaxWidth(), focusRequester = focusRequester)
                 } else {
                     LazyColumn(
                         modifier = Modifier.heightIn(max = 300.dp),
@@ -681,21 +778,25 @@ fun DashboardEditorScreen(
                                 is EditorListItem.CategoryItem -> item.config.customTitle
                                     ?: if (item.config.catalogName != null) "${item.config.catalogName} - ${item.config.catalogType.replaceFirstChar { it.uppercase() }}" else "${item.config.addonName} - ${item.config.catalogId}"
                                 is EditorListItem.HubRowItem -> "⬡ ${item.hub.title}"
+                                is EditorListItem.TmdbRecommendationItem -> "TMDB · ${item.rail.title}"
                             }
 
                             VoidSimpleItem(
                                 text = itemTitle,
                                 onClick = {
-                                    viewModel.addItemToTab(item, selectedTab)
+                                    if (item is EditorListItem.TmdbRecommendationItem) {
+                                        tmdbRailIds = (tmdbRailIds + item.rail.id).distinct()
+                                        currentProfile?.let { viewModel.updateTmdbHomeRails(it.id, tmdbRailIds) }
+                                    } else viewModel.addItemToTab(item, selectedTab)
                                     dialogState = DialogState.None
-                                    showSnackbar("Added to $tabLabel")
+                                    showSnackbar(context.getString(R.string.dashboard_added_to_tab, tabLabel))
                                 },
                                 focusRequester = if (index == 0) focusRequester else null
                             )
                         }
                     }
                     Spacer(Modifier.height(16.dp))
-                    VoidButton("Close", { dialogState = DialogState.None }, Modifier.fillMaxWidth())
+                    VoidButton(stringResource(R.string.common_close), { dialogState = DialogState.None }, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -707,7 +808,7 @@ fun DashboardEditorScreen(
                 onCreate = { name, shape, items ->
                     viewModel.createHubRow(name, shape, items, selectedTab)
                     dialogState = DialogState.None
-                    showSnackbar("Hub row created")
+                    showSnackbar(context.getString(R.string.dashboard_hub_created))
                 }
             )
         }
@@ -720,7 +821,15 @@ fun DashboardEditorScreen(
                 val focusRequester = remember { FocusRequester() }
                 LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
-                VoidDialog(onDismissRequest = { dialogState = DialogState.None }, title = "Manage Hub Row") {
+                VoidDialog(
+                    onDismissRequest = { dialogState = DialogState.None },
+                    title = stringResource(R.string.dashboard_manage_hub_row),
+                    footer = {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            VoidButton(stringResource(R.string.common_close), { dialogState = DialogState.None }, Modifier.width(120.dp))
+                        }
+                    }
+                ) {
                 Text(
                     hubItem.hub.title,
                     color = MaterialTheme.colorScheme.primary,
@@ -728,25 +837,34 @@ fun DashboardEditorScreen(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
                 Text(
-                    "${hubItem.items.size} categories · ${hubItem.hub.shape}",
+                    stringResource(
+                        R.string.dashboard_hub_category_shape,
+                        hubItem.items.size,
+                        when (hubItem.hub.shape.uppercase()) {
+                            "HORIZONTAL" -> stringResource(R.string.dashboard_shape_landscape)
+                            "VERTICAL" -> stringResource(R.string.dashboard_shape_portrait)
+                            "SQUARE" -> stringResource(R.string.dashboard_shape_square)
+                            else -> hubItem.hub.shape
+                        }
+                    ),
                     color = Color.White.copy(0.5f),
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 24.dp)
                 )
 
-                VoidButton("Move Hub Row", {
+                VoidButton(stringResource(R.string.dashboard_move_hub_row), {
                     reorderingHub = hubItem.hub
                     dialogState = DialogState.None
-                    showSnackbar("Use ▲▼ to reorder, OK when done")
+                    showSnackbar(context.getString(R.string.dashboard_reorder_hint))
                 }, Modifier.fillMaxWidth(), focusRequester = focusRequester)
 
                 Spacer(Modifier.height(12.dp))
-                VoidButton("Edit Hub Row", {
+                VoidButton(stringResource(R.string.dashboard_edit_hub_row), {
                     dialogState = DialogState.EditHub(hubItem)
                 }, Modifier.fillMaxWidth())
 
                 Spacer(Modifier.height(12.dp))
-                VoidButton("Hide from $tabLabel", {
+                VoidButton(stringResource(R.string.dashboard_hide_from_tab, tabLabel), {
                     val removedKey = "hub:${hubItem.hub.id}"
                     val idx = editorItems.indexOfFirst { it.key == removedKey }
                     val neighborKey = when {
@@ -757,18 +875,14 @@ fun DashboardEditorScreen(
                     if (neighborKey != null) pendingFocusKey = neighborKey else focusTabAfterRemoval = true
                     viewModel.removeItemFromTab(hubItem, selectedTab)
                     dialogState = DialogState.None
-                    showSnackbar("Hidden from $tabLabel")
+                    showSnackbar(context.getString(R.string.dashboard_hidden_from_tab, tabLabel))
                 }, Modifier.fillMaxWidth())
 
                 Spacer(Modifier.height(12.dp))
-                VoidButton("Delete Hub Row", {
+                VoidButton(stringResource(R.string.dashboard_delete_hub_row), {
                     showDeleteHubConfirm = true
                 }, Modifier.fillMaxWidth(), isDestructive = true)
 
-                Spacer(Modifier.height(24.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    VoidButton("Close", { dialogState = DialogState.None }, Modifier.width(120.dp))
-                }
             }
             } else {
                 val confirmFocusRequester = remember { FocusRequester() }
@@ -776,39 +890,43 @@ fun DashboardEditorScreen(
 
                 VoidDialog(
                     onDismissRequest = { showDeleteHubConfirm = false },
-                    title = "Delete Hub Row?"
+                    title = stringResource(R.string.dashboard_delete_hub_row_confirm_title),
+                    footer = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            VoidButton(
+                                context.getString(R.string.common_cancel),
+                                { showDeleteHubConfirm = false },
+                                Modifier.weight(1f),
+                                focusRequester = confirmFocusRequester
+                            )
+                            VoidButton(
+                                context.getString(R.string.common_delete),
+                                {
+                                    val removedKey = "hub:${hubItem.hub.id}"
+                                    val idx = editorItems.indexOfFirst { it.key == removedKey }
+                                    val neighborKey = when {
+                                        idx > 0 -> editorItems[idx - 1].key
+                                        idx >= 0 && editorItems.size > 1 -> editorItems[idx + 1].key
+                                        else -> null
+                                    }
+                                    if (neighborKey != null) pendingFocusKey = neighborKey else focusTabAfterRemoval = true
+                                    viewModel.deleteHubRow(hubItem.hub.id)
+                                    dialogState = DialogState.None
+                                    showSnackbar(context.getString(R.string.dashboard_hub_deleted))
+                                },
+                                Modifier.weight(1f),
+                                isDestructive = true
+                            )
+                        }
+                    }
                 ) {
                     Text(
-                        "Are you sure you want to delete \"${hubItem.hub.title}\"?",
+                        stringResource(R.string.dashboard_confirm_delete_hub_row, hubItem.hub.title),
                         color = Color.Gray
                     )
-                    Spacer(Modifier.height(24.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        VoidButton(
-                            "Cancel",
-                            { showDeleteHubConfirm = false },
-                            Modifier.weight(1f),
-                            focusRequester = confirmFocusRequester
-                        )
-                        VoidButton(
-                            "Delete",
-                            {
-                                val removedKey = "hub:${hubItem.hub.id}"
-                                val idx = editorItems.indexOfFirst { it.key == removedKey }
-                                val neighborKey = when {
-                                    idx > 0 -> editorItems[idx - 1].key
-                                    idx >= 0 && editorItems.size > 1 -> editorItems[idx + 1].key
-                                    else -> null
-                                }
-                                if (neighborKey != null) pendingFocusKey = neighborKey else focusTabAfterRemoval = true
-                                viewModel.deleteHubRow(hubItem.hub.id)
-                                dialogState = DialogState.None
-                                showSnackbar("Hub row deleted")
-                            },
-                            Modifier.weight(1f),
-                            isDestructive = true
-                        )
-                    }
                 }
             }
         }
@@ -859,7 +977,9 @@ fun DashboardEditorScreen(
 
             // Main Content (always rendered — sub-dialogs overlay on top)
             HubEditorContent(
-                title = if (reorderingHubItem != null) "Reordering..." else "Edit Hub Row",
+                title = if (reorderingHubItem != null) {
+                    stringResource(R.string.dashboard_reordering)
+                } else stringResource(R.string.dashboard_edit_hub_row),
                 name = editName,
                 onNameChange = { editName = it },
                 shape = editShape,
@@ -875,11 +995,11 @@ fun DashboardEditorScreen(
                     }
                 },
                 onSave = {
-                    viewModel.renameHubRow(currentHub.id, editName.ifBlank { "Hub Row" })
+                    viewModel.renameHubRow(currentHub.id, editName.ifBlank { context.getString(R.string.dashboard_hub_row_default_name) })
                     viewModel.changeHubRowShape(currentHub.id, editShape)
                     reorderingHubItem = null
                     dialogState = DialogState.None
-                    showSnackbar("Hub row saved")
+                    showSnackbar(context.getString(R.string.dashboard_hub_row_saved))
                 },
                 saveEnabled = editName.isNotBlank() && currentItems.isNotEmpty(),
                 focusRequester = focusRequester,
@@ -959,13 +1079,13 @@ fun DashboardEditorScreen(
 
                 VoidDialog(
                     onDismissRequest = { showAddCategoryToHub = false },
-                    title = "Add Category to Hub"
+                    title = stringResource(R.string.dashboard_add_category_to_hub)
                 ) {
                     if (availableForHub.isEmpty()) {
-                        Text("All categories are already in this hub row.", color = Color.Gray)
+                        Text(stringResource(R.string.dashboard_all_categories_in_hub), color = Color.Gray)
                         Spacer(Modifier.height(24.dp))
                         VoidButton(
-                            "Close",
+                            stringResource(R.string.common_close),
                             { showAddCategoryToHub = false },
                             Modifier.fillMaxWidth(),
                             focusRequester = addFocusRequester
@@ -990,7 +1110,7 @@ fun DashboardEditorScreen(
                         }
                         Spacer(Modifier.height(16.dp))
                         VoidButton(
-                            "Close",
+                            stringResource(R.string.common_close),
                             { showAddCategoryToHub = false },
                             Modifier.fillMaxWidth()
                         )
@@ -1023,18 +1143,47 @@ fun DashboardEditorScreen(
                 if (!showDisableConfirm && !showCategoryPicker) {
                     VoidDialog(
                         onDismissRequest = { dialogState = DialogState.None },
-                        title = "Hero Carousel"
+                        title = stringResource(R.string.dashboard_hero_carousel_title),
+                        footer = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                VoidButton(
+                                    stringResource(R.string.dashboard_disable),
+                                    { showDisableConfirm = true },
+                                    Modifier.weight(1f),
+                                    isDestructive = true,
+                                    enabled = heroConfig.categoryId != null
+                                )
+                                VoidButton(
+                                    stringResource(R.string.common_save),
+                                    {
+                                        viewModel.updateTabHero(
+                                            currentProfile.id,
+                                            tab,
+                                            HeroConfig(selectedCategoryId, posterCount.toInt(), autoScrollSeconds.toInt())
+                                        )
+                                        dialogState = DialogState.None
+                                        showSnackbar(context.getString(R.string.dashboard_hero_carousel_updated))
+                                    },
+                                    Modifier.weight(1f),
+                                    isPrimary = true,
+                                    enabled = selectedCategoryId != null
+                                )
+                            }
+                        }
                     ) {
                     val selectedCatName = if (selectedCategoryId != null) {
                         val cat = configs.find { it.uniqueId == selectedCategoryId }
                         if (cat != null) {
                             val baseTitle = cat.customTitle ?: cat.catalogName ?: cat.addonName
                             "$baseTitle - ${cat.catalogType.replaceFirstChar { it.uppercase() }}"
-                        } else "Unknown"
-                    } else "None"
+                        } else stringResource(R.string.dashboard_unknown)
+                    } else stringResource(R.string.dashboard_none)
 
                     Text(
-                        "Category",
+                        stringResource(R.string.dashboard_category),
                         color = Color.White.copy(0.6f),
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.padding(bottom = 8.dp)
@@ -1049,13 +1198,14 @@ fun DashboardEditorScreen(
                     Spacer(Modifier.height(20.dp))
 
                     Text(
-                        "Posters: ${posterCount.toInt()}",
+                        stringResource(R.string.dashboard_posters_count, posterCount.toInt()),
                         color = Color.White.copy(0.8f),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(8.dp))
                     VoidSlider(
                         value = posterCount,
+                        accessibilityLabel = stringResource(R.string.dashboard_posters_count, posterCount.toInt()),
                         onValueChange = { posterCount = it },
                         valueRange = 5f..20f,
                         steps = 14
@@ -1063,36 +1213,25 @@ fun DashboardEditorScreen(
 
                     Spacer(Modifier.height(20.dp))
 
-                    val autoScrollLabel = if (autoScrollSeconds.toInt() == 0) "Off" else "${autoScrollSeconds.toInt()}s"
+                    val autoScrollLabel = if (autoScrollSeconds.toInt() == 0) {
+                        stringResource(R.string.dashboard_off)
+                    } else {
+                        stringResource(R.string.dashboard_seconds_count, autoScrollSeconds.toInt())
+                    }
                     Text(
-                        "Auto-scroll: $autoScrollLabel",
+                        stringResource(R.string.dashboard_auto_scroll, autoScrollLabel),
                         color = Color.White.copy(0.8f),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(8.dp))
                     VoidSlider(
                         value = autoScrollSeconds,
+                        accessibilityLabel = stringResource(R.string.dashboard_auto_scroll, autoScrollLabel),
                         onValueChange = { autoScrollSeconds = it },
                         valueRange = 0f..15f,
                         steps = 14
                     )
 
-                    Spacer(Modifier.height(24.dp))
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        VoidButton("Disable", {
-                            showDisableConfirm = true
-                        }, Modifier.weight(1f), isDestructive = true, enabled = heroConfig.categoryId != null)
-                        VoidButton("Save", {
-                            viewModel.updateTabHero(
-                                currentProfile.id,
-                                tab,
-                                HeroConfig(selectedCategoryId, posterCount.toInt(), autoScrollSeconds.toInt())
-                            )
-                            dialogState = DialogState.None
-                            showSnackbar("Hero carousel updated")
-                        }, Modifier.weight(1f), isPrimary = true, enabled = selectedCategoryId != null)
-                    }
                     }
                 } else {
                     val confirmFocusRequester = remember { FocusRequester() }
@@ -1100,22 +1239,25 @@ fun DashboardEditorScreen(
 
                     VoidDialog(
                         onDismissRequest = { showDisableConfirm = false },
-                        title = "Disable Hero Carousel?"
+                        title = stringResource(R.string.dashboard_disable_hero_confirm_title),
                     ) {
                         Text(
-                            "This will turn off the Hero Carousel for ${tab.name.lowercase().replaceFirstChar { it.uppercase() }}.",
+                            stringResource(R.string.dashboard_disable_hero_confirm_message, tabLabel),
                             color = Color.Gray
                         )
                         Spacer(Modifier.height(24.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
                             VoidButton(
-                                "Cancel",
+                                context.getString(R.string.common_cancel),
                                 { showDisableConfirm = false },
                                 Modifier.weight(1f),
                                 focusRequester = confirmFocusRequester
                             )
                             VoidButton(
-                                "Disable",
+                                context.getString(R.string.dashboard_disable),
                                 {
                                     viewModel.updateTabHero(
                                         currentProfile.id,
@@ -1123,7 +1265,7 @@ fun DashboardEditorScreen(
                                         HeroConfig(null, 10, 0)
                                     )
                                     dialogState = DialogState.None
-                                    showSnackbar("Hero carousel disabled")
+                                    showSnackbar(context.getString(R.string.dashboard_hero_carousel_disabled_toast))
                                 },
                                 Modifier.weight(1f),
                                 isDestructive = true
@@ -1138,7 +1280,7 @@ fun DashboardEditorScreen(
 
                     VoidDialog(
                         onDismissRequest = { showCategoryPicker = false },
-                        title = "Select Category"
+                        title = stringResource(R.string.dashboard_select_category),
                     ) {
                         LazyColumn(
                             modifier = Modifier.heightIn(max = 300.dp),
@@ -1158,7 +1300,7 @@ fun DashboardEditorScreen(
                             }
                         }
                         Spacer(Modifier.height(16.dp))
-                        VoidButton("Cancel", { showCategoryPicker = false }, Modifier.fillMaxWidth())
+                        VoidButton(stringResource(R.string.common_cancel), { showCategoryPicker = false }, Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -1190,19 +1332,17 @@ fun VoidEditorItem(
             isReordering -> accentColor
             isFocused -> accentColor
             else -> Color.Transparent
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     val borderWidth = if (isReordering || isFocused) 2.dp else 0.dp
     val bgColor = Color.White.copy(0.05f)
-    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
-
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
         modifier = modifier
             .fillMaxWidth()
             .height(itemHeight)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(8.dp))
@@ -1237,7 +1377,7 @@ fun VoidEditorItem(
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text(
-                    "Category",
+                    stringResource(R.string.dashboard_category),
                     color = accentColor,
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp)
                 )
@@ -1256,10 +1396,10 @@ fun VoidEditorItem(
         }
 
         if (isReordering) {
-            Text("▲▼", color = accentColor, style = MaterialTheme.typography.labelSmall)
+            ReorderIndicator(stringResource(R.string.dashboard_reorder_hint))
         } else if (isFocused) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Manage", color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelSmall)
+                Text(stringResource(R.string.dashboard_manage), color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelSmall)
                 Text(" ›", color = Color.White.copy(0.4f), style = MaterialTheme.typography.bodyMedium)
             }
         }
@@ -1288,19 +1428,17 @@ fun VoidHubEditorItem(
             isReordering -> accentColor
             isFocused -> accentColor
             else -> Color.Transparent
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     val borderWidth = if (isReordering || isFocused) 2.dp else 0.dp
     val bgColor = Color.White.copy(0.05f)
-    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
-
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
         modifier = modifier
             .fillMaxWidth()
             .height(itemHeight)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(8.dp))
@@ -1338,7 +1476,7 @@ fun VoidHubEditorItem(
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text(
-                    "Hub",
+                    stringResource(R.string.dashboard_hub),
                     color = accentColor,
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp)
                 )
@@ -1355,7 +1493,16 @@ fun VoidHubEditorItem(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "$itemCount categories · ${hub.shape}",
+                    text = stringResource(
+                        R.string.dashboard_hub_category_shape,
+                        itemCount,
+                        when (hub.shape.uppercase()) {
+                            "HORIZONTAL" -> stringResource(R.string.dashboard_shape_landscape)
+                            "VERTICAL" -> stringResource(R.string.dashboard_shape_portrait)
+                            "SQUARE" -> stringResource(R.string.dashboard_shape_square)
+                            else -> hub.shape
+                        }
+                    ),
                     color = Color.White.copy(0.4f),
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -1363,10 +1510,10 @@ fun VoidHubEditorItem(
         }
 
         if (isReordering) {
-            Text("▲▼", color = accentColor, style = MaterialTheme.typography.labelSmall)
+            ReorderIndicator(stringResource(R.string.dashboard_reorder_hint))
         } else if (isFocused) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Manage", color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelSmall)
+                Text(stringResource(R.string.dashboard_manage), color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelSmall)
                 Text(" ›", color = Color.White.copy(0.4f), style = MaterialTheme.typography.bodyMedium)
             }
         }
@@ -1393,7 +1540,8 @@ fun HubItemEditorRow(
     }
 
     val borderColor by animateColorAsState(
-        if (isReordering || isFocused) MaterialTheme.colorScheme.primary else Color.Transparent
+        if (isReordering || isFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     val borderWidth = if (isReordering || isFocused) 1.dp else 0.dp
 
@@ -1432,7 +1580,7 @@ fun HubItemEditorRow(
             )
             if (item.customImageUrl != null) {
                 Text(
-                    text = "Has custom image",
+                    text = stringResource(R.string.dashboard_has_custom_image),
                     color = MaterialTheme.colorScheme.primary.copy(0.7f),
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -1440,15 +1588,13 @@ fun HubItemEditorRow(
         }
 
         if (isReordering) {
-            Text(
-                text = "▲▼",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.labelSmall,
+            ReorderIndicator(
+                instructions = stringResource(R.string.dashboard_reorder_hint),
                 modifier = Modifier.padding(end = 12.dp)
             )
         } else if (isFocused) {
             Text(
-                text = "Manage ›",
+                text = stringResource(R.string.dashboard_manage_chevron),
                 color = MaterialTheme.colorScheme.primary.copy(0.9f),
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(end = 12.dp)
@@ -1465,18 +1611,31 @@ fun VoidCompactActionButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
     val accentColor = MaterialTheme.colorScheme.primary
+    val borderWidth by animateDpAsState(
+        targetValue = if (isFocused) 2.dp else 1.dp,
+        animationSpec = SaabMotion.focusFeedbackSpec(),
+        label = "compactActionBorderWidth"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isFocused) accentColor else Color.White.copy(0.15f),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
+        label = "compactActionBorderColor"
+    )
+    val labelColor by animateColorAsState(
+        targetValue = if (isFocused) accentColor else Color.White.copy(0.8f),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
+        label = "compactActionLabelColor"
+    )
 
     Row(
         modifier = modifier
             .height(36.dp)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(0.07f))
             .border(
-                if (isFocused) 2.dp else 1.dp,
-                if (isFocused) accentColor else Color.White.copy(0.15f),
+                borderWidth,
+                borderColor,
                 RoundedCornerShape(8.dp)
             )
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
@@ -1494,7 +1653,7 @@ fun VoidCompactActionButton(
         Spacer(modifier = Modifier.width(4.dp))
         Text(
             label,
-            color = if (isFocused) accentColor else Color.White.copy(0.8f),
+            color = labelColor,
             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
             maxLines = 1,
             softWrap = false,
@@ -1518,16 +1677,20 @@ fun VoidTabBtn(
 
     val showHighlight = isFocused || (isSelected && !isTabRowFocused)
 
-    val textColor = if (showHighlight) Color.White else Color.White.copy(0.6f)
-    val indicatorHeight = if (showHighlight) 2.dp else 0.dp
-    val indicatorColor = accentColor
-
-    val scale by animateFloatAsState(if (isFocused) 1.08f else 1f)
+    val textColor by animateColorAsState(
+        targetValue = if (showHighlight) Color.White else Color.White.copy(0.6f),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
+        label = "dashboardTabTextColor"
+    )
+    val indicatorColor by animateColorAsState(
+        targetValue = if (showHighlight) accentColor else Color.Transparent,
+        animationSpec = SaabMotion.focusFeedbackSpec(),
+        label = "dashboardTabIndicatorColor"
+    )
 
     Column(
         modifier = modifier
             .height(40.dp)
-            .scale(scale)
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
             .focusable(interactionSource = interactionSource),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1536,13 +1699,14 @@ fun VoidTabBtn(
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium.copy(
-                fontWeight = if (showHighlight) FontWeight.Bold else FontWeight.Normal,
+                // Keep typography geometry fixed; focus is indicated by color and underline.
+                fontWeight = FontWeight.SemiBold,
                 fontSize = 15.sp
             ),
             color = textColor
         )
         Spacer(modifier = Modifier.height(4.dp))
-        Box(modifier = Modifier.width(30.dp).height(indicatorHeight).background(indicatorColor))
+        Box(modifier = Modifier.width(30.dp).height(2.dp).background(indicatorColor))
     }
 }
 
@@ -1629,6 +1793,7 @@ fun VoidCheckboxRow(
 @Composable
 fun VoidSlider(
     value: Float,
+    accessibilityLabel: String,
     onValueChange: (Float) -> Unit,
     valueRange: ClosedFloatingPointRange<Float>,
     steps: Int
@@ -1644,6 +1809,7 @@ fun VoidSlider(
     ) {
         VoidSliderButton(
             text = "−",
+            accessibilityLabel = stringResource(R.string.player_decrease_control, accessibilityLabel),
             enabled = value > valueRange.start,
             onClick = {
                 val newValue = (value - stepSize).coerceIn(valueRange)
@@ -1669,6 +1835,7 @@ fun VoidSlider(
 
         VoidSliderButton(
             text = "+",
+            accessibilityLabel = stringResource(R.string.player_increase_control, accessibilityLabel),
             enabled = value < valueRange.endInclusive,
             onClick = {
                 val newValue = (value + stepSize).coerceIn(valueRange)
@@ -1681,34 +1848,37 @@ fun VoidSlider(
 @Composable
 private fun VoidSliderButton(
     text: String,
+    accessibilityLabel: String,
     enabled: Boolean,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val accentColor = MaterialTheme.colorScheme.primary
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f, label = "scale")
+    val buttonModifier = Modifier
+        .size(48.dp)
+        .clip(RoundedCornerShape(8.dp))
+        .background(Color.White.copy(0.1f))
+        .border(
+            if (isFocused) 2.dp else 1.dp,
+            when {
+                isFocused && enabled -> accentColor
+                isFocused && !enabled -> Color.White.copy(0.3f)
+                else -> Color.White.copy(0.2f)
+            },
+            RoundedCornerShape(8.dp)
+        )
+        .clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            enabled = enabled,
+            role = Role.Button
+        ) { onClick() }
+        .focusable(interactionSource = interactionSource)
+        .semantics { contentDescription = accessibilityLabel }
 
     Box(
-        modifier = Modifier
-            .size(48.dp)
-            .scale(scale)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.White.copy(0.1f))
-            .border(
-                if (isFocused) 2.dp else 1.dp,
-                when {
-                    isFocused && enabled -> accentColor
-                    isFocused && !enabled -> Color.White.copy(0.3f)
-                    else -> Color.White.copy(0.2f)
-                },
-                RoundedCornerShape(8.dp)
-            )
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null
-            ) { if (enabled) onClick() }
-            .focusable(interactionSource = interactionSource),
+        modifier = buttonModifier,
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -1732,7 +1902,6 @@ fun LayoutOptionItem(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
     val bgColor = Color.White.copy(0.07f)
     val textColor = when {
         isSelected -> MaterialTheme.colorScheme.primary
@@ -1744,14 +1913,14 @@ fun LayoutOptionItem(
             isFocused -> Color.White
             isSelected -> MaterialTheme.colorScheme.primary
             else -> Color.White.copy(0.15f)
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     val borderWidth = if (isFocused || isSelected) 2.dp else 1.dp
 
     Box(
         modifier = modifier
             .height(36.dp)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(8.dp))
@@ -1781,14 +1950,12 @@ fun VoidEditorRow(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (interactive && isFocused) 1.02f else 1f)
     val accentColor = MaterialTheme.colorScheme.primary
 
     Row(
         modifier = modifier
             .fillMaxWidth()
             .height(56.dp)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(if (isFocused) Color.White.copy(0.1f) else Color.White.copy(0.05f))
             .border(

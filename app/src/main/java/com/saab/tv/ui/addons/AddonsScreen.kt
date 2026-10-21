@@ -2,10 +2,8 @@ package com.saab.tv.ui.addons
 
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,10 +14,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCode2
@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,6 +50,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.saab.tv.data.model.AddonEntity
+import com.saab.tv.R
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.components.ReorderIndicator
+import com.saab.tv.ui.components.scrollToItemUsingSaabMotion
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -83,7 +88,9 @@ fun AddonsScreen(
         }
     }
 
-    BackHandler(onBack = {
+    com.saab.tv.ui.navigation.AppBackHandler(
+        priority = com.saab.tv.ui.navigation.AppBackPriority.Modal,
+        onBack = {
         if (reorderingAddon != null) {
             reorderingAddon = null
         } else {
@@ -123,12 +130,12 @@ fun AddonsScreen(
     ) {
         // HEADER
         Text(
-            "Addon Manager",
+            stringResource(R.string.addons_title),
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
             color = Color.White
         )
         Text(
-            "Install and manage your Stremio addons.",
+            stringResource(R.string.addons_description),
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = Color.White.copy(0.6f),
             modifier = Modifier.padding(top = 4.dp)
@@ -140,7 +147,7 @@ fun AddonsScreen(
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             VoidIconButton(
                 icon = Icons.Default.QrCode2,
-                contentDescription = "Remote Paste",
+                contentDescription = stringResource(R.string.remote_paste_title),
                 onClick = { showRemotePaste = true },
                 modifier = goBackModifier.then(upBlockModifier)
             )
@@ -158,7 +165,7 @@ fun AddonsScreen(
             )
             Spacer(modifier = Modifier.width(12.dp))
             VoidButton(
-                text = "Install",
+                text = stringResource(R.string.addons_install),
                 onClick = { viewModel.prepareInstall(urlInput) },
                 modifier = Modifier.width(140.dp).then(upBlockModifier),
                 enabled = urlInput.isNotBlank(),
@@ -195,7 +202,7 @@ fun AddonsScreen(
                     .padding(horizontal = 16.dp, vertical = 10.dp)
             ) {
                 Text(
-                    "Reorder mode  ·  ▲▼ move  ·  OK done  ·  Back cancel",
+                    stringResource(R.string.addons_reorder_hint),
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                 )
@@ -203,7 +210,7 @@ fun AddonsScreen(
             Spacer(modifier = Modifier.height(12.dp))
         } else {
             Text(
-                "Installed Addons",
+                stringResource(R.string.addons_installed),
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                 color = Color.White.copy(0.6f)
             )
@@ -242,12 +249,12 @@ fun AddonsScreen(
                     onMoveUp = {
                         viewModel.moveAddon(addon, -1)
                         val target = index - 1
-                        scope.launch { delay(50); listState.animateScrollToItem((target - 1).coerceAtLeast(0)) }
+                        scope.launch { delay(50); listState.scrollToItemUsingSaabMotion((target - 1).coerceAtLeast(0)) }
                     },
                     onMoveDown = {
                         viewModel.moveAddon(addon, 1)
                         val target = index + 1
-                        scope.launch { delay(50); listState.animateScrollToItem((target - 1).coerceAtLeast(0)) }
+                        scope.launch { delay(50); listState.scrollToItemUsingSaabMotion((target - 1).coerceAtLeast(0)) }
                     },
                     modifier = goBackModifier.then(
                         if (isReordering) Modifier.onPreviewKeyEvent {
@@ -286,7 +293,7 @@ fun AddonsScreen(
 
         VoidDialog(
             onDismissRequest = { selectedAddon = null },
-            title = "Manage Addon"
+            title = stringResource(R.string.addons_manage_title)
         ) {
             Text(
                 addonToManage.nickname ?: addonToManage.name,
@@ -296,7 +303,7 @@ fun AddonsScreen(
             Spacer(Modifier.height(24.dp))
 
             VoidButton(
-                text = "Rename",
+                text = stringResource(R.string.common_rename),
                 onClick = {
                     renameOp = RenameOperation(
                         addonToManage.transportUrl,
@@ -311,7 +318,7 @@ fun AddonsScreen(
             Spacer(Modifier.height(12.dp))
 
             VoidButton(
-                text = "Move",
+                text = stringResource(R.string.addons_move),
                 onClick = {
                     reorderingAddon = addonToManage
                     selectedAddon = null
@@ -322,7 +329,7 @@ fun AddonsScreen(
             Spacer(Modifier.height(12.dp))
 
             VoidButton(
-                text = "Uninstall",
+                text = stringResource(R.string.addons_uninstall),
                 onClick = {
                     addonToDelete = selectedAddon
                     selectedAddon = null
@@ -333,7 +340,7 @@ fun AddonsScreen(
 
             Spacer(Modifier.height(24.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                VoidButton(text = "Close", onClick = { selectedAddon = null }, modifier = Modifier.width(120.dp))
+                VoidButton(text = stringResource(R.string.common_close), onClick = { selectedAddon = null }, modifier = Modifier.width(120.dp))
             }
         }
     }
@@ -344,12 +351,12 @@ fun AddonsScreen(
         val focusRequester = remember { FocusRequester() }
         LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
-        VoidDialog(onDismissRequest = { renameOp = null }, title = "Rename") {
-            VoidInput(value = newName, onValueChange = { newName = it }, placeholder = "Name")
+        VoidDialog(onDismissRequest = { renameOp = null }, title = stringResource(R.string.common_rename)) {
+            VoidInput(value = newName, onValueChange = { newName = it }, placeholder = stringResource(R.string.addons_name_placeholder))
             Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                VoidButton(text = "Cancel", onClick = { renameOp = null }, modifier = Modifier.weight(1f))
-                VoidButton(text = "Save", onClick = { viewModel.renameAddon(op.transportUrl, newName); renameOp = null }, isPrimary = true, modifier = Modifier.weight(1f), focusRequester = focusRequester)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                VoidButton(text = stringResource(R.string.common_cancel), onClick = { renameOp = null }, modifier = Modifier.weight(1f))
+                VoidButton(text = stringResource(R.string.common_save), onClick = { viewModel.renameAddon(op.transportUrl, newName); renameOp = null }, isPrimary = true, modifier = Modifier.weight(1f), focusRequester = focusRequester)
             }
         }
     }
@@ -359,13 +366,13 @@ fun AddonsScreen(
         val focusRequester = remember { FocusRequester() }
         LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
-        VoidDialog(onDismissRequest = { addonToDelete = null }, title = "Uninstall?") {
-            Text("Are you sure you want to remove ${addon.name}?", color = Color.Gray)
+        VoidDialog(onDismissRequest = { addonToDelete = null }, title = stringResource(R.string.addons_uninstall_title)) {
+            Text(stringResource(R.string.addons_confirm_remove, addon.name), color = Color.Gray)
             Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                VoidButton(text = "Cancel", onClick = { addonToDelete = null }, modifier = Modifier.weight(1f))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                VoidButton(text = stringResource(R.string.common_cancel), onClick = { addonToDelete = null }, modifier = Modifier.weight(1f))
                 VoidButton(
-                    text = "Uninstall",
+                    text = stringResource(R.string.addons_uninstall),
                     onClick = {
                         val addons = state.addons
                         val idx = addons.indexOfFirst { it.transportUrl == addon.transportUrl }
@@ -400,19 +407,19 @@ fun AddonsScreen(
         val focusRequester = remember { FocusRequester() }
         LaunchedEffect(Unit) { delay(100); focusRequester.requestFocus() }
 
-        VoidDialog(onDismissRequest = { viewModel.cancelInstall() }, title = "Configure Sync") {
-            Text("Select which catalogs to sync:", color = Color.Gray, modifier = Modifier.padding(bottom = 16.dp))
+        VoidDialog(onDismissRequest = { viewModel.cancelInstall() }, title = stringResource(R.string.addons_configure_sync)) {
+            Text(stringResource(R.string.addons_select_catalogs), color = Color.Gray, modifier = Modifier.padding(bottom = 16.dp))
 
-            VoidToggleRow("Home Screen", home, { home = !home }, focusRequester)
+            VoidToggleRow(stringResource(R.string.addons_home_catalog), home, { home = !home }, focusRequester)
             Spacer(Modifier.height(8.dp))
-            VoidToggleRow("Movies Tab", movies, { movies = !movies })
+            VoidToggleRow(stringResource(R.string.addons_movies_catalog), movies, { movies = !movies })
             Spacer(Modifier.height(8.dp))
-            VoidToggleRow("Series Tab", series, { series = !series })
+            VoidToggleRow(stringResource(R.string.addons_series_catalog), series, { series = !series })
 
             Spacer(Modifier.height(32.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                VoidButton(text = "Cancel", onClick = { viewModel.cancelInstall() }, modifier = Modifier.weight(1f))
-                VoidButton(text = "Install", onClick = { viewModel.confirmInstall(item.url, home, movies, series) }, isPrimary = true, modifier = Modifier.weight(1f))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                VoidButton(text = stringResource(R.string.common_cancel), onClick = { viewModel.cancelInstall() }, modifier = Modifier.weight(1f))
+                VoidButton(text = stringResource(R.string.addons_install), onClick = { viewModel.confirmInstall(item.url, home, movies, series) }, isPrimary = true, modifier = Modifier.weight(1f))
             }
         }
     }
@@ -439,18 +446,16 @@ fun VoidAddonItem(
     val borderColor by animateColorAsState(
         if (isReordering) accentColor
         else if (isFocused) accentColor
-        else Color.Transparent
+        else Color.Transparent,
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     val borderWidth = if (isReordering || isFocused) 2.dp else 0.dp
 
     val bgColor = Color.White.copy(0.05f)
-    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
-
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(8.dp))
@@ -490,9 +495,12 @@ fun VoidAddonItem(
             )
         }
         if (isReordering) {
-            Text("▲▼", color = accentColor, style = MaterialTheme.typography.labelMedium)
+            ReorderIndicator(
+                instructions = stringResource(R.string.addons_reorder_hint),
+                modifier = Modifier.padding(end = 12.dp)
+            )
         } else if (isFocused) {
-            Text("Manage", color = accentColor, style = MaterialTheme.typography.labelMedium)
+            Text(stringResource(R.string.common_manage), color = accentColor, style = MaterialTheme.typography.labelMedium)
         }
     }
 }
@@ -600,23 +608,24 @@ fun VoidDialog(
     onDismissRequest: () -> Unit,
     title: String,
     modifier: Modifier = Modifier,
+    footer: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     var appeared by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (appeared) 1f else 0.965f,
-        animationSpec = tween(230),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "voidDialogScale"
     )
     val alpha by animateFloatAsState(
         targetValue = if (appeared) 1f else 0f,
-        animationSpec = tween(190),
+        animationSpec = SaabMotion.navigationRevealSpec(),
         label = "voidDialogAlpha"
     )
     LaunchedEffect(Unit) { appeared = true }
 
     Dialog(onDismissRequest = onDismissRequest) {
-        Box(
+        BoxWithConstraints(
             modifier = modifier
                 .width(400.dp)
                 .graphicsLayer {
@@ -629,14 +638,30 @@ fun VoidDialog(
                 .border(1.dp, Color.White.copy(0.1f), RoundedCornerShape(16.dp))
                 .padding(24.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            val dialogMaxHeight = maxHeight * 0.88f
+            Column(Modifier.heightIn(max = dialogMaxHeight)) {
                 Text(
                     title,
                     style = MaterialTheme.typography.headlineSmall,
                     color = Color.White
                 )
                 Spacer(Modifier.height(8.dp))
-                CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) { content() }
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) {
+                        content()
+                    }
+                }
+                footer?.let {
+                    Spacer(Modifier.height(12.dp))
+                    CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Color.White) {
+                        it()
+                    }
+                }
             }
         }
     }
@@ -652,14 +677,12 @@ fun VoidIconButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f)
     val bgColor = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(0.1f)
     val iconColor = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.White
 
     Box(
         modifier = modifier
             .size(50.dp)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
             .border(1.dp, if (isFocused) Color.Transparent else Color.White.copy(0.2f), RoundedCornerShape(8.dp))

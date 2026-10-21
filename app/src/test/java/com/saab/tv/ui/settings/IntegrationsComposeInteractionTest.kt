@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.auth.StremioAuthManager
 import com.saab.tv.data.model.ProfileEntity
@@ -47,7 +48,8 @@ class IntegrationsComposeInteractionTest {
             fixture.tmdb,
             fixture.traktAuth,
             fixture.traktSync,
-            torbox
+            torbox,
+            fixture.userStateCommands
         )
         compose.setContent { MaterialTheme { IntegrationsScreen(onBack = {}, viewModel = viewModel) } }
     }
@@ -60,14 +62,44 @@ class IntegrationsComposeInteractionTest {
     }
 
     @Test fun tmdbIntegrationShowsKeySetupAndCanReturnWithoutChangingProfile() {
+        val context = RuntimeEnvironment.getApplication()
+        compose.onNodeWithText(context.getString(com.saab.tv.R.string.integration_screen_description)).assertExists()
         compose.onNodeWithText("TMDB").performClick()
         compose.onNodeWithText("TMDB Settings").assertExists()
         compose.onNodeWithText("API Access").assertExists()
-        compose.onNodeWithText("Save Key").assertExists()
+        compose.onNode(hasSetTextAction()).performTextInput("test-api-key")
+        compose.waitForIdle()
+        val saveKeyButton = compose.onNodeWithText("Save Key")
+        val initialBounds = saveKeyButton.fetchSemanticsNode().boundsInRoot
+        saveKeyButton.assertHeightIsEqualTo(50.dp)
+        saveKeyButton.assertIsEnabled()
+        saveKeyButton.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        saveKeyButton.assertIsFocused()
+        assertEquals("Shared integration buttons must not resize when focused", initialBounds, saveKeyButton.fetchSemanticsNode().boundsInRoot)
         compose.onNodeWithText("Close").performClick()
 
         val profile = runBlocking { fixture.dao.getProfileById(1)!! }
         assertEquals(false, profile.tmdbEnabled)
         assertEquals("", profile.tmdbLanguage)
+    }
+
+    @Test fun integrationCardKeepsBoundsWhenFocused() {
+        val card = compose.onNodeWithText("TMDB")
+        val initialBounds = card.fetchSemanticsNode().boundsInRoot
+
+        card.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+
+        card.assertIsFocused()
+        assertEquals("Integration cards must not expand over adjacent content", initialBounds, card.fetchSemanticsNode().boundsInRoot)
+    }
+
+    @Test fun torBoxDialogExplainsCacheChecksAndSupportsRemoteKeyPaste() {
+        val context = RuntimeEnvironment.getApplication()
+        compose.onNodeWithText("TorBox").performClick()
+
+        compose.onNodeWithText(context.getString(com.saab.tv.R.string.integration_torbox_title)).assertExists()
+        compose.onNodeWithText(context.getString(com.saab.tv.R.string.integration_torbox_description)).assertExists()
+        compose.onNodeWithText(context.getString(com.saab.tv.R.string.integration_paste_key_from_phone)).assertExists()
+        compose.onNodeWithText(context.getString(com.saab.tv.R.string.integration_save_key)).assertExists()
     }
 }

@@ -3,6 +3,7 @@ package com.saab.tv.ui.navigation
 import android.app.Application
 import androidx.compose.foundation.focusable
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.material3.Text
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -57,6 +58,53 @@ class TopNavigationBarComposeInteractionTest {
         assertEquals(1, enterContentCalls)
     }
 
+    @Test fun remoteCanTraverseAndSelectEveryTopBarDestination() {
+        val requesters = NavDestination.entries.associateWith { FocusRequester() }
+        val contentRequester = FocusRequester()
+        val navigations = mutableListOf<NavDestination>()
+        var contentEntries = 0
+        compose.setContent {
+            MaterialTheme {
+                TopNavigationBar(
+                    currentDestination = NavDestination.Home,
+                    currentProfile = null,
+                    topNavRequesters = requesters,
+                    onNavigate = navigations::add,
+                    onEnterContent = { contentEntries++ },
+                    content = { Text("Screen content", Modifier.focusRequester(contentRequester).focusable()) }
+                )
+            }
+        }
+
+        compose.runOnIdle { contentRequester.requestFocus() }
+        compose.onNodeWithText("Screen content").performKeyInput { pressKey(Key.DirectionUp) }
+        compose.runOnIdle { requesters.getValue(NavDestination.Search).requestFocus() }
+
+        val labels = mapOf(
+            NavDestination.Search to "Search",
+            NavDestination.Home to "Home",
+            NavDestination.Movies to "Movies",
+            NavDestination.Series to "Series",
+            NavDestination.Ott to "OTT",
+            NavDestination.Watchlist to "My Library"
+        )
+        NavigationDestinations.topBar.forEachIndexed { index, destination ->
+            val item = compose.onNodeWithContentDescription(labels.getValue(destination))
+            item.assertIsFocused()
+            item.performKeyInput { pressKey(Key.DirectionCenter) }
+            if (destination == NavDestination.Home) {
+                compose.runOnIdle { assertEquals(1, contentEntries) }
+            } else {
+                compose.runOnIdle {
+                    assertEquals(NavigationDestinations.topBar.take(index + 1).filter { it != NavDestination.Home }, navigations)
+                }
+            }
+            if (index < NavigationDestinations.topBar.lastIndex) {
+                item.performKeyInput { pressKey(Key.DirectionRight) }
+            }
+        }
+    }
+
     @Test fun downOnCenterNavigationEntersContentWithoutChangingTab() {
         val requesters = NavDestination.entries.associateWith { FocusRequester() }
         val contentRequester = FocusRequester()
@@ -85,6 +133,31 @@ class TopNavigationBarComposeInteractionTest {
         assertEquals(emptyList<NavDestination>(), navigations)
     }
 
+    @Test fun backAndEscapeDoNotAuthorizeRestoredFocusIntoNavigation() {
+        val requesters = NavDestination.entries.associateWith { FocusRequester() }
+        val contentRequester = FocusRequester()
+        compose.setContent {
+            MaterialTheme {
+                TopNavigationBar(
+                    currentDestination = NavDestination.Home,
+                    currentProfile = null,
+                    topNavRequesters = requesters,
+                    onNavigate = {},
+                    onEnterContent = { contentRequester.requestFocus() },
+                    content = { Text("Screen content", Modifier.focusRequester(contentRequester).focusable()) }
+                )
+            }
+        }
+
+        compose.runOnIdle { contentRequester.requestFocus() }
+        listOf(Key.Back, Key.Escape).forEach { key ->
+            compose.onNodeWithText("Screen content").performKeyInput { pressKey(key) }
+            compose.runOnIdle { requesters.getValue(NavDestination.Search).requestFocus() }
+            compose.waitForIdle()
+            compose.onNodeWithText("Screen content").assertIsFocused()
+        }
+    }
+
     @Test fun settingsDropdownDownMovesToExitAndConfirmsExitAction() {
         val requesters = NavDestination.entries.associateWith { FocusRequester() }
         val contentRequester = FocusRequester()
@@ -105,10 +178,69 @@ class TopNavigationBarComposeInteractionTest {
 
         compose.runOnIdle { contentRequester.requestFocus() }
         compose.onNodeWithText("Screen content").performKeyInput { pressKey(Key.DirectionUp) }
+        compose.runOnIdle { requesters.getValue(NavDestination.Search).requestFocus() }
+        compose.runOnIdle { requesters.getValue(NavDestination.Profile).requestFocus() }
         compose.runOnIdle { requesters.getValue(NavDestination.Settings).requestFocus() }
         compose.onNodeWithContentDescription("Settings").performKeyInput { pressKey(Key.DirectionDown) }
         compose.onNodeWithContentDescription("Exit").performKeyInput { pressKey(Key.DirectionCenter) }
 
         assertEquals(1, exitCalls)
+    }
+
+    @Test fun collapsedDropdownCannotStealRestoredFocus() {
+        val requesters = NavDestination.entries.associateWith { FocusRequester() }
+        val contentRequester = FocusRequester()
+        compose.setContent {
+            MaterialTheme {
+                TopNavigationBar(
+                    currentDestination = NavDestination.Home,
+                    currentProfile = null,
+                    topNavRequesters = requesters,
+                    onNavigate = {},
+                    onEnterContent = {},
+                    content = { Text("Screen content", Modifier.focusRequester(contentRequester).focusable()) }
+                )
+            }
+        }
+
+        compose.runOnIdle { contentRequester.requestFocus() }
+        compose.runOnIdle { requesters.getValue(NavDestination.Exit).requestFocus() }
+        compose.waitForIdle()
+
+        compose.onNodeWithContentDescription("Exit").assertIsNotFocused()
+        compose.onNodeWithText("Screen content").assertIsFocused()
+    }
+
+    @Test fun blockedNavigationDoesNotReopenFromStaleTopBarFocus() {
+        val requesters = NavDestination.entries.associateWith { FocusRequester() }
+        val contentRequester = FocusRequester()
+        val navigationActive = mutableStateOf(true)
+        compose.setContent {
+            MaterialTheme {
+                TopNavigationBar(
+                    currentDestination = NavDestination.Home,
+                    currentProfile = null,
+                    topNavRequesters = requesters,
+                    onNavigate = {},
+                    onEnterContent = { contentRequester.requestFocus() },
+                    navigationActive = navigationActive.value,
+                    content = { Text("Screen content", Modifier.focusRequester(contentRequester).focusable()) }
+                )
+            }
+        }
+
+        compose.runOnIdle { contentRequester.requestFocus() }
+        compose.onNodeWithText("Screen content").performKeyInput { pressKey(Key.DirectionUp) }
+        compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
+        compose.onNodeWithContentDescription("Home").assertIsFocused()
+
+        compose.runOnIdle { navigationActive.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { navigationActive.value = true }
+        compose.waitForIdle()
+        compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Screen content").assertIsFocused()
     }
 }

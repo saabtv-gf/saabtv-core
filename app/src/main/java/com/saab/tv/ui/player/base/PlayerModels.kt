@@ -23,7 +23,8 @@ data class PlayerSourceOption(
     val formats: List<String> = emptyList(),
     val fileIdx: Int = -1,
     val fileName: String = "",
-    val subtitles: List<PlayerSubtitleSource> = emptyList()
+    val subtitles: List<PlayerSubtitleSource> = emptyList(),
+    val audioLanguages: List<String> = emptyList()
 )
 
 /** A season pack may expose several episode files under one magnet URL. */
@@ -75,7 +76,9 @@ data class PlayerTrackOption(
     val roleFlags: Int = 0,
     val selectionFlags: Int = 0,
     val subtitleFormat: String? = null,
-    val audioFormat: String? = null
+    val audioFormat: String? = null,
+    /** Non-null when this audio option changes the playback source instead of an embedded track. */
+    val sourceId: String? = null
 )
 
 data class PlayerLoadRequest(
@@ -90,7 +93,8 @@ data class PlayerLoadRequest(
     val preferredSubtitleTrackId: String? = null,
     val separateAudioUrl: String? = null,
     val trailerRequestHeaders: Map<String, String> = emptyMap(),
-    val diagnosticsSessionId: String = ""
+    val diagnosticsSessionId: String = "",
+    val playbackIntent: com.saab.tv.domain.schema.PlaybackIntent? = null
 )
 
 @Immutable
@@ -102,7 +106,6 @@ data class PlaybackSettings(
     val frameRateMatching: Boolean = false,
     val seekTimeIntervalSeconds: Int = 30,
     val seekThumbnailsEnabled: Boolean = true,
-    val seekThumbnailIntervalSeconds: Int = 30,
     val autoplayNextEpisode: Boolean = true,
     val skipIntroEnabled: Boolean = true,
     val skipRecapEnabled: Boolean = true,

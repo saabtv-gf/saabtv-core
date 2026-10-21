@@ -9,8 +9,16 @@ import android.util.Base64
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
+import java.io.RandomAccessFile
+import java.nio.channels.FileLock
+import java.nio.channels.OverlappingFileLockException
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,16 +29,39 @@ data class SeekThumbnailProgress(
     val percent: Int
 )
 
+enum class ThumbnailStoreResult { STORED, DUPLICATE, INVALID, CAPACITY_EXCEEDED, WRITE_FAILED }
+
+data class ThumbnailWorkingSetStatus(
+    val admitted: Boolean,
+    val currentBytes: Long,
+    val limitBytes: Long,
+    val refusalReason: String? = null
+)
+
 @Singleton
-class SeekThumbnailCache @Inject constructor(
-    @ApplicationContext private val context: Context
+class SeekThumbnailCache private constructor(
+    @ApplicationContext private val context: Context,
+    limits: CacheLimits
 ) {
-    private val root = File(context.cacheDir, "$CACHE_DIRECTORY/${com.saab.tv.data.account.AccountStorage.scope(context)}")
+    @Inject constructor(@ApplicationContext context: Context) : this(context, deviceLimits(context))
+
+    internal constructor(context: Context, maxCacheBytes: Long, workingSetBytes: Long) : this(
+        context,
+        CacheLimits(maxCacheBytes, workingSetBytes)
+    )
+
+    private val installationRoot = File(context.cacheDir, CACHE_DIRECTORY)
+    /** Keep account data separate while enforcing one device-wide evictable byte limit. */
+    private val root = File(installationRoot, com.saab.tv.data.account.AccountStorage.scope(context))
+    private val maxCacheBytes = limits.cacheBytes
+    private val maxWorkingSetBytes = limits.workingSetBytes
     private val ioDispatcher = Executors.newSingleThreadExecutor { task ->
         Thread(task, "seek-thumbnail-cache").apply { priority = Thread.MIN_PRIORITY }
     }.asCoroutineDispatcher()
     private val thumbnailIndexByDirectory = mutableMapOf<String, MutableMap<Long, File>>()
     private val lastDirectoryScanElapsedMs = mutableMapOf<String, Long>()
+    /** OS file locks make active timelines visible to the isolated worker and app processes. */
+    private val pinnedWorkingSets = mutableMapOf<String, WorkingSetLease>()
     private var localWriterMode = false
     private var writesSinceTrim = 0
 
@@ -38,13 +69,13 @@ class SeekThumbnailCache @Inject constructor(
         // Older versions may contain PlayerView captures or libmpv BGRA frames
         // interpreted as RGBA. Never expose stale control overlays or blue-tinted
         // thumbnails after upgrading the pixel pipeline.
-        Thread({
+        CoroutineScope(ioDispatcher).launch {
             OBSOLETE_CACHE_DIRECTORIES.forEach { directory ->
                 runCatching { File(context.cacheDir, directory).deleteRecursively() }
             }
-        }, "seek-thumbnail-cache-migration").apply {
-            priority = Thread.MIN_PRIORITY
-            start()
+            // Enforce the new installation-wide cap on caches created by older app versions
+            // immediately after migration, not only after the next batch of thumbnail writes.
+            trimToSize()
         }
     }
 
@@ -54,20 +85,20 @@ class SeekThumbnailCache @Inject constructor(
         positionMs: Long,
         intervalSeconds: Int,
         bitmap: Bitmap
-    ): Boolean = withContext(ioDispatcher) {
+    ): ThumbnailStoreResult = withContext(ioDispatcher) {
         try {
             if (profileId <= 0 || contentId.isBlank() || bitmap.width <= 0 || bitmap.height <= 0) {
-                return@withContext false
+                return@withContext ThumbnailStoreResult.INVALID
             }
             val safeInterval = normalizeInterval(intervalSeconds)
             val timestampSeconds = quantizePositionSeconds(positionMs, safeInterval)
             val directory = contentDirectory(profileId, contentId)
-            if (!directory.exists() && !directory.mkdirs()) return@withContext false
+            if (!directory.exists() && !directory.mkdirs()) return@withContext ThumbnailStoreResult.WRITE_FAILED
             val destination = File(directory, "$timestampSeconds.webp")
             if (destination.exists()) {
                 destination.setLastModified(System.currentTimeMillis())
                 thumbnailIndexByDirectory[directory.absolutePath]?.set(timestampSeconds, destination)
-                return@withContext false
+                return@withContext ThumbnailStoreResult.DUPLICATE
             }
 
             val temporary = File(
@@ -85,10 +116,36 @@ class SeekThumbnailCache @Inject constructor(
                     bitmap.compress(format, WEBP_QUALITY, output)
                 }
             }.getOrDefault(false)
-            if (!written || !temporary.renameTo(destination)) {
+            if (!written) {
                 temporary.delete()
-                return@withContext false
+                return@withContext ThumbnailStoreResult.WRITE_FAILED
             }
+            val commitResult = runCatching {
+                withWorkingSetRegistryLock {
+                    if (destination.exists()) {
+                        destination.setLastModified(System.currentTimeMillis())
+                        thumbnailIndexByDirectory[directory.absolutePath]?.set(timestampSeconds, destination)
+                        temporary.delete()
+                        ThumbnailStoreResult.DUPLICATE
+                    } else if (
+                        isDirectoryPinnedLocked(directory) &&
+                        directoryBytes(directory) + temporary.length() > maxWorkingSetBytes
+                    ) {
+                        temporary.delete()
+                        ThumbnailStoreResult.CAPACITY_EXCEEDED
+                    } else if (!temporary.renameTo(destination)) {
+                        temporary.delete()
+                        ThumbnailStoreResult.WRITE_FAILED
+                    } else {
+                        ThumbnailStoreResult.STORED
+                    }
+                }
+            }.getOrElse {
+                // A failed/cancelled lock acquisition must not strand an unindexed frame.
+                temporary.delete()
+                ThumbnailStoreResult.WRITE_FAILED
+            }
+            if (commitResult != ThumbnailStoreResult.STORED) return@withContext commitResult
             destination.setLastModified(System.currentTimeMillis())
             thumbnailIndexByDirectory[directory.absolutePath]?.set(timestampSeconds, destination)
             directory.setLastModified(System.currentTimeMillis())
@@ -97,9 +154,73 @@ class SeekThumbnailCache @Inject constructor(
                 trimToSize()
                 writesSinceTrim = 0
             }
-            true
+            ThumbnailStoreResult.STORED
         } finally {
             if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+
+    /** Protect the current title's frames while its full-timeline cache is being built. */
+    suspend fun beginWorkingSet(profileId: Int, contentId: String): ThumbnailWorkingSetStatus =
+        withContext(ioDispatcher) {
+            if (profileId <= 0 || contentId.isBlank()) {
+                return@withContext ThumbnailWorkingSetStatus(
+                    admitted = false,
+                    currentBytes = 0L,
+                    limitBytes = maxWorkingSetBytes,
+                    refusalReason = "invalid_identity"
+                )
+            }
+            val directory = contentDirectory(profileId, contentId)
+            runCatching {
+                withWorkingSetRegistryLock {
+                    val path = directory.absolutePath
+                    val currentBytes = directoryBytes(directory)
+                    if (currentBytes > maxWorkingSetBytes) {
+                        return@withWorkingSetRegistryLock ThumbnailWorkingSetStatus(
+                            false, currentBytes, maxWorkingSetBytes, "existing_timeline_exceeds_limit"
+                        )
+                    }
+                    val currentLease = pinnedWorkingSets[path]
+                    if (currentLease != null) {
+                        currentLease.references++
+                        return@withWorkingSetRegistryLock ThumbnailWorkingSetStatus(
+                            true, currentBytes, maxWorkingSetBytes
+                        )
+                    }
+                    val lease = openWorkingSetLease(directory)
+                    if (lease == null) {
+                        ThumbnailWorkingSetStatus(
+                            false, currentBytes, maxWorkingSetBytes, "timeline_in_use_or_lock_unavailable"
+                        )
+                    } else {
+                        pinnedWorkingSets[path] = lease
+                        ThumbnailWorkingSetStatus(true, currentBytes, maxWorkingSetBytes)
+                    }
+                }
+            }.getOrElse {
+                ThumbnailWorkingSetStatus(
+                    false,
+                    directoryBytes(directory),
+                    maxWorkingSetBytes,
+                    "working_set_lock_unavailable"
+                )
+            }
+        }
+
+    suspend fun endWorkingSet(profileId: Int, contentId: String) = withContext(NonCancellable + ioDispatcher) {
+        if (profileId > 0 && contentId.isNotBlank()) {
+            withWorkingSetRegistryLock {
+                val directory = contentDirectory(profileId, contentId)
+                val path = directory.absolutePath
+                val lease = pinnedWorkingSets[path]
+                if (lease != null && --lease.references == 0) {
+                    pinnedWorkingSets.remove(path)
+                    lease.close()
+                    workingSetLeaseFile(directory).delete()
+                }
+                trimToSizeLocked()
+            }
         }
     }
 
@@ -206,13 +327,19 @@ class SeekThumbnailCache @Inject constructor(
     }
 
     private fun trimToSize() {
-        val files = root.walkTopDown()
+        withWorkingSetRegistryLock { trimToSizeLocked() }
+    }
+
+    private fun trimToSizeLocked() {
+        cleanStaleWorkingSetLeasesLocked()
+        val files = installationRoot.walkTopDown()
             .filter { it.isFile && it.extension == "webp" }
-            .sortedBy(File::lastModified)
+            .sortedBy { it.lastModified() }
             .toList()
-        var totalBytes = files.sumOf(File::length)
+        var totalBytes = files.sumOf { it.length() }
         for (file in files) {
-            if (totalBytes <= MAX_CACHE_BYTES) break
+            if (totalBytes <= maxCacheBytes) break
+            if (file.parentFile?.let(::isDirectoryPinnedLocked) == true) continue
             val length = file.length()
             if (file.delete()) {
                 totalBytes -= length
@@ -222,6 +349,101 @@ class SeekThumbnailCache @Inject constructor(
             }
         }
     }
+
+    private fun <T> withWorkingSetRegistryLock(block: () -> T): T =
+        synchronized(PROCESS_WORKING_SET_LOCK) {
+            installationRoot.mkdirs()
+            RandomAccessFile(File(installationRoot, WORKING_SET_REGISTRY_LOCK), "rw").use { file ->
+                file.channel.lock().use { block() }
+            }
+        }
+
+    private fun openWorkingSetLease(directory: File): WorkingSetLease? {
+        val file = workingSetLeaseFile(directory)
+        if (file.parentFile?.exists() != true && file.parentFile?.mkdirs() != true) return null
+        val handle = runCatching { RandomAccessFile(file, "rw") }.getOrNull() ?: return null
+        val lock = try {
+            handle.channel.tryLock()
+        } catch (_: OverlappingFileLockException) {
+            null
+        } catch (_: IOException) {
+            null
+        }
+        if (lock == null) {
+            runCatching { handle.close() }
+            return null
+        }
+        return WorkingSetLease(handle, lock)
+    }
+
+    /** Caller holds the registry lock, so an idle marker cannot race a new admission. */
+    private fun isDirectoryPinnedLocked(directory: File): Boolean {
+        if (directory.absolutePath in pinnedWorkingSets) return true
+        val marker = workingSetLeaseFile(directory)
+        if (!marker.exists()) return false
+        val handle = runCatching { RandomAccessFile(marker, "rw") }.getOrNull() ?: return true
+        val lock = try {
+            handle.channel.tryLock()
+        } catch (_: OverlappingFileLockException) {
+            null
+        } catch (_: IOException) {
+            null
+        }
+        if (lock == null) {
+            runCatching { handle.close() }
+            return true
+        }
+        runCatching { lock.release() }
+        runCatching { handle.close() }
+        marker.delete()
+        return false
+    }
+
+    private fun cleanStaleWorkingSetLeasesLocked() {
+        workingSetLeaseRoot.listFiles().orEmpty().forEach { marker ->
+            val handle = runCatching { RandomAccessFile(marker, "rw") }.getOrNull() ?: return@forEach
+            val lock = try {
+                handle.channel.tryLock()
+            } catch (_: OverlappingFileLockException) {
+                null
+            } catch (_: IOException) {
+                null
+            }
+            if (lock != null) {
+                runCatching { lock.release() }
+                runCatching { handle.close() }
+                marker.delete()
+            } else {
+                runCatching { handle.close() }
+            }
+        }
+    }
+
+    private fun workingSetLeaseFile(directory: File): File {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(directory.absolutePath.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
+        return File(workingSetLeaseRoot, "$digest.lock")
+    }
+
+    private val workingSetLeaseRoot: File
+        get() = File(installationRoot, WORKING_SET_LEASE_DIRECTORY)
+
+    private data class WorkingSetLease(
+        private val handle: RandomAccessFile,
+        private val lock: FileLock,
+        var references: Int = 1
+    ) {
+        fun close() {
+            runCatching { lock.release() }
+            runCatching { handle.close() }
+        }
+    }
+
+    private fun directoryBytes(directory: File): Long =
+        directory.listFiles { file -> file.isFile && file.extension == "webp" }
+            .orEmpty()
+            .sumOf(File::length)
 
     private fun thumbnailIndex(directory: File): MutableMap<Long, File> {
         val path = directory.absolutePath
@@ -264,11 +486,19 @@ class SeekThumbnailCache @Inject constructor(
     companion object {
         private const val CACHE_DIRECTORY = "seek_thumbnails_v5"
         private val OBSOLETE_CACHE_DIRECTORIES = listOf("seek_thumbnails", "seek_thumbnails_v2", "seek_thumbnails_v3", "seek_thumbnails_v4")
-        private const val MAX_CACHE_BYTES = 500L * 1_024L * 1_024L
         private const val WEBP_QUALITY = 75
         private const val TRIM_EVERY_WRITES = 50
+        private const val MAX_ACTIVE_WORKING_SET_BYTES = 64L * 1024L * 1024L
         private const val DIRECTORY_RESCAN_INTERVAL_MS = 400L
+        private const val WORKING_SET_REGISTRY_LOCK = ".working-set-registry.lock"
+        private const val WORKING_SET_LEASE_DIRECTORY = ".working-sets"
+        private val PROCESS_WORKING_SET_LOCK = Any()
         val SUPPORTED_INTERVALS = setOf(10, 20, 30)
+
+        private fun deviceLimits(context: Context): CacheLimits {
+            val cacheBytes = InstallationCacheBudget.forContext(context).seekThumbnailBytes
+            return CacheLimits(cacheBytes, minOf(cacheBytes / 4, MAX_ACTIVE_WORKING_SET_BYTES))
+        }
 
         fun normalizeInterval(seconds: Int): Int = seconds.takeIf(SUPPORTED_INTERVALS::contains) ?: 10
 
@@ -323,8 +553,11 @@ class SeekThumbnailCache @Inject constructor(
             intervalSeconds: Int,
             priorityPositionMs: Long = 0L
         ): List<Long> {
-            val targets = progressiveStoryboardTargets(durationMs, intervalSeconds)
+            val targets = storyboardTargets(durationMs, intervalSeconds)
             if (priorityPositionMs <= 0L) {
+                // First ten useful previews first, then keep reading forward.
+                // A coarse sweep followed by a backwards refinement pass forces
+                // a second traversal of a remote file and slows complete caching.
                 return targets.filterNot { it == 0L } + targets.filter { it == 0L }
             }
             val all = storyboardTargets(durationMs, intervalSeconds)
@@ -342,6 +575,13 @@ class SeekThumbnailCache @Inject constructor(
             return kotlin.math.ceil(cachedFrames * 100.0 / totalFrames)
                 .toInt()
                 .coerceIn(1, 100)
+        }
+    }
+
+    private data class CacheLimits(val cacheBytes: Long, val workingSetBytes: Long) {
+        init {
+            require(cacheBytes > 0L)
+            require(workingSetBytes > 0L && workingSetBytes <= cacheBytes)
         }
     }
 }

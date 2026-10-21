@@ -5,9 +5,13 @@ import androidx.lifecycle.viewModelScope
 import android.graphics.Bitmap
 import com.saab.tv.data.cache.SeekThumbnailCache
 import com.saab.tv.data.cache.SeekThumbnailProgress
+import com.saab.tv.data.cache.ThumbnailStoreResult
 import com.saab.tv.data.local.AddonDao
 import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.trakt.TraktScrobbleManager
+import com.saab.tv.data.tmdb.TmdbMetadataService
+import com.saab.tv.data.tmdb.TmdbService
+import com.saab.tv.data.tmdb.TmdbCastInfo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -26,8 +30,27 @@ class PlayerViewModel @Inject constructor(
     private val traktScrobbleManager: TraktScrobbleManager,
     private val subtitleRepository: com.saab.tv.data.repository.SubtitleRepository,
     private val seekThumbnailCache: SeekThumbnailCache,
-    private val accountSync: com.saab.tv.data.account.AccountSyncManager
+    private val accountSync: com.saab.tv.data.account.AccountSyncManager,
+    private val userStateCommands: com.saab.tv.data.account.UserStateCommandRepository,
+    private val tmdbService: TmdbService,
+    private val tmdbMetadataService: TmdbMetadataService
 ) : ViewModel() {
+    suspend fun portableProfileId(profileId: Int): String? = dao.getProfileById(profileId)?.portableId
+
+    suspend fun loadPlaybackCast(contentId: String, mediaType: String, profileId: Int): List<TmdbCastInfo> =
+        withContext(Dispatchers.IO) {
+            try {
+                val tmdbId = tmdbService.ensureTmdbId(contentId, mediaType) ?: return@withContext emptyList()
+                val language = dao.getProfileById(profileId)?.tmdbLanguage?.takeIf(String::isNotBlank) ?: "en"
+                tmdbMetadataService.fetchCastMembers(tmdbId, mediaType, language)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                com.saab.tv.AppDiagnostics.failure("Playback Cast", "Cast lookup failed", failure)
+                emptyList()
+            }
+        }
+
     private val completedThisSession = ConcurrentHashMap.newKeySet<String>()
     private val historyWriteMutex = Mutex()
     suspend fun streamSubtitles(
@@ -91,10 +114,8 @@ class PlayerViewModel @Inject constructor(
                     watched = WatchProgressPolicy.preserveWatched(progress.isCompleted, existing?.watched == true),
                     scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
                 )
-                dao.insertHistory(entry)
-                if (entry.watched && entry.type != "series") {
-                    dao.removeFromWatchlist(profileId, id)
-                }
+                val committed = userStateCommands.savePlaybackProgress(entry)
+                if (!committed) return@withLock
                 accountSync.historyChanged(progressOnly = !syncBoundary,
                     urgent = syncBoundary || (progress.isCompleted && existing?.watched != true))
                 if (progress.isCompleted) {
@@ -128,8 +149,7 @@ class PlayerViewModel @Inject constructor(
                     forceCompleted = true
                 )
                 if (progress.isCompleted) completedThisSession.add("$profileId:$id")
-                dao.insertHistory(
-                    WatchHistoryEntity(
+                val entry = WatchHistoryEntity(
                         profileId = profileId,
                         id = id,
                         title = title.ifBlank { existing?.title.orEmpty() },
@@ -143,10 +163,8 @@ class PlayerViewModel @Inject constructor(
                         watched = WatchProgressPolicy.preserveWatched(progress.isCompleted, existing?.watched == true),
                         scrobbled = existing?.scrobbled ?: traktScrobbleManager.isScrobbled(id)
                     )
-                )
-                if (progress.isCompleted && type != "series") {
-                    dao.removeFromWatchlist(profileId, id)
-                }
+                val committed = userStateCommands.savePlaybackProgress(entry)
+                if (!committed) return@withLock
                 accountSync.historyChanged(urgent = true)
                 if (progress.isCompleted) {
                     seekThumbnailCache.clearContent(profileId, id)
@@ -167,7 +185,7 @@ class PlayerViewModel @Inject constructor(
         positionMs = positionMs,
         intervalSeconds = intervalSeconds,
         bitmap = bitmap
-    )
+    ) == ThumbnailStoreResult.STORED
 
     suspend fun loadSeekThumbnail(
         profileId: Int,
@@ -216,7 +234,9 @@ class PlayerViewModel @Inject constructor(
     suspend fun getResumePosition(id: String, profileId: Int): Long {
         return withContext(Dispatchers.IO) {
             val local = dao.getHistoryItemForProfile(profileId, id)
-            val item = accountSync.freshestPlaybackHistory(listOfNotNull(local), profileId).firstOrNull { it.id == id }
+            // Start from the local snapshot. Waiting for cloud reconciliation here
+            // can hold player.prepare() for up to the cloud-history timeout.
+            val item = local
             val watchedThreshold = watchedThresholdRatio(profileId)
             val canResume = item != null && WatchProgressPolicy.canResume(
                 positionMs = item.position,
@@ -228,6 +248,14 @@ class PlayerViewModel @Inject constructor(
             com.saab.tv.AppDiagnostics.event("Resume", "Timestamp Resolved",
                 "profile=$profileId id=$id position=${position}ms duration=${item?.duration ?: 0}ms watched=${item?.watched ?: false}")
             position
+        }
+    }
+
+    fun refreshPlaybackHistoryAfterStart(id: String, profileId: Int) {
+        if (id.startsWith("trailer_") || profileId <= 0) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val local = dao.getHistoryItemForProfile(profileId, id)
+            accountSync.freshestPlaybackHistory(listOfNotNull(local), profileId)
         }
     }
 

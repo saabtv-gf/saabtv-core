@@ -18,27 +18,33 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
 @Composable
 fun DetailsLoadingSweep() {
     val screenWidth = LocalConfiguration.current.screenWidthDp
     val sweepWidth = 220
-
-    val transition = rememberInfiniteTransition(label = "sweep")
-    val offsetDp by transition.animateFloat(
-        initialValue = -sweepWidth.toFloat(),
-        targetValue = (screenWidth + sweepWidth).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2400, easing = LinearEasing)
-        ),
-        label = "sweep_offset"
-    )
+    val offsetDp = if (!SaabMotion.animationsEnabled) {
+        (screenWidth - sweepWidth) / 2f
+    } else {
+        val transition = rememberInfiniteTransition(label = "sweep")
+        val animatedOffset by transition.animateFloat(
+            initialValue = -sweepWidth.toFloat(),
+            targetValue = (screenWidth + sweepWidth).toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = SaabMotion.duration(2400), easing = LinearEasing)
+            ),
+            label = "sweep_offset"
+        )
+        animatedOffset
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Box(
             modifier = Modifier
                 .offset(x = offsetDp.dp)
+                .testTag("details-loading-sweep")
                 .fillMaxHeight()
                 .fillMaxWidth(sweepWidth.toFloat() / screenWidth.toFloat())
                 .background(

@@ -1,11 +1,11 @@
 package com.saab.tv.data.model
 
 import androidx.room.Entity
-import androidx.room.PrimaryKey
+import androidx.room.Index
 
-@Entity(tableName = "catalog_configs")
+@Entity(tableName = "catalog_configs", primaryKeys = ["profileOwnerId", "uniqueId"], indices = [Index("profileOwnerId")])
 data class CatalogConfigEntity(
-    @PrimaryKey val uniqueId: String, // transportUrl + type + id
+    val uniqueId: String, // transportUrl + type + id
 
     val transportUrl: String,
     val addonName: String,
@@ -25,5 +25,8 @@ data class CatalogConfigEntity(
 
     val isInfiniteLoopEnabled: Boolean = false,  // Default: Standard linear scrolling (Grid View)
     val visibleItemCount: Int = 15,              // Only used when Grid View is enabled
-    val isInfiniteScrollingEnabled: Boolean = true  // Only used when Grid View is enabled; loops at View More
+    val isInfiniteScrollingEnabled: Boolean = true,  // Only used when Grid View is enabled; loops at View More
+
+    /** Stable profile ownership; unlike the Room profile row ID this survives cloud restore. */
+    val profileOwnerId: String = LEGACY_PROFILE_OWNER_ID
 )

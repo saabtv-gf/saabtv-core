@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Debug
 import android.os.Process
 import com.saab.tv.AppHealthMonitor
+import com.saab.tv.DiagnosticStorageBudget
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
@@ -43,6 +44,8 @@ object PlaybackDiagnostics {
     private const val MAX_SESSIONS = 10
     private const val MAX_LOG_BYTES = 512L * 1024L
     private const val MAX_PANEL_EVENTS = 250
+    private const val MAX_EXPORT_HEALTH_LINES = 120
+    private const val MAX_EXPORT_FIELD_CHARS = 2_000
     @Volatile private var enabledCache: Boolean? = null
 
     fun newSessionId(): String =
@@ -72,13 +75,15 @@ object PlaybackDiagnostics {
         mediaUrl: String
     ) {
         if (!isEnabled(context)) return
-        val directory = sessionDirectory(context, sessionId)
-        if (!directory.exists() && !directory.mkdirs()) return
         val safeTitle = sanitize(title).take(120).ifBlank { "Unknown Title" }
-        val metadata = File(directory, METADATA_FILE)
-        if (!metadata.exists()) {
-            runCatching {
-                metadata.writeText("${System.currentTimeMillis()}\t$safeTitle\n")
+        DiagnosticStorageBudget.withLock(context) {
+            val directory = sessionDirectory(context, sessionId)
+            if (!directory.exists() && !directory.mkdirs()) return@withLock
+            val metadata = File(directory, METADATA_FILE)
+            if (!metadata.exists()) {
+                runCatching {
+                    metadata.writeText("${System.currentTimeMillis()}\t$safeTitle\n")
+                }
             }
         }
         event(
@@ -88,7 +93,7 @@ object PlaybackDiagnostics {
             event = "Session Started",
             details = "player=${sanitize(player)} source=${describeUrl(mediaUrl)}"
         )
-        trimOldSessions(context)
+        DiagnosticStorageBudget.withLock(context) { trimOldSessionsLocked(context) }
     }
 
     fun event(
@@ -100,9 +105,6 @@ object PlaybackDiagnostics {
         level: String = "INFO"
     ) {
         if (sessionId.isBlank() || !isEnabled(context)) return
-        val directory = sessionDirectory(context, sessionId)
-        if (!directory.exists() && !directory.mkdirs()) return
-        val logFile = File(directory, "${processLabel()}.log")
         val line = buildString {
             append(System.currentTimeMillis())
             append('\t')
@@ -116,8 +118,13 @@ object PlaybackDiagnostics {
             append('\n')
         }
         runCatching {
-            if (logFile.length() >= MAX_LOG_BYTES) rotate(logFile)
-            FileOutputStream(logFile, true).bufferedWriter().use { it.write(line) }
+            DiagnosticStorageBudget.withLock(context) {
+                val directory = sessionDirectory(context, sessionId)
+                if (!directory.exists() && !directory.mkdirs()) return@withLock
+                val logFile = File(directory, "${processLabel()}.log")
+                if (logFile.length() >= MAX_LOG_BYTES) rotate(logFile)
+                FileOutputStream(logFile, true).bufferedWriter().use { it.write(line) }
+            }
         }
     }
 
@@ -165,37 +172,45 @@ object PlaybackDiagnostics {
 
     fun exportLatest(context: Context): File? {
         val report = latestReport(context) ?: return null
-        val directory = File(context.cacheDir, EXPORT_DIRECTORY)
-        if (!directory.exists() && !directory.mkdirs()) return null
-        val output = File(directory, "saab-tv-playback-diagnostics.txt")
         return runCatching {
-            output.bufferedWriter().use { writer ->
-                writer.appendLine("Saab TV Playback Diagnostics")
-                writer.appendLine("Session: ${report.sessionId}")
-                writer.appendLine("Title: ${report.title}")
-                writer.appendLine("Started: ${formatTimestamp(report.startedAtMs)}")
-                writer.appendLine()
-                val health = AppHealthMonitor.latestSummary(context)
-                if (health.isNotEmpty()) {
-                    writer.appendLine("Application Health")
-                    health.forEach(writer::appendLine)
+            DiagnosticStorageBudget.withLock(context) {
+                val directory = File(context.cacheDir, EXPORT_DIRECTORY)
+                if (!directory.exists() && !directory.mkdirs()) return@withLock null
+                val output = File(directory, "saab-tv-playback-diagnostics.txt")
+                output.bufferedWriter().use { writer ->
+                    writer.appendLine("Saab TV Playback Diagnostics")
+                    writer.appendLine("Session: ${report.sessionId}")
+                    writer.appendLine("Title: ${report.title}")
+                    writer.appendLine("Started: ${formatTimestamp(report.startedAtMs)}")
                     writer.appendLine()
-                    writer.appendLine("Playback Events")
+                    val health = AppHealthMonitor.latestSummary(context).takeLast(MAX_EXPORT_HEALTH_LINES)
+                    if (health.isNotEmpty()) {
+                        writer.appendLine("Application Health")
+                        health.forEach { writer.appendLine(it.take(MAX_EXPORT_FIELD_CHARS)) }
+                        writer.appendLine()
+                        writer.appendLine("Playback Events")
+                    }
+                    report.events.asReversed().forEach { item ->
+                        writer.append(formatTimestamp(item.timestampMs))
+                        writer.append("  ${item.level}  ${item.component}  ${item.event}")
+                        if (item.details.isNotBlank()) {
+                            writer.append("  ${item.details.take(MAX_EXPORT_FIELD_CHARS)}")
+                        }
+                        writer.appendLine()
+                    }
                 }
-                report.events.asReversed().forEach { item ->
-                    writer.append(formatTimestamp(item.timestampMs))
-                    writer.append("  ${item.level}  ${item.component}  ${item.event}")
-                    if (item.details.isNotBlank()) writer.append("  ${item.details}")
-                    writer.appendLine()
-                }
+                output
             }
-            output
         }.getOrNull()
     }
 
     fun clear(context: Context) {
-        runCatching { root(context).deleteRecursively() }
-        runCatching { File(context.cacheDir, EXPORT_DIRECTORY).deleteRecursively() }
+        runCatching {
+            DiagnosticStorageBudget.withLock(context) {
+                root(context).deleteRecursively()
+                File(context.cacheDir, EXPORT_DIRECTORY).deleteRecursively()
+            }
+        }
     }
 
     fun formatTimestamp(timestampMs: Long): String =
@@ -219,7 +234,7 @@ object PlaybackDiagnostics {
         file.renameTo(old)
     }
 
-    private fun trimOldSessions(context: Context) {
+    private fun trimOldSessionsLocked(context: Context) {
         root(context).listFiles { file -> file.isDirectory }
             .orEmpty()
             .sortedByDescending { it.name.substringBefore('-').toLongOrNull() ?: it.lastModified() }
@@ -230,7 +245,11 @@ object PlaybackDiagnostics {
     private fun root(context: Context): File = File(context.filesDir, DIRECTORY)
 
     private fun sessionDirectory(context: Context, sessionId: String): File =
-        File(root(context), sanitize(sessionId).replace(' ', '_').take(80))
+        File(root(context), sanitize(sessionId)
+            .replace(Regex("[^A-Za-z0-9_-]"), "_")
+            .take(80)
+            .trim('_')
+            .ifBlank { "session" })
 
     private fun processLabel(): String {
         val raw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

@@ -1,7 +1,6 @@
 package com.saab.tv.ui.settings
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,22 +21,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.clip
 import com.saab.tv.domain.HubShape
 import com.saab.tv.ui.addons.VoidButton
 import com.saab.tv.ui.addons.VoidDialog
 import com.saab.tv.ui.addons.VoidInput
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.navigation.isInitialBackPress
+import com.saab.tv.ui.navigation.isBackOrEscape
 
 @Composable
 fun HubEditorContent(
@@ -59,31 +62,60 @@ fun HubEditorContent(
 ) {
     val saveFocusRequester = remember { FocusRequester() }
     val cancelFocusRequester = remember { FocusRequester() }
+    var cancelFocused by remember { mutableStateOf(false) }
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction {
+        if (cancelFocused) onCancel() else cancelFocusRequester.requestFocus()
+    }
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Modal) {
+        if (cancelFocused) onCancel() else cancelFocusRequester.requestFocus()
+    }
 
     // Helper modifier to redirect Back press to Cancel button
     val interceptBackToCancel = Modifier.onPreviewKeyEvent {
-        if (it.key == Key.Back && it.type == KeyEventType.KeyDown) {
-            cancelFocusRequester.requestFocus()
+        if (it.isBackOrEscape()) {
+            if (it.isInitialBackPress()) dispatchBackFromKey()
             true
         } else false
     }
 
     VoidDialog(
-        onDismissRequest = onCancel, 
-        title = title
+        onDismissRequest = onCancel,
+        title = title,
+        footer = {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                VoidButton(
+                    text = stringResource(com.saab.tv.R.string.common_cancel),
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f).onFocusChanged { cancelFocused = it.isFocused }.onPreviewKeyEvent {
+                        if (it.isBackOrEscape()) {
+                            if (it.isInitialBackPress()) dispatchBackFromKey()
+                            true
+                        } else false
+                    },
+                    focusRequester = cancelFocusRequester
+                )
+                VoidButton(
+                    text = stringResource(com.saab.tv.R.string.common_save),
+                    onClick = onSave,
+                    modifier = Modifier.weight(1f).then(interceptBackToCancel),
+                    enabled = saveEnabled,
+                    focusRequester = saveFocusRequester
+                )
+            }
+        }
     ) {
         // Name
-        Text("Name", color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 8.dp))
+        Text(stringResource(com.saab.tv.R.string.hub_editor_name), color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 8.dp))
         VoidInput(
             value = name,
             onValueChange = onNameChange,
-            placeholder = "Hub Row Name",
+            placeholder = stringResource(com.saab.tv.R.string.hub_editor_row_name),
             modifier = if (focusRequester != null) Modifier.onPreviewKeyEvent {
                 if (it.key == Key.DirectionDown && it.type == KeyEventType.KeyDown) {
                     shapeFocusRequester?.requestFocus()
                     true
-                } else if (it.key == Key.Back && it.type == KeyEventType.KeyDown) {
-                    cancelFocusRequester.requestFocus()
+                } else if (it.isBackOrEscape()) {
+                    if (it.isInitialBackPress()) dispatchBackFromKey()
                     true
                 } else false
             } else Modifier.then(interceptBackToCancel).onPreviewKeyEvent {
@@ -99,7 +131,7 @@ fun HubEditorContent(
         Spacer(Modifier.height(20.dp))
 
         // Shape
-        Text("Shape", color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 8.dp))
+        Text(stringResource(com.saab.tv.R.string.hub_editor_shape), color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 8.dp))
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -107,7 +139,13 @@ fun HubEditorContent(
             HubShape.entries.forEach { s ->
                 val isSelected = shape == s
                 HubShapeItem(
-                    label = s.name,
+                    label = stringResource(
+                        when (s) {
+                            HubShape.HORIZONTAL -> com.saab.tv.R.string.dashboard_shape_landscape
+                            HubShape.VERTICAL -> com.saab.tv.R.string.dashboard_shape_portrait
+                            HubShape.SQUARE -> com.saab.tv.R.string.dashboard_shape_square
+                        }
+                    ),
                     isSelected = isSelected,
                     onClick = { onShapeChange(s) },
                     modifier = interceptBackToCancel,
@@ -119,11 +157,11 @@ fun HubEditorContent(
         Spacer(Modifier.height(20.dp))
 
         // Actions
-        Text("Categories ($categoryCount)", color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 8.dp))
+        Text(stringResource(com.saab.tv.R.string.hub_editor_category_count, categoryCount), color = Color.White.copy(0.6f), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 8.dp))
         
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             VoidButton(
-                text = "Add Category", 
+                text = stringResource(com.saab.tv.R.string.hub_editor_add_category),
                 onClick = onAddCategory, 
                 modifier = Modifier.fillMaxWidth().then(interceptBackToCancel).onPreviewKeyEvent {
                     if (it.key == Key.DirectionUp && it.type == KeyEventType.KeyDown) {
@@ -135,7 +173,7 @@ fun HubEditorContent(
             )
             
             VoidButton(
-                text = "Manage Categories", 
+                text = stringResource(com.saab.tv.R.string.hub_manage_categories_title),
                 onClick = onManageCategories, 
                 modifier = Modifier.fillMaxWidth().alpha(if (categoryCount > 0) 1f else 0.5f).then(interceptBackToCancel).onPreviewKeyEvent {
                     if (it.key == Key.DirectionDown && it.type == KeyEventType.KeyDown) {
@@ -148,29 +186,6 @@ fun HubEditorContent(
             )
         }
 
-        Spacer(Modifier.height(24.dp))
-
-        // Footer Actions (Cancel / Save)
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            VoidButton(
-                text = "Cancel", 
-                onClick = onCancel, 
-                modifier = Modifier.weight(1f).onPreviewKeyEvent {
-                    if (it.key == Key.Back && it.type == KeyEventType.KeyDown) {
-                        onCancel()
-                        true
-                    } else false
-                },
-                focusRequester = cancelFocusRequester
-            )
-            VoidButton(
-                text = "Save", 
-                onClick = onSave, 
-                modifier = Modifier.weight(1f).then(interceptBackToCancel), 
-                enabled = saveEnabled,
-                focusRequester = saveFocusRequester
-            )
-        }
     }
 }
 
@@ -185,8 +200,6 @@ private fun RowScope.HubShapeItem(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     
-    val scale by animateFloatAsState(if (isFocused) 1.04f else 1f)
-
     val bgColor = Color.White.copy(0.05f)
     val textColor = when {
         isSelected -> MaterialTheme.colorScheme.primary
@@ -199,7 +212,8 @@ private fun RowScope.HubShapeItem(
             isFocused -> Color.White
             isSelected -> MaterialTheme.colorScheme.primary
             else -> Color.Transparent
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     val borderWidth = if (isFocused || isSelected) 2.dp else 0.dp
 
@@ -207,7 +221,6 @@ private fun RowScope.HubShapeItem(
         modifier = modifier
             .weight(1f)
             .height(50.dp) // Match VoidButton height
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp)) // Match VoidButton radius
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(8.dp))

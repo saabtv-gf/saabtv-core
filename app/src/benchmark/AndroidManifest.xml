@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Isolated from production variants; used only by the U02 Macrobenchmark. -->
+        <activity
+            android:name=".benchmark.U02BaselineFixtureActivity"
+            android:exported="true"
+            android:label="U02 Baseline Fixture"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.SaabTv" />
+    </application>
+</manifest>

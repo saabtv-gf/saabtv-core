@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.unit.dp
 import com.saab.tv.data.model.HubRowItemEntity
 import com.saab.tv.domain.HubShape
 import org.junit.Assert.assertEquals
@@ -28,6 +29,8 @@ class HubCategoryManagerComposeInteractionTest {
             }
         }
 
+        compose.onNodeWithText("Cancel").assertIsDisplayed().assertWidthIsAtLeast(150.dp)
+        compose.onNodeWithText("Save Changes").assertIsDisplayed().assertWidthIsAtLeast(150.dp)
         compose.onNodeWithText("Action").performClick()
         compose.onNodeWithText("Rename").performClick()
         compose.onNode(hasSetTextAction()).performTextClearance()
@@ -47,6 +50,8 @@ class HubCategoryManagerComposeInteractionTest {
             }
         }
 
+        compose.onNodeWithText("Cancel").assertIsDisplayed().assertWidthIsAtLeast(150.dp)
+        compose.onNodeWithText("Save Changes").assertIsDisplayed().assertWidthIsAtLeast(150.dp)
         compose.onNodeWithText("Action").performClick()
         compose.onNodeWithText("Remove Image").performClick()
         compose.onNodeWithText("Remove").performClick()

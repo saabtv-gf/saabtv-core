@@ -78,6 +78,57 @@ fun seriesIdFromPlaybackId(playbackId: String): String {
     return if (hasEpisodeSuffix) parts.dropLast(2).joinToString(":") else trimmed
 }
 
+data class PlaybackContentIdentity(val contentId: String, val contentType: String)
+data class PlaybackShellSelection(
+    val content: PlaybackContentIdentity,
+    val contentTitle: String,
+    val playbackTitle: String,
+    val poster: String
+)
+
+/** Converts an episode playback identity back to the title identity used by the surrounding UI. */
+fun playbackContentIdentity(playbackId: String, playbackType: String): PlaybackContentIdentity {
+    val isSeries = playbackType.equals("series", ignoreCase = true) ||
+        playbackType.equals("tv", ignoreCase = true)
+    return PlaybackContentIdentity(
+        contentId = if (isSeries) seriesIdFromPlaybackId(playbackId) else playbackId.trim(),
+        contentType = if (isSeries) "series" else playbackType
+    )
+}
+
+/** Resolves the shell title identity from the actual play action, not the previous details route. */
+fun playbackShellSelection(
+    contentId: String,
+    contentType: String,
+    playbackId: String,
+    playbackType: String,
+    playbackTitle: String,
+    seriesTitle: String,
+    currentTitle: String,
+    detailPoster: String = "",
+    currentPoster: String = ""
+): PlaybackShellSelection {
+    val content = if (contentId.isNotBlank() && contentType.isNotBlank()) {
+        PlaybackContentIdentity(
+            contentId = contentId.trim(),
+            contentType = if (contentType.equals("tv", ignoreCase = true)) "series" else contentType.trim()
+        )
+    } else {
+        playbackContentIdentity(playbackId, playbackType)
+    }
+    val contentTitle = if (content.contentType == "series") {
+        seriesTitle.ifBlank { currentTitle }.ifBlank { playbackTitle }
+    } else {
+        playbackTitle.ifBlank { seriesTitle }.ifBlank { currentTitle }
+    }
+    return PlaybackShellSelection(
+        content = content,
+        contentTitle = contentTitle,
+        playbackTitle = playbackTitle.ifBlank { contentTitle },
+        poster = detailPoster.ifBlank { currentPoster }
+    )
+}
+
 fun findNextEpisode(
     seriesId: String,
     currentPlaybackId: String,

@@ -2,10 +2,11 @@ package com.saab.tv.data.repository
 
 import com.saab.tv.data.model.introdb.IntroDbSegmentsResponse
 import com.saab.tv.data.remote.IntroDbService
+import com.saab.tv.data.cache.BoundedExpiringCache
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -13,7 +14,11 @@ import javax.inject.Singleton
 class IntroRepository @Inject constructor(
     private val api: IntroDbService
 ) {
-    private val cache = ConcurrentHashMap<String, IntroDbSegmentsResponse>()
+    private val cache = BoundedExpiringCache<String, IntroDbSegmentsResponse>(
+        capacity = 256,
+        ttlMillis = 6 * 60 * 60 * 1_000L,
+        nowMillis = System::currentTimeMillis
+    )
 
     suspend fun getSegments(
         imdbId: String,
@@ -28,6 +33,8 @@ class IntroRepository @Inject constructor(
             val response = withTimeout(TIMEOUT_MS) { api.getSegments(url) }
             cache[cacheKey] = response
             response
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             null
         }

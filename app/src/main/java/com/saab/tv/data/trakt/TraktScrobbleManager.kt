@@ -2,6 +2,7 @@ package com.saab.tv.data.trakt
 
 import android.util.Log
 import com.saab.tv.data.local.AddonDao
+import com.saab.tv.data.account.UserStateCommandRepository
 import com.saab.tv.data.model.trakt.TraktIds
 import com.saab.tv.data.model.trakt.TraktScrobbleEpisode
 import com.saab.tv.data.model.trakt.TraktScrobbleMovie
@@ -29,7 +30,8 @@ import javax.inject.Singleton
 class TraktScrobbleManager @Inject constructor(
     private val traktSyncApi: TraktSyncApiService,
     private val traktAuthManager: TraktAuthManager,
-    private val dao: AddonDao
+    private val dao: AddonDao,
+    private val userStateCommands: UserStateCommandRepository
 ) {
     companion object {
         private const val TAG = "TraktScrobble"
@@ -116,9 +118,10 @@ class TraktScrobbleManager @Inject constructor(
 
     private suspend fun markAsScrobbled(playbackId: String) {
         scrobbledIds.add(playbackId)
-        val item = dao.getHistoryItem(playbackId)
+        val profileId = dao.getActiveProfileId() ?: return
+        val item = dao.getHistoryItemForProfile(profileId, playbackId)
         if (item != null && !item.scrobbled) {
-            dao.upsertHistory(item.copy(scrobbled = true))
+            userStateCommands.markScrobbleAcknowledged(item.profileId, playbackId)
         }
         // If item doesn't exist yet, saveProgress will pick up the flag via isScrobbled()
     }

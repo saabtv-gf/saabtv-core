@@ -1,7 +1,6 @@
 package com.saab.tv.ui.addons
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,16 +23,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.saab.tv.R
 import com.saab.tv.data.model.StremioAddonItem
+import com.saab.tv.ui.components.SaabMotion
 import kotlinx.coroutines.delay
 
 /**
@@ -55,6 +56,8 @@ fun AddonImportDialog(
     val newAddons = addonItems.filter { !it.isAlreadyInstalled }
     val selectedCount = newAddons.count { it.isSelected }
     val selectableCount = newAddons.size
+    val firstSelectableIndex = remember(addonItems) { addonItems.indexOfFirst { !it.isAlreadyInstalled } }
+    val lastSelectableIndex = remember(addonItems) { addonItems.indexOfLast { !it.isAlreadyInstalled } }
     
     // Initial focus on first selectable item or confirm button
     LaunchedEffect(Unit) {
@@ -82,13 +85,13 @@ fun AddonImportDialog(
             Column {
                 // Header
                 Text(
-                    "Import Stremio Addons",
+                    stringResource(R.string.addons_import_title),
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = Color.White
                 )
                 
                 Text(
-                    "Found ${addonItems.size} addons • $selectedCount selected",
+                    stringResource(R.string.addons_import_summary, addonItems.size, selectedCount),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray,
                     modifier = Modifier.padding(top = 8.dp)
@@ -102,7 +105,7 @@ fun AddonImportDialog(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     SmallActionButton(
-                        text = "Select All",
+                        text = stringResource(R.string.addons_import_select_all),
                         onClick = {
                             addonItems = addonItems.map { 
                                 if (!it.isAlreadyInstalled) it.copy(isSelected = true) else it 
@@ -113,7 +116,7 @@ fun AddonImportDialog(
                     )
                     
                     SmallActionButton(
-                        text = "Deselect All",
+                        text = stringResource(R.string.addons_import_deselect_all),
                         onClick = {
                             addonItems = addonItems.map { 
                                 if (!it.isAlreadyInstalled) it.copy(isSelected = false) else it 
@@ -134,8 +137,8 @@ fun AddonImportDialog(
                         .fillMaxWidth()
                 ) {
                     itemsIndexed(addonItems) { index, addon ->
-                        val isFirstSelectable = index == addonItems.indexOfFirst { !it.isAlreadyInstalled }
-                        val isLastSelectable = index == addonItems.indexOfLast { !it.isAlreadyInstalled }
+                        val isFirstSelectable = index == firstSelectableIndex
+                        val isLastSelectable = index == lastSelectableIndex
 
                         AddonImportRow(
                             addon = addon,
@@ -160,13 +163,13 @@ fun AddonImportDialog(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     VoidButton(
-                        text = "Cancel",
+                        text = stringResource(R.string.common_cancel),
                         onClick = onDismissRequest,
                         modifier = Modifier.weight(1f)
                     )
                     
                     VoidButton(
-                        text = "Import ($selectedCount)",
+                        text = stringResource(R.string.addons_import_action, selectedCount),
                         onClick = {
                             val selectedAddons = addonItems.filter { it.isSelected && !it.isAlreadyInstalled }
                             onConfirmImport(selectedAddons)
@@ -200,23 +203,22 @@ private fun AddonImportRow(
             isDisabled -> Color.White.copy(0.02f)
             isFocused -> Color.White.copy(0.1f)
             else -> Color.White.copy(0.05f)
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     
     val borderColor by animateColorAsState(
         when {
             isFocused && !isDisabled -> MaterialTheme.colorScheme.primary
             else -> Color.Transparent
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
-    
-    val scale by animateFloatAsState(if (isFocused && !isDisabled) 1.02f else 1f)
     
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(bgColor)
             .border(if (isFocused && !isDisabled) 2.dp else 0.dp, borderColor, RoundedCornerShape(8.dp))
@@ -256,7 +258,9 @@ private fun AddonImportRow(
         
         Icon(
             imageVector = checkboxIcon,
-            contentDescription = if (addon.isSelected) "Selected" else "Not selected",
+            contentDescription = stringResource(
+                if (addon.isSelected) R.string.common_selected else R.string.common_not_selected
+            ),
             tint = checkboxColor,
             modifier = Modifier.size(24.dp)
         )
@@ -293,7 +297,7 @@ private fun AddonImportRow(
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(
-                    "Installed",
+                    stringResource(R.string.addons_import_installed),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.Gray
                 )

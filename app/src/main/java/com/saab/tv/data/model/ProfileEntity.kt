@@ -1,12 +1,18 @@
 package com.saab.tv.data.model
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import java.util.UUID
 
-@Entity(tableName = "profiles")
+@Entity(tableName = "profiles", indices = [androidx.room.Index(value = ["portableId"], unique = true)])
 data class ProfileEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val name: String,
+
+    /** Portable identity for user-state ownership; [id] remains a local Room row key. */
+    @ColumnInfo(defaultValue = "''")
+    val portableId: String = UUID.randomUUID().toString(),
 
     val themeId: String = "void",
 
@@ -89,5 +95,7 @@ data class ProfileEntity(
 
     // TMDB integration
     val tmdbEnabled: Boolean = false,
-    val tmdbLanguage: String = ""                    // ISO-639-1, empty = device locale
+    val tmdbLanguage: String = "",                   // ISO-639-1, empty = device locale
+    @ColumnInfo(defaultValue = "'tmdb-top-suggestions,tmdb-favorite-genres,tmdb-new-for-you,tmdb-popular-in-taste'")
+    val homeTmdbRails: String = "tmdb-top-suggestions,tmdb-favorite-genres,tmdb-new-for-you,tmdb-popular-in-taste"
 )

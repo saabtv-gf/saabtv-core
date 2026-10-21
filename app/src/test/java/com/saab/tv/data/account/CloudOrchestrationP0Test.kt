@@ -24,6 +24,7 @@ class CloudOrchestrationP0Test {
     private val objects = mutableMapOf<String,String>()
     private val changedCounts = mutableListOf<Int>()
     private var failWrites = false
+    private var failedWriteStatus = 503
     @Before fun setup() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
         transport = AccountTransportFixture(context)
@@ -32,7 +33,7 @@ class CloudOrchestrationP0Test {
             when {
                 path.endsWith("/rpc/saabtv_sync_version") -> 200 to "2"
                 path.endsWith("/rpc/saabtv_save_components") -> {
-                    if (failWrites) 503 to "{}" else {
+                    if (failWrites) failedWriteStatus to "{}" else {
                         val buffer=Buffer(); request.body!!.writeTo(buffer)
                         val body=JsonParser.parseString(buffer.readUtf8()).asJsonObject
                         val expected=body.get("expected_revision").asLong
@@ -53,10 +54,60 @@ class CloudOrchestrationP0Test {
             }
         }
         app = OfflineAppFixture(context)
+        // OfflineAppFixture's signed-out auth manager clears the process account
+        // marker. Restore the authenticated test identity before taking cloud snapshots.
+        AccountStorage.setUserId(context, transport.user)
         app.dao.insertProfile(ProfileEntity(id=1,name="Local"))
         cloud = AccountCloudStore(context,transport.auth,app.db)
     }
     @After fun cleanup() { app.close() }
+
+    @Test fun startupRestoresRuntimeThroughTheSharedDatabaseAndLeavesItOpen() = runBlocking {
+        app.dao.activateProfile(1)
+        val profile = requireNotNull(app.dao.getProfileById(1))
+        val snapshot = com.saab.tv.data.profile.ProfileRuntimeSnapshot(addons = listOf(
+            com.saab.tv.data.model.AddonEntity("https://fixture.invalid", "fixture", "Restored", "1", null, null)
+        ))
+        UserStateCommandRepository(app.db, transport.auth).saveProfileRuntime(1, snapshot)
+        val baselineHandler = transport.handler
+        var pushedRows = JsonArray()
+        transport.handler = { request ->
+            when {
+                request.url.encodedPath.endsWith("saabtv_sync_version") -> 200 to "3"
+                request.url.encodedPath.endsWith("saabtv_sync_v3_push") -> {
+                    val buffer = Buffer(); request.body!!.writeTo(buffer)
+                    pushedRows = JsonParser.parseString(buffer.readUtf8()).asJsonObject.getAsJsonArray("operations")
+                    assertTrue("Unchanged startup must not send an empty push", pushedRows.size() > 0)
+                    200 to JsonObject().apply {
+                        addProperty("cursor", 1)
+                        add("accepted_operation_ids", JsonArray().apply {
+                            pushedRows.forEach { add(it.asJsonObject.get("operation_id")) }
+                        })
+                    }.toString()
+                }
+                request.url.encodedPath.endsWith("saabtv_sync_v3_pull") -> {
+                    val buffer = Buffer(); request.body!!.writeTo(buffer)
+                    val after = JsonParser.parseString(buffer.readUtf8()).asJsonObject.get("after_sequence").asLong
+                    200 to JsonObject().apply {
+                        addProperty("cursor", 1); addProperty("has_more", false)
+                        add("operations", JsonArray().apply {
+                            if (after == 0L) pushedRows.forEach {
+                                add(it.asJsonObject.deepCopy().apply { addProperty("server_sequence", 1) })
+                            }
+                        })
+                    }.toString()
+                }
+                else -> baselineHandler(request)
+            }
+        }
+        assertFalse(AccountSyncManager.prepareAccountData(transport.context, transport.auth, app.db, app.configuration))
+        assertTrue(app.db.isOpen)
+        assertEquals("Restored", app.dao.getRuntimeStateForProfile(profile.portableId).addons.single().name)
+        assertEquals(1L, app.db.syncOutboxDao().getClientState()?.serverCursor)
+        assertFalse(AccountSyncManager.prepareAccountData(transport.context, transport.auth, app.db, app.configuration))
+        assertTrue(app.db.isOpen)
+    }
+
     private fun remoteSnapshot(name: String, changedAt: Long, revision: Long) {
         val snapshot=JsonParser.parseString(AccountSnapshotStore(transport.context,app.db).capture().toString(Charsets.UTF_8)).asJsonObject
         snapshot.getAsJsonObject("tables").getAsJsonArray("profiles")[0].asJsonObject.addProperty("name",name)
@@ -70,6 +121,13 @@ class CloudOrchestrationP0Test {
         assertTrue(cloud.upload()); val calls=transport.requests.size
         assertFalse(cloud.upload()); assertEquals(calls,transport.requests.size)
         assertTrue(changedCounts.single()>0)
+    }
+    @Test fun initializeWithCurrentSnapshotBaselineDoesNotUploadCompatibilitySnapshot() = runBlocking {
+        assertTrue(cloud.upload())
+        val calls = transport.requests.size
+
+        assertFalse(cloud.initialize())
+        assertEquals(calls + 1, transport.requests.size) // only the remote-head probe
     }
     @Test fun oneProfileChangeUploadsFewerComponentsThanFullSnapshot() = runBlocking {
         cloud.upload(); app.dao.insertProfile(ProfileEntity(id=1,name="Changed"));cloud.noteLocalChange()
@@ -142,25 +200,60 @@ class CloudOrchestrationP0Test {
         }
     }
 
+    @Test fun syncManagerWaitsForQuotaWindowAfter429InsteadOfRetryingEarly() = runBlocking {
+        val manager = AccountSyncManager(transport.context, transport.auth, app.db, app.configuration)
+        try {
+            assertTrue(manager.syncNow())
+            app.dao.insertProfile(ProfileEntity(id = 1, name = "Rate-limited local change"))
+            cloud.noteLocalChange()
+            failWrites = true
+            failedWriteStatus = 429
+            assertFalse(manager.syncNow())
+            val writesAtLimit = transport.requests.count { it.url.encodedPath.endsWith("/rpc/saabtv_save_components") }
+
+            assertTrue(manager.syncNow(automatic = true))
+            assertEquals(writesAtLimit, transport.requests.count { it.url.encodedPath.endsWith("/rpc/saabtv_save_components") })
+            assertTrue(manager.status.value.contains("Too many attempts"))
+        } finally {
+            manager.stop()
+        }
+    }
+
+    @Test fun syncManagerDefersOversizedPayloadUntilAnExplicitRetryOrNewChange() = runBlocking {
+        val manager = AccountSyncManager(transport.context, transport.auth, app.db, app.configuration)
+        try {
+            assertTrue(manager.syncNow())
+            app.dao.insertProfile(ProfileEntity(id = 1, name = "Oversized local change"))
+            cloud.noteLocalChange()
+            failWrites = true
+            failedWriteStatus = 413
+            assertFalse(manager.syncNow())
+            val writesAtLimit = transport.requests.count { it.url.encodedPath.endsWith("/rpc/saabtv_save_components") }
+
+            assertTrue(manager.syncNow(automatic = true))
+            assertEquals(writesAtLimit, transport.requests.count { it.url.encodedPath.endsWith("/rpc/saabtv_save_components") })
+            assertTrue(manager.status.value.contains("larger than the server accepts"))
+        } finally {
+            manager.stop()
+        }
+    }
+
     @Test fun syncManagerDetectsNewerCloudAndResolvesConflictBothWays() = runBlocking {
         val manager = AccountSyncManager(transport.context, transport.auth, app.db, app.configuration)
         try {
             remoteSnapshot("Cloud copy", System.currentTimeMillis() + 60_000, 1)
             assertTrue(manager.newerCloudBackupAvailable())
 
-            // A newer server revision must suspend automatic overwrite until the
-            // user chooses which copy to keep.
-            assertFalse(manager.syncNow())
-            assertTrue(manager.status.value.contains("newer cloud", ignoreCase = true))
-            manager.resolveConflict(useCloud = true)
+            // Cross-device startup reconciliation is timestamp-directed and seamless:
+            // a newer cloud copy replaces this device before sync reports success.
+            assertTrue(manager.syncNow())
             assertEquals("Cloud copy", app.dao.getProfileById(1)?.name)
             assertEquals("Synced", manager.status.value)
 
             app.dao.insertProfile(ProfileEntity(id = 1, name = "Keep local"))
             cloud.noteLocalChange()
             remoteSnapshot("Older cloud copy", 1, (row?.get("revision")?.asLong ?: 1) + 1)
-            assertFalse(manager.syncNow())
-            manager.resolveConflict(useCloud = false)
+            assertTrue(manager.syncNow())
             assertEquals("Keep local", app.dao.getProfileById(1)?.name)
             assertEquals("Synced", manager.status.value)
         } finally {

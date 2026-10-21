@@ -61,4 +61,17 @@ class PlayerSourcePayloadTest {
         assertEquals(true, payload.first().torBoxCached)
         assertEquals(73, payload.first().torBoxSeeders)
     }
+
+    @Test
+    fun payloadExposesDetectedAudioLanguageForPlaybackSourceSwitcher() {
+        val hindi = Stream(
+            name = "[MediaFusion] Hindi",
+            title = "Fake Film 720p",
+            url = "https://example.com/hindi"
+        )
+
+        val payload = buildSourcePayload(listOf(hindi), "Fake Film")
+
+        assertEquals(listOf("hi"), payload.single().audioLanguages)
+    }
 }

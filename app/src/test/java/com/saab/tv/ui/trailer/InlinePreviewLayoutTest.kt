@@ -15,6 +15,16 @@ class InlinePreviewLayoutTest {
         assertFalse(InlinePreviewLayout.isInline("fullscreen", false))
         assertTrue(InlinePreviewLayout.isInline("inline", false)) // New title starts inline again.
     }
+    @Test fun fullscreenPromotionInterpolatesFromInlineOverlayToViewport() {
+        val inline = InlinePreviewLayout.Bounds(240f, 120f, 360f, 274.5f)
+        val viewport = InlinePreviewLayout.Bounds(0f, 0f, 1280f, 720f)
+
+        assertEquals(inline, InlinePreviewLayout.interpolate(inline, viewport, 0f))
+        assertEquals(InlinePreviewLayout.Bounds(120f, 60f, 820f, 497.25f),
+            InlinePreviewLayout.interpolate(inline, viewport, 0.5f))
+        assertEquals(viewport, InlinePreviewLayout.interpolate(inline, viewport, 1f))
+        assertEquals(viewport, InlinePreviewLayout.interpolate(inline, viewport, 2f))
+    }
     @Test fun overlayStaysInsideScreenAndHasLandscapeVideoAboveFooter() {
         for (x in listOf(0f, 900f)) {
             val b = InlinePreviewLayout.bounds(InlinePreviewLayout.Bounds(x, 500f, 140f, 210f), 960f, 540f, 1f)

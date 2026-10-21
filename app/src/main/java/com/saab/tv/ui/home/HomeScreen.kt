@@ -2,9 +2,7 @@ package com.saab.tv.ui.home
 
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,9 +30,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Theaters
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -55,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,15 +73,24 @@ import com.saab.tv.R
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.schema.canonicalPresentationKey
 import com.saab.tv.domain.DashboardTab
 import com.saab.tv.domain.HeroConfig
 import com.saab.tv.domain.HubGroupRow
 import com.saab.tv.domain.CategoryRow
+import com.saab.tv.domain.schema.CatalogCardProjection
 import com.saab.tv.domain.HomeRowItem
 import com.saab.tv.domain.heroFor
 import com.saab.tv.domain.layoutFor
 import com.saab.tv.ui.components.SaabTvBackground
+import com.saab.tv.ui.components.SaabMotion
 import com.saab.tv.ui.components.SaabTvCard
+import com.saab.tv.ui.components.EpisodePositionLabel
+import com.saab.tv.ui.components.SetupButton
+import com.saab.tv.ui.components.FocusPivotSpec
+import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
+import com.saab.tv.ui.utils.requestFocusOrFallback
+import com.saab.tv.ui.utils.requestFocusSafely
 import com.saab.tv.ui.addons.VoidButton
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.window.Popup
@@ -91,11 +98,47 @@ import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.flowOf
 
 private const val RAPID_VERTICAL_NAV_WINDOW_MS = 220L
 private const val RAPID_PREVIEW_UPDATE_MIN_INTERVAL_MS = 120L
 private const val DPAD_REPEAT_INTERVAL_HORIZONTAL_MS = 150L
 private const val DPAD_REPEAT_INTERVAL_VERTICAL_MS = 200L
+
+internal data class ShelfFocusRoute(
+    val entry: FocusRequester,
+    val up: FocusRequester?,
+    val down: FocusRequester?
+)
+
+/** Keeps focus targets stable when asynchronous Home shelves are inserted or removed. */
+internal class ShelfFocusRouteRegistry {
+    private val requesters = linkedMapOf<String, FocusRequester>()
+
+    fun routesFor(rowKeys: List<String>): Map<String, ShelfFocusRoute> {
+        requesters.keys.retainAll(rowKeys.toSet())
+        rowKeys.forEach { key -> requesters.getOrPut(key) { FocusRequester() } }
+
+        return buildMap(rowKeys.size) {
+            rowKeys.forEachIndexed { index, key ->
+                put(
+                    key,
+                    ShelfFocusRoute(
+                        entry = requesters.getValue(key),
+                        up = rowKeys.getOrNull(index - 1)?.let(requesters::get),
+                        down = rowKeys.getOrNull(index + 1)?.let(requesters::get)
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun rememberShelfFocusRoutes(rowKeys: List<String>): Map<String, ShelfFocusRoute> {
+    val registry = remember { ShelfFocusRouteRegistry() }
+    return remember(rowKeys, registry) { registry.routesFor(rowKeys) }
+}
 
 private class HomeFocusTimingTracker {
     var previous: Long = 0L
@@ -125,12 +168,14 @@ fun HomeScreen(
     onContinueClick: (MetaItem) -> Unit = onMovieClick,
     onTrailerClick: (String, String) -> Unit = { _, _ -> },
     onPreviewActiveChanged: (Boolean) -> Unit = {},
-    onViewMore: (String, List<MetaItem>, String) -> Unit = { _, _, _ -> }
+    onViewMore: (String, List<MetaItem>, String) -> Unit = { _, _, _ -> },
+    onHubLoaded: (String, List<MetaItem>, String) -> Unit = onViewMore
 ) {
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val manualTrailerLauncher = com.saab.tv.ui.trailer.LocalManualTrailerLauncher.current
     val state by viewModel.state.collectAsStateWithLifecycle()
     val profileWatchedIds by remember(viewModel, currentProfile?.id) {
-        viewModel.watchedIdsForProfile(currentProfile?.id ?: 1)
+        currentProfile?.id?.let(viewModel::watchedIdsForProfile) ?: flowOf(emptySet())
     }.collectAsStateWithLifecycle(initialValue = emptySet())
     val actionScope = rememberCoroutineScope()
     val homeContext = LocalContext.current
@@ -148,8 +193,7 @@ fun HomeScreen(
         longPressedItem = null
         actionScope.launch {
             withFrameNanos { }
-            val restored = originalPosterFocus?.let { runCatching { it.requestFocus() }.getOrDefault(false) } == true
-            if (!restored) runCatching { contentEntryRequester.requestFocus() }
+            originalPosterFocus.requestFocusOrFallback(contentEntryRequester)
         }
     }
     val layoutMode = if (isOttScreen) "simple" else currentProfile?.layoutFor(tab) ?: "simple"
@@ -192,8 +236,12 @@ fun HomeScreen(
     // 3. Top-Nav mode AND focus not yet established (transition guard)
     // If Top-Nav mode AND content is NOT focused AND focus was already set, disable this
     // handler so TopNavigationBar's handler can "Close Nav" (return to content).
-    BackHandler(enabled = isContentFocused) {
-        drawerRequester.requestFocus()
+    com.saab.tv.ui.navigation.AppBackHandler(
+        enabled = isContentFocused,
+        priority = com.saab.tv.ui.navigation.AppBackPriority.Screen
+    ) {
+        authorizeNavigationHandoff?.invoke(null)
+        drawerRequester.requestFocusSafely()
     }
 
     Box(
@@ -224,12 +272,12 @@ fun HomeScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Text(
-                            text = "Loading OTT Catalogs",
+                            text = stringResource(R.string.ott_loading_title),
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                             color = Color.White
                         )
                         Text(
-                            text = "Loading JustWatch India And Cinemeta",
+                            text = stringResource(R.string.ott_loading_description),
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White.copy(alpha = 0.68f)
                         )
@@ -239,20 +287,30 @@ fun HomeScreen(
                             trackColor = Color.White.copy(alpha = 0.14f)
                         )
                     }
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp
+                        )
+                        Text(
+                            text = stringResource(R.string.catalog_grid_loading),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White.copy(alpha = 0.72f)
+                        )
+                    }
                 }
             }
-        } else if (state.rows.isEmpty() && state.errorMessage != null) {
+        } else if (state.rows.isEmpty() && state.mixedRows.isEmpty() && state.errorMessage != null) {
             LaunchedEffect(state.errorMessage) {
                 delay(100)
                 runCatching { entryRequester.requestFocus() }
             }
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        if (isOttScreen) Modifier
-                        else Modifier.focusRequester(entryRequester).focusable()
-                    ),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -260,13 +318,17 @@ fun HomeScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "OTT Catalog",
+                        text = stringResource(
+                            if (isOttScreen) R.string.ott_catalog_title else R.string.catalog_load_error_title
+                        ),
                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                         color = Color.White
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        text = state.errorMessage.orEmpty(),
+                        text = if (state.errorMessage == "catalog_load_failed") {
+                            stringResource(R.string.catalog_load_failed)
+                        } else state.errorMessage.orEmpty(),
                         style = MaterialTheme.typography.bodyLarge,
                         color = Color.White.copy(alpha = 0.72f),
                         textAlign = TextAlign.Center
@@ -277,7 +339,40 @@ fun HomeScreen(
                             onClick = { viewModel.refreshOtt(currentProfile) },
                             modifier = Modifier.focusRequester(entryRequester)
                         )
+                    } else {
+                        Spacer(Modifier.height(24.dp))
+                        SetupButton(
+                            text = stringResource(R.string.common_retry),
+                            onClick = { viewModel.loadScreen(screenName, currentProfile, forceReload = true) },
+                            modifier = Modifier.focusRequester(entryRequester),
+                            primary = true
+                        )
                     }
+                }
+            }
+        } else if (
+            !isOttScreen && state.rows.isEmpty() && state.mixedRows.isEmpty() && state.heroRow == null
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize().focusRequester(entryRequester).focusable(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier.widthIn(max = 620.dp).padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.catalog_tab_empty_title),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                    Text(
+                        text = stringResource(R.string.catalog_tab_empty_description),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.White.copy(alpha = 0.72f),
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
         } else {
@@ -296,8 +391,9 @@ fun HomeScreen(
                     onMovieLongClick = onMovieLongClick,
                     onViewMore = onViewMore,
                     onHubClick = { hubItem ->
+                        onViewMore(hubItem.title, emptyList(), hubItem.categoryId)
                         viewModel.openHub(hubItem) { title, items ->
-                            onViewMore(title, items, hubItem.categoryId)
+                            onHubLoaded(title, items, hubItem.categoryId)
                         }
                     },
                     onLoadMore = { configId -> viewModel.loadMoreItems(configId) },
@@ -314,14 +410,16 @@ fun HomeScreen(
                         viewModel.ensureMetadataFallback(it)
                         viewModel.ensureTmdbEnrichment(it)
                     },
-                    onWatchedItemShown = { viewModel.ensureWatchedAlias(currentProfile?.id ?: 1, it) },
+                    onPrepareArtworkItem = { viewModel.ensureTmdbEnrichment(it) },
+                    onWatchedItemShown = { item -> currentProfile?.id?.let { viewModel.ensureWatchedAlias(it, item) } },
                     isLandscapeContinueWatching = isLandscapeContinueWatching
                 )
             } else {
                 val heroConfig = if (isOttScreen) HeroConfig(null, 0, 0)
                     else currentProfile?.heroFor(tab) ?: HeroConfig(null, 10, 0)
                 val heroItems = remember(state.heroRow, heroConfig.posterCount) {
-                    state.heroRow?.items?.take(heroConfig.posterCount) ?: emptyList()
+                    state.heroRow?.items?.take(heroConfig.posterCount)
+                        ?.map(CatalogCardProjection::asActionItem) ?: emptyList()
                 }
 
                 SimpleLayout(
@@ -335,8 +433,9 @@ fun HomeScreen(
                     onMovieLongClick = onMovieLongClick,
                     onViewMore = onViewMore,
                     onHubClick = { hubItem ->
+                        onViewMore(hubItem.title, emptyList(), hubItem.categoryId)
                         viewModel.openHub(hubItem) { title, items ->
-                            onViewMore(title, items, hubItem.categoryId)
+                            onHubLoaded(title, items, hubItem.categoryId)
                         }
                     },
                     onLoadMore = { configId -> viewModel.loadMoreItems(configId) },
@@ -356,7 +455,8 @@ fun HomeScreen(
                         viewModel.ensureMetadataFallback(it)
                         viewModel.ensureTmdbEnrichment(it)
                     },
-                    onWatchedItemShown = { viewModel.ensureWatchedAlias(currentProfile?.id ?: 1, it) },
+                    onPrepareArtworkItem = { viewModel.ensureTmdbEnrichment(it) },
+                    onWatchedItemShown = { item -> currentProfile?.id?.let { viewModel.ensureWatchedAlias(it, item) } },
                     topActionRequester = entryRequester.takeIf { isOttScreen },
                     onRefreshOtt = if (isOttScreen) {
                         { viewModel.refreshOtt(currentProfile) }
@@ -367,36 +467,41 @@ fun HomeScreen(
                 )
             }
         }
-        longPressedItem?.let { (item, isContinue) ->
+        longPressedItem?.takeIf { currentProfile != null }?.let { (item, isContinue) ->
             var confirmClear by remember(item.id) { mutableStateOf(false) }
             val firstActionRequester = remember(item.id, isContinue, confirmClear) { FocusRequester() }
             var actionsArmed by remember(item.id, isContinue, confirmClear) { mutableStateOf(false) }
-            var suppressOpeningKeyUp by remember(item.id, isContinue) { mutableStateOf(true) }
-            LaunchedEffect(item.id, isContinue, confirmClear) {
-                // Focus an enabled icon; disabling every icon made focus requests fail on TV.
-                delay(80)
-                runCatching { firstActionRequester.requestFocus() }
-                if (confirmClear) actionsArmed = true
-                else {
-                    delay(420)
-                    actionsArmed = true // Key-up may still be delivered to the original card.
-                }
-            }
-            val profileId = currentProfile?.id ?: 1
+            val profileId = requireNotNull(currentProfile).id
             val historyEntry = state.history.firstOrNull {
                 it.id == item.id || (item.type == "series" && canonicalSeriesId(it.id) == item.id && !it.watched)
             }
             val nextUp = state.seriesNextUp.firstOrNull { it.seriesId == item.id }
             var watchlisted by remember(item.id, profileId) { mutableStateOf<Boolean?>(null) }
             var watched by remember(item.id, profileId) { mutableStateOf(item.id in profileWatchedIds) }
-            LaunchedEffect(item.id, profileId, profileWatchedIds) {
-                watchlisted = viewModel.isWatchlisted(profileId, item.id)
-                watched = item.id in profileWatchedIds || try {
-                    viewModel.isTitleWatched(profileId, item)
+            var watchlistStateLoaded by remember(item.id, profileId) { mutableStateOf(false) }
+            var watchedStateLoaded by remember(item.id, profileId) { mutableStateOf(false) }
+            LaunchedEffect(item.id, isContinue, confirmClear) {
+                actionsArmed = true
+                withFrameNanos { }
+                runCatching { firstActionRequester.requestFocus() }
+            }
+            LaunchedEffect(item.id, profileId) {
+                watchlisted = try {
+                    viewModel.isWatchlisted(profileId, item.id).also { watchlistStateLoaded = true }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    false
+                    null
+                }
+            }
+            LaunchedEffect(item.id, profileId, profileWatchedIds) {
+                try {
+                    watched = item.id in profileWatchedIds || viewModel.isTitleWatched(profileId, item)
+                    watchedStateLoaded = true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    watchedStateLoaded = false
                 }
             }
             var pausedFrame by remember(historyEntry?.id, historyEntry?.position) {
@@ -404,7 +509,7 @@ fun HomeScreen(
             }
             LaunchedEffect(historyEntry?.id, historyEntry?.position, profileId) {
                 pausedFrame = historyEntry?.takeIf { !it.watched }?.let {
-                    viewModel.cachedPauseFrame(profileId, it.id, it.position, currentProfile?.seekThumbnailIntervalSeconds ?: 30)
+                    viewModel.cachedPauseFrame(profileId, it.id, it.position, currentProfile?.seekTimeIntervalSeconds ?: 30)
                 }
             }
             val density = LocalDensity.current
@@ -425,107 +530,138 @@ fun HomeScreen(
                 onDismissRequest = dismissQuickActions, properties = PopupProperties(focusable = true)) {
               Column(
                   Modifier.width(popupWidth)
-                      .onPreviewKeyEvent { event ->
-                          if (suppressOpeningKeyUp && event.type == KeyEventType.KeyUp &&
-                              (event.key == Key.Enter || event.key == Key.DirectionCenter)) {
-                              suppressOpeningKeyUp = false
-                              actionsArmed = true
-                              true
-                          } else false
-                      }
                       .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
                       .border(1.dp, Color.White.copy(alpha = 0.42f), RoundedCornerShape(12.dp))
                       .padding(8.dp),
                   verticalArrangement = Arrangement.spacedBy(5.dp)
               ) {
                 if (confirmClear) {
-                    Text("Clear progress?", style = MaterialTheme.typography.bodySmall, color = Color.White)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CardActionIcon(Icons.Default.Delete, "Clear Progress", {
-                            viewModel.clearContinueProgress(profileId, item)
-                            dismissQuickActions()
-                        }, Modifier, enabled = actionsArmed, focusRequester = firstActionRequester, destructive = true)
-                        CardActionIcon(Icons.Default.Close, "Cancel", { confirmClear = false },
-                            Modifier, enabled = actionsArmed)
-                    }
+                    Text(stringResource(R.string.quick_action_clear_progress_prompt), style = MaterialTheme.typography.bodySmall, color = Color.White)
+                    CatalogQuickActionStrip(
+                        listOf(
+                            CatalogQuickAction(
+                                Icons.Default.Delete,
+                                stringResource(R.string.details_action_clear_progress),
+                                onClick = {
+                                    viewModel.clearContinueProgress(profileId, item)
+                                    dismissQuickActions()
+                                },
+                                enabled = actionsArmed,
+                                destructive = true,
+                                focusRequester = firstActionRequester
+                            ),
+                            CatalogQuickAction(
+                                Icons.Default.Close,
+                                stringResource(R.string.common_cancel),
+                                onClick = { confirmClear = false },
+                                enabled = actionsArmed
+                            )
+                        )
+                    )
                 } else if (isContinue) {
                     if (item.type == "series") {
                         val parts = historyEntry?.id?.split(":").orEmpty()
                         val season = parts.getOrNull(1)?.toIntOrNull() ?: nextUp?.nextSeason
                         val episode = parts.getOrNull(2)?.toIntOrNull() ?: nextUp?.nextEpisode
-                        if (season != null && episode != null) Text("S$season · E$episode", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                        if (season != null && episode != null) {
+                            EpisodePositionLabel(season, episode)
+                        }
                     }
                     historyEntry?.let {
                         val remainingMs = (it.duration - it.position).coerceAtLeast(0L)
-                        Text("${remainingMs / 60_000} min remaining", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                        Text(stringResource(R.string.quick_action_remaining_minutes, remainingMs / 60_000), style = MaterialTheme.typography.bodySmall, color = Color.White)
                     }
                     pausedFrame?.let { bitmap ->
-                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Paused scene", modifier = Modifier.fillMaxWidth().height(70.dp), contentScale = ContentScale.Fit)
+                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = stringResource(R.string.quick_action_paused_scene), modifier = Modifier.fillMaxWidth().height(70.dp), contentScale = ContentScale.Fit)
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CardActionIcon(Icons.Default.PlayArrow, "Resume", { longPressedItem = null; onContinueClick(item) },
-                            Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
-                        CardActionIcon(Icons.Default.DoneAll, if (watched) "Mark As Unwatched" else "Mark As Watched", {
-                            if (watched) {
-                                viewModel.unmarkTitleWatched(profileId, item)
-                                watched = false
-                            } else {
-                                viewModel.markTitleWatched(profileId, item)
-                                watched = true
-                            }
-                            dismissQuickActions()
-                        }, Modifier, enabled = actionsArmed)
-                        CardActionIcon(Icons.Default.Delete, "Clear Progress", { confirmClear = true },
-                            Modifier, enabled = actionsArmed, destructive = true)
-                    }
+                    CatalogQuickActionStrip(
+                        listOf(
+                            CatalogQuickAction(
+                                Icons.Default.PlayArrow,
+                                stringResource(R.string.details_action_resume),
+                                onClick = { longPressedItem = null; onContinueClick(item) },
+                                enabled = actionsArmed,
+                                focusRequester = firstActionRequester
+                            ),
+                            CatalogQuickAction(
+                                Icons.Default.DoneAll,
+                                if (watched) stringResource(R.string.quick_action_mark_unwatched)
+                                else stringResource(R.string.episode_mark_watched),
+                                onClick = {
+                                    if (watched) {
+                                        viewModel.unmarkTitleWatched(profileId, item)
+                                        watched = false
+                                    } else {
+                                        viewModel.markTitleWatched(profileId, item)
+                                        watched = true
+                                    }
+                                    dismissQuickActions()
+                                },
+                                enabled = actionsArmed && watchedStateLoaded
+                            ),
+                            CatalogQuickAction(
+                                Icons.Default.Delete,
+                                stringResource(R.string.details_action_clear_progress),
+                                onClick = { confirmClear = true },
+                                enabled = actionsArmed,
+                                destructive = true
+                            )
+                        )
+                    )
                 } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                    CardActionIcon(Icons.Default.Videocam, "Watch Trailer", onClick = {
-                        if (manualTrailerLauncher != null) {
-                            manualTrailerLauncher(item, null, null)
-                        } else actionScope.launch {
-                            val trailer = try {
-                                viewModel.trailerFor(item)
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (_: Exception) {
-                                null
-                            }
-                            if (trailer != null) onTrailerClick(trailer.first, trailer.second)
-                            else android.widget.Toast.makeText(homeContext, "No trailer available", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        longPressedItem = null
-                    }, modifier = Modifier, enabled = actionsArmed, focusRequester = firstActionRequester)
-                    CardActionIcon(Icons.Default.DoneAll, if (watched) "Mark As Unwatched" else "Mark As Watched", onClick = {
-                        if (watched) {
-                            viewModel.unmarkTitleWatched(profileId, item)
-                            watched = false
-                        } else {
-                            viewModel.markTitleWatched(profileId, item)
-                            watched = true
-                        }
-                        dismissQuickActions()
-                    }, modifier = Modifier, enabled = actionsArmed)
-                    watchlisted?.let { saved ->
-                        CardActionIcon(if (saved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                            if (saved) "Remove From Watchlist" else "Add To Watchlist", onClick = {
-                            viewModel.toggleWatchlist(profileId, item)
-                            dismissQuickActions()
-                        }, modifier = Modifier, enabled = actionsArmed, destructive = saved)
-                    }
-                    }
+                    CatalogQuickActionStrip(
+                        listOf(
+                            CatalogQuickAction(
+                                Icons.Default.Videocam,
+                                stringResource(R.string.quick_action_watch_trailer),
+                                onClick = {
+                                    if (manualTrailerLauncher != null) {
+                                        manualTrailerLauncher(item, null, null, null)
+                                    } else actionScope.launch {
+                                        val trailer = try {
+                                            viewModel.trailerFor(item)
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (_: Exception) {
+                                            null
+                                        }
+                                        if (trailer != null) onTrailerClick(trailer.first, trailer.second)
+                                        else android.widget.Toast.makeText(homeContext, homeContext.getString(R.string.quick_action_no_trailer), android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                    longPressedItem = null
+                                },
+                                enabled = actionsArmed,
+                                focusRequester = firstActionRequester
+                            ),
+                            CatalogQuickAction(
+                                Icons.Default.DoneAll,
+                                if (watched) stringResource(R.string.quick_action_mark_unwatched)
+                                else stringResource(R.string.episode_mark_watched),
+                                onClick = {
+                                    if (watched) {
+                                        viewModel.unmarkTitleWatched(profileId, item)
+                                        watched = false
+                                    } else {
+                                        viewModel.markTitleWatched(profileId, item)
+                                        watched = true
+                                    }
+                                    dismissQuickActions()
+                                },
+                                enabled = actionsArmed && watchedStateLoaded
+                            ),
+                            CatalogQuickAction(
+                                if (watchlisted == true) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                if (watchlisted == true) stringResource(R.string.quick_action_remove_watchlist)
+                                else stringResource(R.string.details_action_add_watchlist),
+                                onClick = {
+                                    viewModel.toggleWatchlist(profileId, item)
+                                    dismissQuickActions()
+                                },
+                                enabled = actionsArmed && watchlistStateLoaded,
+                                destructive = watchlisted == true
+                            )
+                        )
+                    )
                 }
               }
             }
@@ -535,26 +671,25 @@ fun HomeScreen(
         val previewHistory = remember(state.history, state.seriesNextUp) {
             buildContinueWatchingItems(state.history, state.seriesNextUp)
         }
+        val previewMetadataIndex = remember(state.mixedRows) {
+            homePreviewMetadataIndex(state.mixedRows)
+        }
         val previewItem = remember(state.lastFocusedKey, state.mixedRows, previewHistory) {
             resolveCinematicPreviewItem(state.lastFocusedKey, state.mixedRows, previewHistory)
                 ?: state.lastFocusedKey?.takeIf { it.startsWith("hero_") }?.removePrefix("hero_")
-                    ?.let { id -> state.heroRow?.items?.firstOrNull { it.id == id } }
+                    ?.let { id -> state.heroRow?.items?.firstOrNull { it.asActionItem().id == id }?.asActionItem() }
         }
-        val previewCatalog = remember(previewItem, state.rows, state.lastFocusedKey) {
-            if (state.lastFocusedKey?.startsWith("-1_") == true) previewHistory else
-                state.rows.firstOrNull { row -> row.items.any { it.id == previewItem?.id } }?.items
-                    ?: previewHistory
-        }
+        val isHistoryPreview = state.lastFocusedKey?.startsWith("-1_") == true
         com.saab.tv.ui.trailer.BackdropTrailerPreview(
             profileId = currentProfile?.id ?: 0,
-            focusedItem = previewItem, catalog = previewCatalog, settings = previewSettings,
+            focusedItem = previewItem, settings = previewSettings,
             enabled = !com.saab.tv.ui.trailer.LocalManualTrailerActive.current && com.saab.tv.ui.trailer.TrailerPreviewPolicy.allowsHover(false, state.lastFocusedKey?.startsWith("-1_") == true) && isCurrentTabLoaded && (isContentFocused || previewActive) && longPressedItem == null && currentProfile != null,
             resolveTrailer = viewModel::trailerFor, onActiveChanged = { previewActive = it },
             onFullscreenChanged = onPreviewActiveChanged,
             onOpen = { item ->
                 if (state.lastFocusedKey?.startsWith("-1_") == true) onContinueClick(item) else onMovieClick(item)
             },
-            onDismiss = { runCatching { originalPosterFocus?.requestFocus() ?: contentEntryRequester.requestFocus() } },
+            onDismiss = { originalPosterFocus.requestFocusOrFallback(contentEntryRequester) },
             homeViewModel = viewModel
         )
     }
@@ -572,48 +707,37 @@ internal fun CardActionIcon(
     destructive: Boolean = false
 ) {
     com.saab.tv.ui.components.DetailActionButton(
-        label = description, icon = icon, onClick = { if (enabled) onClick() },
+        label = description, icon = icon, onClick = onClick, enabled = enabled,
         modifier = modifier.then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
-        compact = true, destructive = destructive && description == "Clear Progress"
+        compact = true, destructive = destructive && description == stringResource(R.string.details_action_clear_progress)
     )
 }
 
 @Composable
-private fun OttRefreshButton(
+internal fun OttRefreshButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var isFocused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(10.dp)
-    val primary = MaterialTheme.colorScheme.primary
-
-    Button(
+    SetupButton(
+        text = stringResource(R.string.ott_refresh),
         onClick = onClick,
-        modifier = modifier
-            .onFocusChanged { isFocused = it.isFocused }
-            .border(
-                width = if (isFocused) 3.dp else 1.dp,
-                color = if (isFocused) Color.White else Color.White.copy(alpha = 0.22f),
-                shape = shape
-            ),
-        shape = shape,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (isFocused) primary else Color.Black.copy(alpha = 0.74f),
-            contentColor = if (isFocused) MaterialTheme.colorScheme.onPrimary else Color.White
-        ),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
-    ) {
-        Icon(
-            imageVector = Icons.Default.Refresh,
-            contentDescription = null,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = "Refresh OTT",
-            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-        )
-    }
+        modifier = modifier,
+        primary = true,
+        content = {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            androidx.compose.material3.Text(
+                text = stringResource(R.string.ott_refresh),
+                style = androidx.compose.material3.MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.Bold
+                )
+            )
+        }
+    )
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -639,9 +763,11 @@ fun CinematicLayout(
     onScrollPositionChange: (String, Pair<Int, Int>) -> Unit,
     onVerticalScrollChange: (Pair<Int, Int>) -> Unit,
     onPreviewItemVisible: (MetaItem) -> Unit,
+    onPrepareArtworkItem: (MetaItem) -> Unit = {},
     onWatchedItemShown: (MetaItem) -> Unit = {},
     isLandscapeContinueWatching: Boolean = false
 ) {
+    val continueWatchingTitle = stringResource(R.string.library_continue_watching)
     var instantFocusItem by remember { mutableStateOf<MetaItem?>(null) }
     var displayedItem by remember { mutableStateOf<MetaItem?>(null) }
     var hasRequestedFocus by remember { mutableStateOf(false) }
@@ -658,6 +784,16 @@ fun CinematicLayout(
     val historyItems = remember(historyKey, nextUpKey) {
         buildContinueWatchingItems(state.history, state.seriesNextUp)
     }
+    val shelfFocusKeys = remember(historyItems.isNotEmpty(), state.mixedRows) {
+        buildList {
+            if (historyItems.isNotEmpty()) add("history")
+            addAll(state.mixedRows.map { it.id })
+        }
+    }
+    val shelfFocusRoutes = rememberShelfFocusRoutes(shelfFocusKeys)
+    val focusRestorationIndex = remember(state.mixedRows) {
+        homeFocusRestorationIndex(state.mixedRows)
+    }
 
     // Proactive metadata fetch for continue watching cards (posters + landscape)
     LaunchedEffect(historyItems) {
@@ -667,8 +803,8 @@ fun CinematicLayout(
     }
 
     // Redirect stale continue-watching focus key after progress was cleared
-    val effectiveLastFocusedKey = remember(lastFocusedKey, historyItems) {
-        resolveEffectiveFocusKey(lastFocusedKey, historyItems)
+    val effectiveLastFocusedKey = remember(lastFocusedKey, historyItems, focusRestorationIndex) {
+        resolveEffectiveFocusKey(lastFocusedKey, historyItems, state.mixedRows, focusRestorationIndex)
     }
     val historyFocusRedirected = effectiveLastFocusedKey != lastFocusedKey
 
@@ -679,12 +815,11 @@ fun CinematicLayout(
             historyItems = historyItems
         )
     }
-    val renderedPreviewItem = remember(displayedItem, state.mixedRows, state.heroRow, historyItems, state.enrichedMeta) {
-        resolveLatestPreviewItem(
-            current = displayedItem,
-            state = state,
-            historyItems = historyItems
-        )
+    val previewMetadataIndex = remember(state.mixedRows) {
+        homePreviewMetadataIndex(state.mixedRows)
+    }
+    val renderedPreviewItem = remember(displayedItem, state.enrichedMeta, state.heroRow, historyItems, previewMetadataIndex) {
+        resolveLatestPreviewItem(displayedItem, state, historyItems, previewMetadataIndex)
     }
 
     LaunchedEffect(state.rows, state.history, restoredPreviewItem, effectiveLastFocusedKey) {
@@ -695,6 +830,7 @@ fun CinematicLayout(
                 // poster while focus restoration is still in progress.
                 effectiveLastFocusedKey != null -> null
                 else -> historyItems.firstOrNull() ?: state.rows.firstOrNull()?.items?.firstOrNull()
+                    ?.asActionItem()
             }
             instantFocusItem = first
             displayedItem = first
@@ -726,15 +862,7 @@ fun CinematicLayout(
     
     // Skip vertical scroll on restoration (when we have a saved focus key)
     val isVerticalRestoration = effectiveLastFocusedKey != null
-    var skipVerticalScroll by remember { mutableStateOf(isVerticalRestoration) }
-
-    // Reset skip flag after restoration is complete
-    LaunchedEffect(isVerticalRestoration) {
-        if (isVerticalRestoration) {
-            delay(300)
-            skipVerticalScroll = false
-        }
-    }
+    var skipVerticalScroll by remember(isVerticalRestoration) { mutableStateOf(isVerticalRestoration) }
 
     // Track focus timing without triggering recomposition on every focus hop.
     val verticalFocusTiming = remember { HomeFocusTimingTracker() }
@@ -742,8 +870,7 @@ fun CinematicLayout(
     val verticalPivot = remember(titleHeadroomPx) {
         FocusPivotSpec(
             customOffset = titleHeadroomPx,
-            skipScrollProvider = { skipVerticalScroll },
-            stiffnessProvider = { Spring.StiffnessMediumLow }
+            skipScrollProvider = { skipVerticalScroll }
         )
     }
     
@@ -793,13 +920,17 @@ fun CinematicLayout(
             ) {
                 AnimatedContent(
                     targetState = renderedPreviewItem,
-                    transitionSpec = { fadeIn(tween(400)).togetherWith(fadeOut(tween(200))) },
+                    contentKey = { it?.canonicalPresentationKey() },
+                    transitionSpec = {
+                        fadeIn(tween(SaabMotion.duration(SaabMotion.HERO_INFO_IN_MS)))
+                            .togetherWith(fadeOut(tween(SaabMotion.duration(SaabMotion.HERO_INFO_OUT_MS))))
+                    },
                     label = "Info"
                 ) { item ->
                     if (item != null) {
-                        // Hide info content while waiting for TMDB enrichment
-                        val itemReady = !state.tmdbEnabled || state.tmdbEnrichedIds.contains("${item.type}:${item.id}")
-                        Column(modifier = Modifier.alpha(if (itemReady) 1f else 0f)) {
+                        // Show catalog facts immediately; enrich this same title
+                        // in place instead of hiding or fading it a second time.
+                        Column {
                             Box(
                                 modifier = Modifier
                                     .width(700.dp)
@@ -875,8 +1006,6 @@ fun CinematicLayout(
                         initialFirstVisibleItemScrollOffset = verticalScrollPosition.second
                     )
 
-                    // Global UP key debouncer to prevent accidental navbar navigation
-                    val upKeyDebouncer = remember { UpKeyDebouncer() }
                     val dpadRepeatGate = remember {
                         DpadRepeatGate(
                             horizontalRepeatIntervalMs = DPAD_REPEAT_INTERVAL_HORIZONTAL_MS,
@@ -927,11 +1056,12 @@ fun CinematicLayout(
                                     startPadding = startPadding,
                                     isTopNav = isTopNav,
                                     rowIndex = -1,
-                                    title = "Continue Watching",
+                                    focusRowId = "history",
+                                    title = continueWatchingTitle,
                                     items = historyItems,
                                     onMovieClick = onContinueClick,
                                     onMovieLongClick = onMovieLongClick,
-                                    onViewMore = { onViewMore("Continue Watching", historyItems, "") },
+                                    onViewMore = { onViewMore(continueWatchingTitle, historyItems, "") },
                                     onFocused = remember(wrappedOnFocusChange) {
                                         { item: MetaItem?, key: String ->
                                             updatePreviewItem(item)
@@ -947,13 +1077,16 @@ fun CinematicLayout(
                                     visibleItemCount = 15,
                                     isInfiniteScrollingEnabled = true,
                                     externalListState = historyRowState,
-                                    upKeyDebouncer = upKeyDebouncer,
                                     repeatGate = dpadRepeatGate,
                                     isLandscapeCards = isLandscapeContinueWatching,
                                     enrichedItems = state.enrichedMeta,
                                     onItemShown = onPreviewItemVisible,
+                                    onPrepareArtworkItem = onPrepareArtworkItem,
                                     onWatchedItemShown = onWatchedItemShown,
-                                    rowHeight = if (isLandscapeContinueWatching) 140.dp else 210.dp
+                                    rowHeight = if (isLandscapeContinueWatching) 140.dp else 210.dp,
+                                    verticalEntryRequester = shelfFocusRoutes["history"]?.entry,
+                                    upShelfRequester = shelfFocusRoutes["history"]?.up,
+                                    downShelfRequester = shelfFocusRoutes["history"]?.down
                                 )
                             }
                         }
@@ -1001,7 +1134,7 @@ fun CinematicLayout(
                                         onHubClick = onHubClick,
                                         onFocused = { _, focusKey ->
                                             instantFocusItem = null
-                                            wrappedOnFocusChange("hub_$focusKey")
+                                            wrappedOnFocusChange(focusKey)
                                         },
                                         entryRequester = entryRequester,
                                         drawerRequester = drawerRequester,
@@ -1009,7 +1142,6 @@ fun CinematicLayout(
                                         isTopNav = isTopNav,
                                         rowIndex = index,
                                         externalListState = hubListState,
-                                        upKeyDebouncer = upKeyDebouncer,
                                         repeatGate = dpadRepeatGate,
                                         isLastRow = index == state.mixedRows.lastIndex,
                                         isFirstRow = historyItems.isEmpty() && index == 0,
@@ -1042,6 +1174,9 @@ fun CinematicLayout(
                                     // Use snapshotFlow to avoid reading layoutInfo during composition
                                     val itemId = item.id
                                     val itemSize = item.items.size
+                                    val actionItems = remember(item.items) {
+                                        item.items.map(CatalogCardProjection::asActionItem)
+                                    }
                                     LaunchedEffect(rowListState, itemId) {
                                         snapshotFlow {
                                             rowListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -1052,16 +1187,18 @@ fun CinematicLayout(
                                         }
                                     }
 
+                                    val focusRoute = shelfFocusRoutes[item.id]
                                     InfiniteLoopRow(
                                         startPadding = startPadding,
                                         isTopNav = isTopNav,
                                         rowIndex = index,
+                                        focusRowId = item.id,
                                         title = item.title,
-                                        items = item.items,
+                                        items = actionItems,
                                         onMovieClick = onMovieClick,
                                         onMovieLongClick = onMovieLongClick,
                                         onViewMore = remember(item.title, item.items, item.id, onViewMore) {
-                                            { onViewMore(item.title, item.items, item.id) }
+                                            { onViewMore(item.title, actionItems, item.id) }
                                         },
                                         onFocused = remember(wrappedOnFocusChange) {
                                             { focusItem: MetaItem?, key: String ->
@@ -1078,10 +1215,13 @@ fun CinematicLayout(
                                         visibleItemCount = item.visibleItemCount,
                                         isInfiniteScrollingEnabled = item.isInfiniteScrollingEnabled,
                                         externalListState = rowListState,
-                                        upKeyDebouncer = upKeyDebouncer,
                                         repeatGate = dpadRepeatGate,
                                         onItemShown = onPreviewItemVisible,
-                                        onWatchedItemShown = onWatchedItemShown
+                                        onPrepareArtworkItem = onPrepareArtworkItem,
+                                        onWatchedItemShown = onWatchedItemShown,
+                                        verticalEntryRequester = focusRoute?.entry,
+                                        upShelfRequester = focusRoute?.up,
+                                        downShelfRequester = focusRoute?.down
                                     )
                                 }
                             }
@@ -1093,42 +1233,6 @@ fun CinematicLayout(
     }
 }
 
-/**
- * Redirect the saved continue-watching focus key when the row has changed since navigation:
- * 1. Item removed (progress cleared) → focus first remaining item, or first regular row
- * 2. Item reordered (e.g. resumed playback bumped it to front) → update to new index
- */
-private fun resolveEffectiveFocusKey(
-    lastFocusedKey: String?,
-    historyItems: List<MetaItem>
-): String? {
-    if (lastFocusedKey == null || !lastFocusedKey.startsWith("-1_")) return lastFocusedKey
-
-    val firstSep = lastFocusedKey.indexOf('_')
-    if (firstSep < 0) return lastFocusedKey
-    val remainder = lastFocusedKey.substring(firstSep + 1)
-    val itemId = remainder.substringBeforeLast("_")
-    val savedIndex = remainder.substringAfterLast("_").toIntOrNull()
-
-    val currentIndex = historyItems.indexOfFirst { it.id == itemId }
-
-    if (currentIndex < 0) {
-        // Item was removed: redirect to first remaining item, or null (first regular row gets focus)
-        return if (historyItems.isNotEmpty()) {
-            "-1_${historyItems.first().id}_0"
-        } else {
-            null
-        }
-    }
-
-    // Item exists but moved position (e.g. became most-recently-watched after playback)
-    if (savedIndex != null && currentIndex != savedIndex) {
-        return "-1_${itemId}_${currentIndex}"
-    }
-
-    return lastFocusedKey
-}
-
 private fun resolveCinematicPreviewItem(
     lastFocusedKey: String?,
     mixedRows: List<HomeRowItem>,
@@ -1137,20 +1241,23 @@ private fun resolveCinematicPreviewItem(
     if (lastFocusedKey.isNullOrEmpty()) return null
     if (lastFocusedKey.startsWith("hub_") || lastFocusedKey.startsWith("hero_")) return null
 
-    val firstSeparator = lastFocusedKey.indexOf('_')
+    val address = focusKeyWithoutRowId(lastFocusedKey)
+    val firstSeparator = address.indexOf('_')
     if (firstSeparator <= 0) return null
 
-    val rowToken = lastFocusedKey.substring(0, firstSeparator)
-    val itemToken = lastFocusedKey.substring(firstSeparator + 1).substringBeforeLast("_")
+    val rowToken = address.substring(0, firstSeparator)
+    val itemToken = decodeFocusToken(address.substring(firstSeparator + 1).substringBeforeLast("_"))
     if (itemToken.isEmpty() || itemToken == "viewmore") return null
 
     if (rowToken == "-1") {
-        return historyItems.firstOrNull { it.id == itemToken }
+        return historyItems.firstOrNull { it.homeFocusIdentityKey() == itemToken }
+            ?: historyItems.firstOrNull { it.id == itemToken }
     }
 
     val rowIndex = rowToken.toIntOrNull() ?: return null
     val row = mixedRows.getOrNull(rowIndex) as? CategoryRow ?: return null
-    return row.items.firstOrNull { it.id == itemToken }
+    return row.items.firstOrNull { it.focusIdentityKey == itemToken }?.asActionItem()
+        ?: row.items.firstOrNull { it.asActionItem().id == itemToken }?.asActionItem()
 }
 
 private fun buildContinueWatchingItems(
@@ -1259,23 +1366,22 @@ private fun isEpisodePlaybackId(playbackId: String): Boolean {
 private fun resolveLatestPreviewItem(
     current: MetaItem?,
     state: HomeViewModel.HomeState,
-    historyItems: List<MetaItem>
+    historyItems: List<MetaItem>,
+    index: HomePreviewMetadataIndex
 ): MetaItem? {
     val item = current ?: return null
 
-    val enriched = state.enrichedMeta["${item.type}:${item.id}"]
-    val fromHistory = historyItems.firstOrNull { it.type == item.type && it.id == item.id }
-    val fromHero = state.heroRow?.items?.firstOrNull { it.type == item.type && it.id == item.id }
-    val fromRows = state.mixedRows
-        .asSequence()
-        .filterIsInstance<CategoryRow>()
-        .flatMap { row -> row.items.asSequence() }
-        .firstOrNull { it.type == item.type && it.id == item.id }
+    val key = item.canonicalPresentationKey()
+    val enriched = state.enrichedMeta[key]
+    val fromHistory = historyItems.firstOrNull { it.canonicalPresentationKey() == key }
+    val fromHero = state.heroRow?.items?.asSequence()
+        ?.map(CatalogCardProjection::asActionItem)
+        ?.firstOrNull { it.canonicalPresentationKey() == key }
     return HomePreviewMetadataPolicy.select(
         current = item,
         enriched = enriched,
         hero = fromHero,
-        row = fromRows,
+        row = index.rowsByKey[key],
         history = fromHistory
     )
 }
@@ -1304,11 +1410,13 @@ fun SimpleLayout(
     onScrollPositionChange: (String, Pair<Int, Int>) -> Unit,
     onVerticalScrollChange: (Pair<Int, Int>) -> Unit,
     onHeroItemVisible: (MetaItem) -> Unit,
+    onPrepareArtworkItem: (MetaItem) -> Unit = {},
     onWatchedItemShown: (MetaItem) -> Unit = {},
     topActionRequester: FocusRequester? = null,
     onRefreshOtt: (() -> Unit)? = null,
     isLandscapeContinueWatching: Boolean = false
 ) {
+    val continueWatchingTitle = stringResource(R.string.library_continue_watching)
     var hasRequestedFocus by remember { mutableStateOf(false) }
     // Stable key: only rebuild when items/order/watched-state change, not when images update
     val historyKey = remember(state.history) {
@@ -1320,6 +1428,16 @@ fun SimpleLayout(
     val historyItems = remember(historyKey, nextUpKey) {
         buildContinueWatchingItems(state.history, state.seriesNextUp)
     }
+    val shelfFocusKeys = remember(historyItems.isNotEmpty(), state.mixedRows) {
+        buildList {
+            if (historyItems.isNotEmpty()) add("history")
+            addAll(state.mixedRows.map { it.id })
+        }
+    }
+    val shelfFocusRoutes = rememberShelfFocusRoutes(shelfFocusKeys)
+    val focusRestorationIndex = remember(state.mixedRows) {
+        homeFocusRestorationIndex(state.mixedRows)
+    }
 
     // Proactive metadata fetch for continue watching cards (posters + landscape)
     LaunchedEffect(historyItems) {
@@ -1327,13 +1445,11 @@ fun SimpleLayout(
     }
 
     // Redirect stale continue-watching focus key after progress was cleared
-    val effectiveLastFocusedKey = remember(lastFocusedKey, historyItems) {
-        resolveEffectiveFocusKey(lastFocusedKey, historyItems)
+    val effectiveLastFocusedKey = remember(lastFocusedKey, historyItems, focusRestorationIndex) {
+        resolveEffectiveFocusKey(lastFocusedKey, historyItems, state.mixedRows, focusRestorationIndex)
     }
     val historyFocusRedirected = effectiveLastFocusedKey != lastFocusedKey
 
-    // Global UP key debouncer to prevent accidental navbar navigation
-    val upKeyDebouncer = remember { UpKeyDebouncer() }
     val dpadRepeatGate = remember {
         DpadRepeatGate(
             horizontalRepeatIntervalMs = DPAD_REPEAT_INTERVAL_HORIZONTAL_MS,
@@ -1361,23 +1477,14 @@ fun SimpleLayout(
 
     // Skip vertical scroll on restoration (when we have a saved focus key)
     val isVerticalRestoration = effectiveLastFocusedKey != null
-    var skipVerticalScroll by remember { mutableStateOf(isVerticalRestoration) }
-
-    // Reset skip flag after restoration is complete
-    LaunchedEffect(isVerticalRestoration) {
-        if (isVerticalRestoration) {
-            delay(300)
-            skipVerticalScroll = false
-        }
-    }
+    var skipVerticalScroll by remember(isVerticalRestoration) { mutableStateOf(isVerticalRestoration) }
 
     val verticalPivotPx = remember(density, isTopNav) { with(density) { (if (isTopNav) 91.dp else 71.dp).toPx() } }
 
     val verticalPivot = remember(verticalPivotPx) {
         FocusPivotSpec(
             customOffset = verticalPivotPx,
-            skipScrollProvider = { skipVerticalScroll },
-            stiffnessProvider = { Spring.StiffnessMediumLow }
+            skipScrollProvider = { skipVerticalScroll }
         )
     }
 
@@ -1449,7 +1556,6 @@ fun SimpleLayout(
                         drawerRequester = drawerRequester,
                         isFirstItem = true,
                         isTopNav = isTopNav,
-                        upKeyDebouncer = upKeyDebouncer,
                         repeatGate = dpadRepeatGate,
                         onNavigateDown = { firstRowPivotRequester.requestFocus() },
                         restoreItemId = if (effectiveLastFocusedKey?.startsWith("hero_") == true) effectiveLastFocusedKey.removePrefix("hero_") else null,
@@ -1480,11 +1586,12 @@ fun SimpleLayout(
                         startPadding = startPadding,
                         isTopNav = isTopNav,
                         rowIndex = -1,
-                        title = "Continue Watching",
+                        focusRowId = "history",
+                        title = continueWatchingTitle,
                         items = historyItems,
                         onMovieClick = onContinueClick,
                         onMovieLongClick = onMovieLongClick,
-                        onViewMore = { onViewMore("Continue Watching", historyItems, "") },
+                        onViewMore = { onViewMore(continueWatchingTitle, historyItems, "") },
                         onFocused = remember(wrappedOnFocusChange) {
                             { _: MetaItem?, key: String -> wrappedOnFocusChange(key) }
                         },
@@ -1497,14 +1604,17 @@ fun SimpleLayout(
                         visibleItemCount = 15,
                         isInfiniteScrollingEnabled = true,
                         externalListState = historyRowState,
-                        upKeyDebouncer = upKeyDebouncer,
                         repeatGate = dpadRepeatGate,
                         pivotFocusRequester = if (heroItems.isNotEmpty()) firstRowPivotRequester else null,
                         isLandscapeCards = isLandscapeContinueWatching,
                         enrichedItems = state.enrichedMeta,
                         onItemShown = onHeroItemVisible,
+                        onPrepareArtworkItem = onPrepareArtworkItem,
                         onWatchedItemShown = onWatchedItemShown,
-                        rowHeight = if (isLandscapeContinueWatching) 140.dp else 210.dp
+                        rowHeight = if (isLandscapeContinueWatching) 140.dp else 210.dp,
+                        verticalEntryRequester = shelfFocusRoutes["history"]?.entry,
+                        upShelfRequester = shelfFocusRoutes["history"]?.up,
+                        downShelfRequester = shelfFocusRoutes["history"]?.down
                     )
                 }
             }
@@ -1551,7 +1661,7 @@ fun SimpleLayout(
                             startPadding = startPadding,
                             onHubClick = onHubClick,
                             onFocused = { _, focusKey ->
-                                wrappedOnFocusChange("hub_$focusKey")
+                                wrappedOnFocusChange(focusKey)
                             },
                             entryRequester = entryRequester,
                             drawerRequester = drawerRequester,
@@ -1560,7 +1670,6 @@ fun SimpleLayout(
                             rowIndex = rowIndex,
                             isFirstRow = heroItems.isEmpty() && historyItems.isEmpty() && rowIndex == 0 && onRefreshOtt == null, // Only steal focus if no hero/history/action row
                             externalListState = hubListState,
-                            upKeyDebouncer = upKeyDebouncer,
                             repeatGate = dpadRepeatGate,
                             isLastRow = rowIndex == state.mixedRows.lastIndex,
                             pivotFocusRequester = if (heroItems.isNotEmpty() && historyItems.isEmpty() && rowIndex == 0) firstRowPivotRequester else null,
@@ -1593,6 +1702,9 @@ fun SimpleLayout(
                         // Use snapshotFlow to avoid reading layoutInfo during composition
                         val itemId = item.id
                         val itemSize = item.items.size
+                        val actionItems = remember(item.items) {
+                            item.items.map(CatalogCardProjection::asActionItem)
+                        }
                         LaunchedEffect(rowListState, itemId) {
                             snapshotFlow {
                                 rowListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -1610,19 +1722,21 @@ fun SimpleLayout(
                         // These specific lambda instances must remain referentially equal
                         // across recompositions to allow InfiniteLoopRow to skip logic.
                         val onRowViewMore = remember(item.items, item.title, item.id, onViewMore) {
-                            { onViewMore(item.title, item.items, item.id) }
+                            { onViewMore(item.title, actionItems, item.id) }
                         }
                         
                         val onRowFocused = remember(wrappedOnFocusChange) {
                             { _: MetaItem?, key: String -> wrappedOnFocusChange(key) }
                         }
 
+                        val focusRoute = shelfFocusRoutes[item.id]
                         InfiniteLoopRow(
                             startPadding = startPadding,
                             isTopNav = isTopNav,
                             rowIndex = rowIndex,
+                            focusRowId = item.id,
                             title = item.title,
-                            items = item.items,
+                            items = actionItems,
                             onMovieClick = onMovieClick,
                             onMovieLongClick = onMovieLongClick,
                             onViewMore = onRowViewMore,
@@ -1637,11 +1751,14 @@ fun SimpleLayout(
                             isInfiniteScrollingEnabled = item.isInfiniteScrollingEnabled,
                             externalListState = rowListState,
                             rowHeight = rowHeight,
-                            upKeyDebouncer = upKeyDebouncer,
                             repeatGate = dpadRepeatGate,
                             onItemShown = onHeroItemVisible,
+                            onPrepareArtworkItem = onPrepareArtworkItem,
                             onWatchedItemShown = onWatchedItemShown,
-                            pivotFocusRequester = if (heroItems.isNotEmpty() && historyItems.isEmpty() && rowIndex == 0) firstRowPivotRequester else null
+                            pivotFocusRequester = if (heroItems.isNotEmpty() && historyItems.isEmpty() && rowIndex == 0) firstRowPivotRequester else null,
+                            verticalEntryRequester = focusRoute?.entry,
+                            upShelfRequester = focusRoute?.up,
+                            downShelfRequester = focusRoute?.down
                         )
                     }
                 }
@@ -1697,11 +1814,14 @@ fun CinematicBackground(item: MetaItem?) {
     LaunchedEffect(item?.background, item?.poster) {
         val next = item ?: return@LaunchedEffect
         val url = next.background ?: next.poster
+        // Let rapid navigation settle before decoding another large hero bitmap.
+        delay(75)
         if (!url.isNullOrBlank()) {
             try {
                 context.imageLoader.execute(
                     ImageRequest.Builder(context).data(url).size(1280, 720)
-                        .memoryCacheKey(url).build()
+                        .memoryCacheKey("backdrop:$url").diskCacheKey(url)
+                        .scale(coil.size.Scale.FILL).build()
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1750,8 +1870,8 @@ fun CinematicBackground(item: MetaItem?) {
             AnimatedContent(
                 targetState = readyImage,
                 transitionSpec = {
-                    (fadeIn(tween(420)) + slideInHorizontally(tween(420), initialOffsetX = { it / 12 }))
-                        .togetherWith(fadeOut(tween(420)) + androidx.compose.animation.slideOutHorizontally(tween(420), targetOffsetX = { -it / 12 }))
+                    (fadeIn(tween(SaabMotion.duration(240))) + slideInHorizontally(tween(SaabMotion.duration(240)), initialOffsetX = { it / 12 }))
+                        .togetherWith(fadeOut(tween(SaabMotion.duration(240))) + androidx.compose.animation.slideOutHorizontally(tween(SaabMotion.duration(240)), targetOffsetX = { -it / 12 }))
                 },
                 label = "HeroBg"
             ) { image ->
@@ -1761,7 +1881,9 @@ fun CinematicBackground(item: MetaItem?) {
                             .data(image)
                             .crossfade(false)
                             .size(1280, 720)
-                            .memoryCacheKey(image)
+                            .memoryCacheKey("backdrop:$image")
+                            .diskCacheKey(image)
+                            .scale(coil.size.Scale.FILL)
                             .build()
                     }
 
@@ -1799,11 +1921,11 @@ fun Badge(text: String, color: Color, textColor: Color) {
 
 @Composable
 private fun HomeMetaStrip(item: MetaItem) {
-    val typeLabel = item.type.replaceFirstChar { it.uppercase() }
+    val typeLabel = com.saab.tv.ui.components.localizedTitleType(item.type)
     val genreLabel = item.genres
         ?.firstOrNull()
         ?.replaceFirstChar { it.uppercase() }
-        ?: "Unknown"
+        ?: stringResource(R.string.sort_filter_unknown)
     val yearLabel = extractHomePrimaryYear(item.releaseInfo)
     val valueColor = Color.White.copy(alpha = 0.92f)
     val textStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
@@ -1820,9 +1942,7 @@ private fun HomeMetaStrip(item: MetaItem) {
 
         item.runtime?.filter { it.isDigit() }?.toIntOrNull()?.let { mins ->
             HomeMetaDot()
-            val hours = mins / 60
-            val m = mins % 60
-            val display = if (hours > 0) "${hours}h ${m}m" else "${m}m"
+            val display = com.saab.tv.ui.components.localizedRuntimeLabel(mins)
             Text(text = display, style = textStyle, color = valueColor)
         }
 

@@ -15,7 +15,13 @@ import java.util.concurrent.TimeUnit
 /** Device-local, bounded diagnostics. Never supply request bodies, credentials or route arguments. */
 object AppDiagnostics {
     @Volatile private var appContext: Context? = null
-    private const val LIMIT = 1024L * 1024
+    private const val LIMIT = 512L * 1024
+    private const val MAX_COMPONENT_CHARS = 120
+    private const val MAX_EVENT_NAME_CHARS = 160
+    private const val MAX_EVENT_DETAILS_CHARS = 8_000
+    private const val MAX_EXPORT_EVENTS = 400
+    private const val MAX_EXPORT_FIELD_CHARS = 2_000
+    private const val MAX_EXPORT_HEALTH_LINES = 120
     private val writer = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
         ArrayBlockingQueue<Runnable>(256), { task -> Thread(task, "app-diagnostics").apply { isDaemon = true } },
         ThreadPoolExecutor.DiscardPolicy())
@@ -42,8 +48,11 @@ object AppDiagnostics {
         detailedOnly: Boolean = false) {
         if (!DiagnosticRecordingPolicy.records(isBasicEnabled(context), PlaybackDiagnostics.isEnabled(context), component, detailedOnly)) return
         val app = context.applicationContext
-        val item = PlaybackDiagnosticEvent(System.currentTimeMillis(), "INFO", component, event, DiagnosticPrivacy.redact(details).take(8000))
-        writer.execute { append(app, item) }
+        val item = PlaybackDiagnosticEvent(
+            System.currentTimeMillis(), "INFO", component.take(MAX_COMPONENT_CHARS),
+            event.take(MAX_EVENT_NAME_CHARS), DiagnosticPrivacy.redact(details).take(MAX_EVENT_DETAILS_CHARS)
+        )
+        writer.execute { DiagnosticStorageBudget.withLock(app) { append(app, item) } }
     }
 
     /** Basic opt-in TorBox state trail; never keys, hashes or URLs. */
@@ -61,10 +70,13 @@ object AppDiagnostics {
         if (!fatal && (DiagnosticRecordingPolicy.cancellation(failure) ||
                 !DiagnosticRecordingPolicy.records(isBasicEnabled(context), PlaybackDiagnostics.isEnabled(context), component))) return
         val app = context.applicationContext
-        val item = PlaybackDiagnosticEvent(System.currentTimeMillis(), if (fatal) "FATAL" else "WARN", component, event,
-            DiagnosticPrivacy.stack(failure))
-        if (fatal) append(app, item)
-        else writer.execute { append(app, item) }
+        val item = PlaybackDiagnosticEvent(
+            System.currentTimeMillis(), if (fatal) "FATAL" else "WARN",
+            component.take(MAX_COMPONENT_CHARS), event.take(MAX_EVENT_NAME_CHARS),
+            DiagnosticPrivacy.stack(failure).take(MAX_EVENT_DETAILS_CHARS)
+        )
+        if (fatal) DiagnosticStorageBudget.withLock(app) { append(app, item) }
+        else writer.execute { DiagnosticStorageBudget.withLock(app) { append(app, item) } }
     }
 
     fun install(application: Application) {
@@ -84,7 +96,7 @@ object AppDiagnostics {
         })
     }
 
-    @Synchronized private fun append(context: Context, item: PlaybackDiagnosticEvent) {
+    private fun append(context: Context, item: PlaybackDiagnosticEvent) {
         runCatching {
             val directory = File(context.filesDir, "app_diagnostics").apply { mkdirs() }
             val file = File(directory, "events.log")
@@ -119,27 +131,37 @@ object AppDiagnostics {
     }
 
     fun export(context: Context): File? = runCatching {
-        val output = File(context.cacheDir, "diagnostics_exports/saab-tv-app-diagnostics.txt")
-        output.parentFile?.mkdirs()
-        output.bufferedWriter().use { out ->
-            out.appendLine("Saab TV App Diagnostics — ${BuildConfig.VERSION_NAME}")
-            out.appendLine("Local bounded history; basic=${isBasicEnabled(context)} detailed=${PlaybackDiagnostics.isEnabled(context)}")
-            out.appendLine("SDK=${android.os.Build.VERSION.SDK_INT} ${PlaybackDiagnostics.memorySummary()}")
-            out.appendLine("Application Health")
-            out.appendLine(com.saab.tv.data.account.AccountTransferMetrics.summary(context))
-            AppHealthMonitor.latestSummary(context).forEach { out.appendLine(DiagnosticPrivacy.redact(it)) }
-            out.appendLine("Application And Latest Playback Events")
-            report(context, Int.MAX_VALUE).events.asReversed().forEach { item ->
-                out.appendLine("${PlaybackDiagnostics.formatTimestamp(item.timestampMs)} ${item.level} ${item.component} ${item.event} ${DiagnosticPrivacy.redact(item.details)}")
+        DiagnosticStorageBudget.withLock(context) {
+            val output = File(context.cacheDir, "diagnostics_exports/saab-tv-app-diagnostics.txt")
+            output.parentFile?.mkdirs()
+            output.bufferedWriter().use { out ->
+                out.appendLine("Saab TV App Diagnostics — ${BuildConfig.VERSION_NAME}")
+                out.appendLine("Local bounded history; basic=${isBasicEnabled(context)} detailed=${PlaybackDiagnostics.isEnabled(context)}")
+                out.appendLine("SDK=${android.os.Build.VERSION.SDK_INT} ${PlaybackDiagnostics.memorySummary()}")
+                out.appendLine("Application Health")
+                out.appendLine(com.saab.tv.data.account.AccountTransferMetrics.summary(context))
+                AppHealthMonitor.latestSummary(context).takeLast(MAX_EXPORT_HEALTH_LINES).forEach {
+                    out.appendLine(DiagnosticPrivacy.redact(it).take(MAX_EXPORT_FIELD_CHARS))
+                }
+                out.appendLine("Application And Latest Playback Events")
+                report(context, MAX_EXPORT_EVENTS).events.asReversed().forEach { item ->
+                    out.appendLine(
+                        "${PlaybackDiagnostics.formatTimestamp(item.timestampMs)} ${item.level} " +
+                            "${item.component.take(MAX_COMPONENT_CHARS)} ${item.event.take(MAX_EVENT_NAME_CHARS)} " +
+                            DiagnosticPrivacy.redact(item.details).take(MAX_EXPORT_FIELD_CHARS)
+                    )
+                }
             }
+            output
         }
-        output
     }.getOrNull()
 
     fun clear(context: Context) {
         // Ordered after pending writes; restrict deletion to our own known diagnostic files.
         writer.queue.clear()
-        synchronized(this) { File(context.filesDir, "app_diagnostics").deleteRecursively() }
+        DiagnosticStorageBudget.withLock(context) {
+            File(context.filesDir, "app_diagnostics").deleteRecursively()
+        }
         AppHealthMonitor.clear(context)
         PlaybackDiagnostics.clear(context)
     }

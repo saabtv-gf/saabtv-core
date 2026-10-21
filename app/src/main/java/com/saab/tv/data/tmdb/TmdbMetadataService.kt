@@ -3,7 +3,15 @@ package com.saab.tv.data.tmdb
 import android.util.Log
 import android.util.LruCache
 import com.saab.tv.data.model.tmdb.*
+import com.saab.tv.data.cache.SingleFlight
+import com.saab.tv.data.cache.metadataRequestScope
 import com.saab.tv.data.remote.TmdbApiService
+import com.saab.tv.data.repository.CanonicalTitleStore
+import com.saab.tv.data.repository.NoopCanonicalTitleStore
+import com.saab.tv.domain.schema.ContentIdentity
+import com.saab.tv.domain.schema.ContentKind
+import com.saab.tv.domain.schema.TitleCardProjection
+import com.saab.tv.domain.schema.toCanonicalProjection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -18,11 +26,10 @@ import javax.inject.Singleton
 
 private const val TAG = "TmdbMetadataService"
 
-internal fun mixTmdbMediaTypes(items: List<TmdbMetaPreview>, limit: Int): List<TmdbMetaPreview> {
-    val distinct = items.map { if (it.type == "tv") it.copy(type = "series") else it }
-        .distinctBy { it.type to it.tmdbId }
-    val movies = distinct.filter { it.type == "movie" }
-    val series = distinct.filter { it.type == "series" || it.type == "tv" }
+internal fun mixTmdbMediaTypes(items: List<TitleCardProjection>, limit: Int): List<TitleCardProjection> {
+    val distinct = items.distinctBy { it.presentationKey }
+    val movies = distinct.filter { it.kind == ContentKind.MOVIE }
+    val series = distinct.filter { it.kind == ContentKind.SERIES }
     if (movies.isEmpty() || series.isEmpty()) return distinct.take(limit.coerceAtLeast(0))
 
     return buildList {
@@ -38,8 +45,11 @@ internal fun mixTmdbMediaTypes(items: List<TmdbMetaPreview>, limit: Int): List<T
 @Singleton
 class TmdbMetadataService @Inject constructor(
     private val tmdbApi: TmdbApiService,
-    private val tmdbService: TmdbService
+    private val tmdbService: TmdbService,
+    private val titleStore: CanonicalTitleStore
 ) {
+    constructor(tmdbApi: TmdbApiService, tmdbService: TmdbService) :
+        this(tmdbApi, tmdbService, NoopCanonicalTitleStore)
     private val apiKey get() = tmdbService.apiKey()
 
     // Keep large cast/episode payloads from growing without bound on long-lived TV devices.
@@ -47,9 +57,24 @@ class TmdbMetadataService @Inject constructor(
     private val homeEnrichmentCache = LruCache<String, TmdbEnrichment>(96)
     private val episodeCache = LruCache<String, Map<Pair<Int, Int>, TmdbEpisodeEnrichment>>(24)
     private val personCache = LruCache<String, TmdbPersonDetail>(64)
-    private val recommendationsCache = LruCache<String, List<TmdbMetaPreview>>(96)
-    private val collectionCache = LruCache<String, List<TmdbMetaPreview>>(24)
-    private val discoverCache = LruCache<String, List<TmdbMetaPreview>>(48)
+    private val playbackCastCache = LruCache<String, List<TmdbCastInfo>>(48)
+    private val recommendationsCache = LruCache<String, TmdbDiscoveryPage>(96)
+    private val collectionCache = LruCache<String, List<TitleCardProjection>>(24)
+    private val discoverCache = LruCache<String, TmdbDiscoveryPage>(48)
+    private val requestScope = metadataRequestScope()
+    private val requestPermits = Semaphore(4)
+    private val enrichmentFlights = SingleFlight<String, TmdbEnrichment?>(requestScope, sharedPermits = requestPermits)
+    private val homeEnrichmentFlights = SingleFlight<String, TmdbEnrichment?>(requestScope, sharedPermits = requestPermits)
+    private val episodeFlights = SingleFlight<String, Map<Pair<Int, Int>, TmdbEpisodeEnrichment>>(requestScope, sharedPermits = requestPermits)
+    private val recommendationFlights = SingleFlight<String, TmdbDiscoveryPage>(requestScope, sharedPermits = requestPermits)
+    private val collectionFlights = SingleFlight<String, List<TitleCardProjection>>(requestScope, sharedPermits = requestPermits)
+    private val personFlights = SingleFlight<String, TmdbPersonDetail?>(requestScope, sharedPermits = requestPermits)
+    private val playbackCastFlights = SingleFlight<String, List<TmdbCastInfo>>(requestScope, sharedPermits = requestPermits)
+    private val videoFlights = SingleFlight<String, List<TmdbVideoInfo>>(requestScope, sharedPermits = requestPermits)
+    private val bestTrailerFlights = SingleFlight<String, TmdbVideoInfo?>(requestScope, sharedPermits = requestPermits)
+    private val entityFlights = SingleFlight<String, TmdbEntityDetail?>(requestScope, sharedPermits = requestPermits)
+    private val entityDiscoveryFlights = SingleFlight<String, Pair<List<TitleCardProjection>, Int>>(requestScope, sharedPermits = requestPermits)
+    private val discoverFlights = SingleFlight<String, TmdbDiscoveryPage>(requestScope, sharedPermits = requestPermits)
 
     /**
      * Fetch full metadata enrichment for a title: details, credits, images, age ratings — all in parallel.
@@ -58,13 +83,101 @@ class TmdbMetadataService @Inject constructor(
         tmdbId: String,
         mediaType: String,
         language: String = "en"
+    ): TmdbEnrichment? {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        val kind = ContentKind.fromProvider(mediaType)
+            ?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
+            ?: return null
+        val identity = ContentIdentity.tmdb(kind, tmdbId) ?: return null
+        val key = "${identity.stableKey}:$normalizedLanguage:details"
+        return enrichmentFlights.await(key) {
+            loadEnrichment(identity.externalId, kind.keyPart, normalizedLanguage)
+        }
+    }
+
+    /** Loads only credits for the playback cast panel; avoids the four-request details enrichment. */
+    suspend fun fetchCastMembers(
+        tmdbId: String,
+        mediaType: String,
+        language: String = "en"
+    ): List<TmdbCastInfo> {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        val kind = ContentKind.fromProvider(mediaType)
+            ?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
+            ?: return emptyList()
+        val identity = ContentIdentity.tmdb(kind, tmdbId) ?: return emptyList()
+        val tmdbType = if (kind == ContentKind.SERIES) "tv" else "movie"
+        val key = "${identity.stableKey}:$normalizedLanguage:playback-cast"
+        playbackCastCache.get(key)?.let { return it }
+
+        return playbackCastFlights.await(key) {
+            withContext(Dispatchers.IO) {
+                playbackCastCache.get(key)?.let { return@withContext it }
+                val detailsKey = "${identity.externalId}:$tmdbType:$normalizedLanguage:details"
+                enrichmentCache.get(detailsKey)?.castMembers?.let { members ->
+                    playbackCastCache.put(key, members)
+                    return@withContext members
+                }
+
+                try {
+                    val numericId = identity.externalId.toInt()
+                    val credits = when (tmdbType) {
+                        "tv" -> tmdbApi.getTvCredits(numericId, apiKey, normalizedLanguage)
+                        else -> tmdbApi.getMovieCredits(numericId, apiKey, normalizedLanguage)
+                    }.body()
+                    val members = credits?.cast.orEmpty().mapNotNull { member ->
+                        val name = member.name?.trim()?.takeIf(String::isNotEmpty) ?: return@mapNotNull null
+                        TmdbCastInfo(
+                            name = name,
+                            character = member.character?.trim()?.takeIf(String::isNotEmpty),
+                            photo = buildImageUrl(member.profilePath, "w500"),
+                            tmdbId = member.id
+                        )
+                    }
+                    playbackCastCache.put(key, members)
+                    members
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    Log.w(TAG, "Unable to load playback cast: ${failure.message}")
+                    emptyList()
+                }
+            }
+        }
+    }
+
+    private suspend fun loadEnrichment(
+        tmdbId: String,
+        mediaType: String,
+        language: String
     ): TmdbEnrichment? = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
-        val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
-        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage"
+        val kind = ContentKind.fromProvider(mediaType)
+            ?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
+            ?: return@withContext null
+        val identity = ContentIdentity.tmdb(kind, tmdbId) ?: return@withContext null
+        val tmdbType = if (kind == ContentKind.SERIES) "tv" else "movie"
+        // Full Details must never reuse a lightweight Home-card response: Home intentionally
+        // skips credits and age certifications, and can be warmed before Details is opened.
+        val cacheKey = "${identity.externalId}:$tmdbType:$normalizedLanguage:details"
         enrichmentCache.get(cacheKey)?.let { return@withContext it }
 
-        val numericId = tmdbId.toIntOrNull() ?: return@withContext null
+        try {
+            val cached = titleStore.getFreshTitle(identity, normalizedLanguage, DETAILS_METADATA_MAX_AGE_MILLIS)
+            if (cached?.creditsSource == "TMDB" && cached.creditsObservedAtMillis > 0L &&
+                System.currentTimeMillis() - cached.creditsObservedAtMillis in 0..DETAILS_METADATA_MAX_AGE_MILLIS
+            ) {
+                return@withContext CanonicalHomeMetadata.decode(cached).also {
+                    enrichmentCache.put(cacheKey, it)
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            Log.w(TAG, "Unable to read canonical full details: ${failure.message}")
+        }
+
+        val numericId = identity.externalId.toInt()
 
         try {
             val includeImageLanguage = buildString {
@@ -112,6 +225,7 @@ class TmdbMetadataService @Inject constructor(
                     ageRatingDeferred.await()
                 )
             }
+            if (details?.id != numericId) return@withContext null
 
             val genres = details?.genres?.mapNotNull { it.name.trim().takeIf { n -> n.isNotBlank() } } ?: emptyList()
             val description = details?.overview?.takeIf { it.isNotBlank() }
@@ -220,7 +334,8 @@ class TmdbMetadataService @Inject constructor(
                 runtimeMinutes = runtime,
                 productionCompanies = productionCompanies,
                 networks = networks,
-                ageRating = ageRating,
+                ageRating = ageRating?.value,
+                ageRatingRegion = ageRating?.region,
                 status = status,
                 countries = countries,
                 language = originalLanguage,
@@ -228,6 +343,25 @@ class TmdbMetadataService @Inject constructor(
                 collectionName = collectionName
             )
             enrichmentCache.put(cacheKey, enrichment)
+            try {
+                // Keep the shared canonical fact row warm regardless of which surface
+                // requested the full detail payload. Credits and certifications remain
+                // details-only; the canonical row stores only the common title facts.
+                titleStore.putTitle(
+                    CanonicalHomeMetadata.encode(
+                        identity = identity,
+                        locale = normalizedLanguage,
+                        value = enrichment,
+                        nowMillis = System.currentTimeMillis(),
+                        logoFetched = true,
+                        includeDetails = true
+                    )
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Log.w(TAG, "Unable to persist canonical detail facts: ${failure.message}")
+            }
             enrichment
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -247,14 +381,46 @@ class TmdbMetadataService @Inject constructor(
         mediaType: String,
         language: String = "en",
         includeLogo: Boolean = false
+    ): TmdbEnrichment? {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        val kind = ContentKind.fromProvider(mediaType)
+            ?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
+            ?: return null
+        val identity = ContentIdentity.tmdb(kind, tmdbId) ?: return null
+        val key = "${identity.stableKey}:$normalizedLanguage:home:${if (includeLogo) "logo" else "basic"}"
+        return homeEnrichmentFlights.await(key) {
+            loadHomeEnrichment(identity.externalId, kind.keyPart, normalizedLanguage, includeLogo)
+        }
+    }
+
+    private suspend fun loadHomeEnrichment(
+        tmdbId: String,
+        mediaType: String,
+        language: String,
+        includeLogo: Boolean
     ): TmdbEnrichment? = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
-        val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
-        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage${if (includeLogo) ":logo" else ""}"
+        val kind = ContentKind.fromProvider(mediaType) ?: return@withContext null
+        if (kind != ContentKind.MOVIE && kind != ContentKind.SERIES) return@withContext null
+        val identity = ContentIdentity.tmdb(kind, tmdbId) ?: return@withContext null
+        val numericId = identity.externalId.toInt()
+        val tmdbType = if (kind == ContentKind.SERIES) "tv" else "movie"
+        val cacheKey = "$numericId:$tmdbType:$normalizedLanguage${if (includeLogo) ":logo" else ""}"
         enrichmentCache.get(cacheKey)?.let { return@withContext it }
         homeEnrichmentCache.get(cacheKey)?.let { return@withContext it }
-
-        val numericId = tmdbId.toIntOrNull() ?: return@withContext null
+        try {
+            val cached = titleStore.getFreshTitle(identity, normalizedLanguage, HOME_METADATA_MAX_AGE_MILLIS)
+            if (cached != null && cached.kind == kind.keyPart &&
+                (!includeLogo || cached.logo != null || cached.logoObservedAtMillis > 0)) {
+                val enrichment = CanonicalHomeMetadata.decode(cached)
+                homeEnrichmentCache.put(cacheKey, enrichment)
+                return@withContext enrichment
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            Log.w(TAG, "Unable to read canonical Home metadata: ${failure.message}")
+        }
         try {
             val includeImageLanguage = "${normalizedLanguage.substringBefore("-")},$normalizedLanguage,en,null"
             val (details, logoPath) = coroutineScope {
@@ -280,7 +446,7 @@ class TmdbMetadataService @Inject constructor(
                 } else null
                 detailsDeferred.await() to logoDeferred?.await()
             }
-            if (details == null) return@withContext null
+            if (details == null || details.id != numericId) return@withContext null
 
             val enrichment = TmdbEnrichment(
                 localizedTitle = (details.title ?: details.name)?.takeIf(String::isNotBlank),
@@ -307,6 +473,13 @@ class TmdbMetadataService @Inject constructor(
                 collectionId = details.belongsToCollection?.id,
                 collectionName = details.belongsToCollection?.name
             )
+            try {
+                titleStore.putTitle(CanonicalHomeMetadata.encode(identity, normalizedLanguage, enrichment, System.currentTimeMillis(), includeLogo))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Log.w(TAG, "Unable to cache canonical Home metadata: ${failure.message}")
+            }
             homeEnrichmentCache.put(cacheKey, enrichment)
             enrichment
         } catch (cancelled: CancellationException) {
@@ -325,6 +498,16 @@ class TmdbMetadataService @Inject constructor(
         tmdbId: String,
         seasonNumbers: List<Int>,
         language: String = "en"
+    ): Map<Pair<Int, Int>, TmdbEpisodeEnrichment> {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        val key = "$tmdbId:${seasonNumbers.distinct().sorted().joinToString(",")}:$normalizedLanguage"
+        return episodeFlights.await(key) { loadEpisodeEnrichment(tmdbId, seasonNumbers, normalizedLanguage) }
+    }
+
+    private suspend fun loadEpisodeEnrichment(
+        tmdbId: String,
+        seasonNumbers: List<Int>,
+        language: String
     ): Map<Pair<Int, Int>, TmdbEpisodeEnrichment> = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val cacheKey = "$tmdbId:${seasonNumbers.sorted().joinToString(",")}:$normalizedLanguage"
@@ -378,18 +561,44 @@ class TmdbMetadataService @Inject constructor(
         mediaType: String,
         language: String = "en",
         maxItems: Int = 12
-    ): List<TmdbMetaPreview> = withContext(Dispatchers.IO) {
+    ): List<TitleCardProjection> {
+        return fetchRecommendationsPage(tmdbId, mediaType, language, page = 1, maxItems = maxItems).items
+    }
+
+    suspend fun fetchRecommendationsPage(
+        tmdbId: String,
+        mediaType: String,
+        language: String = "en",
+        page: Int,
+        maxItems: Int = 20
+    ): TmdbDiscoveryPage {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
-        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage:recs:$maxItems"
+        val safePage = page.coerceIn(1, 500)
+        val key = "$tmdbId:$tmdbType:$normalizedLanguage:recs:$safePage:${maxItems.coerceAtLeast(0)}"
+        return recommendationFlights.await(key) {
+            loadRecommendations(tmdbId, mediaType, normalizedLanguage, safePage, maxItems)
+        }
+    }
+
+    private suspend fun loadRecommendations(
+        tmdbId: String,
+        mediaType: String,
+        language: String,
+        page: Int,
+        maxItems: Int
+    ): TmdbDiscoveryPage = withContext(Dispatchers.IO) {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
+        val cacheKey = "$tmdbId:$tmdbType:$normalizedLanguage:recs:$page:$maxItems"
         recommendationsCache.get(cacheKey)?.let { return@withContext it }
 
-        val numericId = tmdbId.toIntOrNull() ?: return@withContext emptyList()
+        val numericId = tmdbId.toIntOrNull() ?: return@withContext TmdbDiscoveryPage(emptyList(), page, false)
 
         try {
             val recommendations = when (tmdbType) {
-                "tv" -> tmdbApi.getTvRecommendations(numericId, apiKey, normalizedLanguage).body()
-                else -> tmdbApi.getMovieRecommendations(numericId, apiKey, normalizedLanguage).body()
+                "tv" -> tmdbApi.getTvRecommendations(numericId, apiKey, normalizedLanguage, page).body()
+                else -> tmdbApi.getMovieRecommendations(numericId, apiKey, normalizedLanguage, page).body()
             }
 
             val rawResults = recommendations?.results.orEmpty().filter { it.id > 0 }
@@ -429,16 +638,19 @@ class TmdbMetadataService @Inject constructor(
                     releaseInfo = rec.releaseDate?.take(4) ?: rec.firstAirDate?.take(4),
                     rating = rec.voteAverage
                 )
-            }
+            }.mapNotNull(TmdbMetaPreview::toCanonicalProjection)
 
-            recommendationsCache.put(cacheKey, items)
-            items
+            TmdbDiscoveryPage(
+                items = items,
+                page = page,
+                hasMore = page < (recommendations?.totalPages ?: 1).coerceAtMost(500)
+            ).also { recommendationsCache.put(cacheKey, it) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
             com.saab.tv.AppDiagnostics.failure("TMDB", "Recommendations Failed", e)
             Log.w(TAG, "Failed to fetch recommendations for $tmdbId: ${e.message}")
-            emptyList()
+            TmdbDiscoveryPage(emptyList(), page, hasMore = false)
         }
     }
 
@@ -448,7 +660,17 @@ class TmdbMetadataService @Inject constructor(
     suspend fun fetchCollection(
         collectionId: Int,
         language: String = "en"
-    ): List<TmdbMetaPreview> = withContext(Dispatchers.IO) {
+    ): List<TitleCardProjection> {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        return collectionFlights.await("$collectionId:$normalizedLanguage:collection") {
+            loadCollection(collectionId, normalizedLanguage)
+        }
+    }
+
+    private suspend fun loadCollection(
+        collectionId: Int,
+        language: String
+    ): List<TitleCardProjection> = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val cacheKey = "$collectionId:$normalizedLanguage:collection"
         collectionCache.get(cacheKey)?.let { return@withContext it }
@@ -469,7 +691,7 @@ class TmdbMetadataService @Inject constructor(
                     releaseInfo = part.releaseDate?.take(4),
                     rating = part.voteAverage
                 )
-            }
+            }.mapNotNull(TmdbMetaPreview::toCanonicalProjection)
 
             collectionCache.put(cacheKey, items)
             items
@@ -488,6 +710,16 @@ class TmdbMetadataService @Inject constructor(
     suspend fun fetchPersonDetail(
         personId: Int,
         language: String = "en"
+    ): TmdbPersonDetail? {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        return personFlights.await("$personId:$normalizedLanguage:person") {
+            loadPersonDetail(personId, normalizedLanguage)
+        }
+    }
+
+    private suspend fun loadPersonDetail(
+        personId: Int,
+        language: String
     ): TmdbPersonDetail? = withContext(Dispatchers.IO) {
         val normalizedLanguage = normalizeTmdbLanguage(language)
         val cacheKey = "$personId:$normalizedLanguage"
@@ -524,7 +756,9 @@ class TmdbMetadataService @Inject constructor(
             } ?: false
 
             val movieCredits = mapCredits(credits?.cast.orEmpty(), credits?.crew.orEmpty(), "movie", preferCrew)
+                .mapNotNull(TmdbMetaPreview::toCanonicalProjection)
             val tvCredits = mapCredits(credits?.cast.orEmpty(), credits?.crew.orEmpty(), "tv", preferCrew)
+                .mapNotNull(TmdbMetaPreview::toCanonicalProjection)
 
             val detail = TmdbPersonDetail(
                 tmdbId = person.id,
@@ -556,6 +790,18 @@ class TmdbMetadataService @Inject constructor(
         tmdbId: String,
         mediaType: String,
         language: String = "en"
+    ): List<TmdbVideoInfo> {
+        val type = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        return videoFlights.await("$tmdbId:$type:$normalizedLanguage:videos") {
+            loadVideos(tmdbId, type, normalizedLanguage)
+        }
+    }
+
+    private suspend fun loadVideos(
+        tmdbId: String,
+        mediaType: String,
+        language: String
     ): List<TmdbVideoInfo> = withContext(Dispatchers.IO) {
         val numericId = tmdbId.toIntOrNull() ?: return@withContext emptyList()
         val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
@@ -604,6 +850,18 @@ class TmdbMetadataService @Inject constructor(
         tmdbId: String,
         mediaType: String,
         language: String = "en"
+    ): TmdbVideoInfo? {
+        val type = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        return bestTrailerFlights.await("$tmdbId:$type:$normalizedLanguage:best-trailer") {
+            loadBestTrailerKey(tmdbId, type, normalizedLanguage)
+        }
+    }
+
+    private suspend fun loadBestTrailerKey(
+        tmdbId: String,
+        mediaType: String,
+        language: String
     ): TmdbVideoInfo? = withContext(Dispatchers.IO) {
         val numericId = tmdbId.toIntOrNull() ?: return@withContext null
         val tmdbType = if (mediaType == "tv" || mediaType == "series") "tv" else "movie"
@@ -666,6 +924,13 @@ class TmdbMetadataService @Inject constructor(
     suspend fun fetchEntityDetail(
         entityId: Int,
         kind: String // "company" or "network"
+    ): TmdbEntityDetail? = entityFlights.await("$kind:$entityId:entity") {
+        loadEntityDetail(entityId, kind)
+    }
+
+    private suspend fun loadEntityDetail(
+        entityId: Int,
+        kind: String
     ): TmdbEntityDetail? = withContext(Dispatchers.IO) {
         try {
             if (kind == "network") {
@@ -708,7 +973,24 @@ class TmdbMetadataService @Inject constructor(
         voteCountGte: Int? = null,
         dateLte: String? = null,
         language: String = "en"
-    ): Pair<List<TmdbMetaPreview>, Int> = withContext(Dispatchers.IO) {
+    ): Pair<List<TitleCardProjection>, Int> {
+        val normalizedLanguage = normalizeTmdbLanguage(language)
+        val key = "$kind:$entityId:$mediaType:$sortBy:$page:$voteCountGte:$dateLte:$normalizedLanguage"
+        return entityDiscoveryFlights.await(key) {
+            loadDiscover(entityId, kind, mediaType, sortBy, page, voteCountGte, dateLte, normalizedLanguage)
+        }
+    }
+
+    private suspend fun loadDiscover(
+        entityId: Int,
+        kind: String,
+        mediaType: String,
+        sortBy: String,
+        page: Int,
+        voteCountGte: Int?,
+        dateLte: String?,
+        language: String
+    ): Pair<List<TitleCardProjection>, Int> = withContext(Dispatchers.IO) {
         try {
             val normalizedLanguage = normalizeTmdbLanguage(language)
             val resp = if (mediaType == "movie") {
@@ -737,7 +1019,7 @@ class TmdbMetadataService @Inject constructor(
                     description = r.overview?.takeIf { it.isNotBlank() },
                     releaseInfo = year, rating = r.voteAverage
                 )
-            } ?: emptyList()
+            }?.mapNotNull(TmdbMetaPreview::toCanonicalProjection) ?: emptyList()
             Pair(items, resp?.totalPages ?: 1)
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -752,9 +1034,32 @@ class TmdbMetadataService @Inject constructor(
         intent: TmdbNaturalQuery,
         language: String = "en",
         maxItems: Int = 30
-    ): List<TmdbMetaPreview> = withContext(Dispatchers.IO) {
+    ): List<TitleCardProjection> {
+        return discoverByIntentPage(intent, language, page = 1, maxItems = maxItems).items
+    }
+
+    suspend fun discoverByIntentPage(
+        intent: TmdbNaturalQuery,
+        language: String = "en",
+        page: Int,
+        maxItems: Int = 30
+    ): TmdbDiscoveryPage {
         val responseLanguage = normalizeTmdbLanguage(language)
-        val cacheKey = "$intent:$responseLanguage:$maxItems"
+        val safePage = page.coerceIn(1, 500)
+        val key = "$intent:$responseLanguage:$safePage:${maxItems.coerceAtLeast(0)}"
+        return discoverFlights.await(key) {
+            loadDiscoverByIntent(intent, responseLanguage, safePage, maxItems)
+        }
+    }
+
+    private suspend fun loadDiscoverByIntent(
+        intent: TmdbNaturalQuery,
+        language: String,
+        page: Int,
+        maxItems: Int
+    ): TmdbDiscoveryPage = withContext(Dispatchers.IO) {
+        val responseLanguage = normalizeTmdbLanguage(language)
+        val cacheKey = "$intent:$responseLanguage:$page:$maxItems"
         discoverCache.get(cacheKey)?.let { return@withContext it }
         val types = intent.mediaType?.let(::listOf) ?: listOf("movie", "tv")
         try {
@@ -763,7 +1068,7 @@ class TmdbMetadataService @Inject constructor(
                     val genreIds = if (type == "tv") intent.tvGenreIds ?: intent.genreIds else intent.genreIds
                     val response = if (type == "tv") {
                         tmdbApi.discoverTv(
-                            apiKey = apiKey, language = responseLanguage, page = 1,
+                            apiKey = apiKey, language = responseLanguage, page = page,
                             sortBy = if (intent.sortBy == "release_date.desc") "first_air_date.desc" else intent.sortBy,
                             firstAirDateGte = intent.releaseDateGte,
                             firstAirDateLte = intent.releaseDateLte,
@@ -773,7 +1078,7 @@ class TmdbMetadataService @Inject constructor(
                         )
                     } else {
                         tmdbApi.discoverMovies(
-                            apiKey = apiKey, language = responseLanguage, page = 1,
+                            apiKey = apiKey, language = responseLanguage, page = page,
                             sortBy = if (intent.sortBy == "release_date.desc") "primary_release_date.desc" else intent.sortBy,
                             releaseDateGte = intent.releaseDateGte,
                             releaseDateLte = intent.releaseDateLte,
@@ -782,10 +1087,11 @@ class TmdbMetadataService @Inject constructor(
                             withOriginalLanguage = intent.originalLanguage
                         )
                     }
-                    type to response.body()?.results.orEmpty()
+                    val body = response.body()
+                    type to Triple(body?.results.orEmpty(), body?.totalPages ?: 1, !response.isSuccessful)
                 } }.awaitAll()
             }
-            val previews = results.flatMap { (type, items) -> items.mapNotNull { result ->
+            val previews = results.flatMap { (type, pageResult) -> pageResult.first.mapNotNull { result ->
                 val title = result.title?.takeIf(String::isNotBlank)
                     ?: result.name?.takeIf(String::isNotBlank)
                     ?: result.originalTitle?.takeIf(String::isNotBlank)
@@ -808,15 +1114,21 @@ class TmdbMetadataService @Inject constructor(
                 "release_date.desc" -> previews.sortedByDescending { it.releaseInfo ?: "" }
                 else -> previews.sortedByDescending { it.rating ?: 0.0 }
             }
-            val items = if (intent.mediaType == null) mixTmdbMediaTypes(sorted, maxItems) else sorted.take(maxItems)
-            discoverCache.put(cacheKey, items)
-            items
+            val projections = sorted.mapNotNull(TmdbMetaPreview::toCanonicalProjection)
+            val items = if (intent.mediaType == null) mixTmdbMediaTypes(projections, maxItems) else projections.take(maxItems)
+            val failed = results.any { it.second.third }
+            TmdbDiscoveryPage(
+                items = items,
+                page = page,
+                hasMore = page < (results.maxOfOrNull { it.second.second } ?: 1).coerceAtMost(500),
+                failed = failed
+            ).also { if (!it.failed) discoverCache.put(cacheKey, it) }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             com.saab.tv.AppDiagnostics.failure("TMDB", "Intent Discovery Failed", failure)
             Log.w(TAG, "TMDB discovery failed: ${failure.message}")
-            emptyList()
+            TmdbDiscoveryPage(emptyList(), page, hasMore = false, failed = true)
         }
     }
 
@@ -918,34 +1230,42 @@ class TmdbMetadataService @Inject constructor(
         }.distinct()
     }
 
-    private fun selectMovieAgeRating(countries: List<TmdbMovieReleaseDateCountry>, normalizedLanguage: String): String? {
+    private fun selectMovieAgeRating(countries: List<TmdbMovieReleaseDateCountry>, normalizedLanguage: String): AgeRatingSelection? {
         val preferred = preferredRegions(normalizedLanguage)
         val byRegion = countries.associateBy { it.iso31661?.uppercase(Locale.US) }
         preferred.forEach { region ->
             val rating = byRegion[region]?.releaseDates.orEmpty()
                 .mapNotNull { it.certification?.trim() }
                 .firstOrNull { it.isNotBlank() }
-            if (!rating.isNullOrBlank()) return rating
+            if (!rating.isNullOrBlank()) return AgeRatingSelection(rating, region)
         }
-        return countries.asSequence()
-            .flatMap { it.releaseDates.orEmpty().asSequence() }
-            .mapNotNull { it.certification?.trim() }
-            .firstOrNull { it.isNotBlank() }
+        return countries.asSequence().mapNotNull { country ->
+            val rating = country.releaseDates.orEmpty().mapNotNull { it.certification?.trim() }
+                .firstOrNull { it.isNotBlank() } ?: return@mapNotNull null
+            AgeRatingSelection(rating, country.iso31661?.uppercase(Locale.US))
+        }.firstOrNull()
     }
 
-    private fun selectTvAgeRating(ratings: List<TmdbTvContentRatingItem>, normalizedLanguage: String): String? {
+    private fun selectTvAgeRating(ratings: List<TmdbTvContentRatingItem>, normalizedLanguage: String): AgeRatingSelection? {
         val preferred = preferredRegions(normalizedLanguage)
         val byRegion = ratings.associateBy { it.iso31661?.uppercase(Locale.US) }
         preferred.forEach { region ->
             val rating = byRegion[region]?.rating?.trim()
-            if (!rating.isNullOrBlank()) return rating
+            if (!rating.isNullOrBlank()) return AgeRatingSelection(rating, region)
         }
-        return ratings.mapNotNull { it.rating?.trim() }.firstOrNull { it.isNotBlank() }
+        return ratings.firstNotNullOfOrNull { item ->
+            item.rating?.trim()?.takeIf(String::isNotBlank)?.let {
+                AgeRatingSelection(it, item.iso31661?.uppercase(Locale.US))
+            }
+        }
     }
 
     companion object {
+        private const val HOME_METADATA_MAX_AGE_MILLIS = 7L * 24 * 60 * 60 * 1_000
+        private const val DETAILS_METADATA_MAX_AGE_MILLIS = 7L * 24 * 60 * 60 * 1_000
         private val DEFAULT_LANGUAGE_REGIONS = mapOf("pt" to "PT", "es" to "ES")
     }
 }
 
 private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+private data class AgeRatingSelection(val value: String, val region: String?)

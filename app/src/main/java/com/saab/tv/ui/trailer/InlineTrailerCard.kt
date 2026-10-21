@@ -18,20 +18,32 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.media3.exoplayer.ExoPlayer
+import com.saab.tv.R
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.ui.navigation.isBackOrEscape
+import com.saab.tv.ui.navigation.isInitialBackPress
 
 /** The host owns the single decoder; the preview overlay attaches its view. */
 internal class InlineTrailerSession(
     val owner: Any, val item: MetaItem, val player: ExoPlayer,
-    val onInteraction: () -> Unit, val onMute: () -> Unit, val onWatch: () -> Unit,
+    val onInteraction: () -> Unit, val onMute: () -> Unit, val onWatch: (MetaItem) -> Unit,
     val onWatchlist: () -> Unit, val onFullscreen: () -> Unit, val onDismiss: () -> Unit,
     val onNavigate: (FocusDirection) -> Unit,
     val onEpisodes: (() -> Unit)? = null
 ) {
+    private var startWatchingRequested = false
     var muted by mutableStateOf(true)
     var watchlisted by mutableStateOf(false)
     var controlsVisible by mutableStateOf(true)
+
+    /** A held/repeated remote select can never launch playback twice. */
+    fun startWatching() {
+        if (startWatchingRequested) return
+        startWatchingRequested = true
+        onWatch(item)
+    }
 }
 
 @Composable
@@ -40,6 +52,7 @@ internal fun InlineTrailerCard(session: InlineTrailerSession, renderVideo: Boole
     val playRequester = remember(session) { FocusRequester() }
     var rootFocused by remember { mutableStateOf(false) }
     var revealingKey by remember { mutableStateOf<Key?>(null) }
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction(session.onDismiss)
     fun moveToTitle(direction: FocusDirection) {
         session.onNavigate(direction)
     }
@@ -51,8 +64,8 @@ internal fun InlineTrailerCard(session: InlineTrailerSession, renderVideo: Boole
     }
     Column(Modifier.fillMaxSize().background(if (renderVideo) Color(0xFF151515) else Color.Transparent)
         .onPreviewKeyEvent { event ->
-            if (event.key == Key.Back || event.key == Key.Escape) {
-                if (event.type == KeyEventType.KeyUp) session.onDismiss()
+            if (event.isBackOrEscape()) {
+                if (event.isInitialBackPress()) dispatchBackFromKey()
                 return@onPreviewKeyEvent true
             }
             if (event.key == revealingKey) {
@@ -88,17 +101,17 @@ internal fun InlineTrailerCard(session: InlineTrailerSession, renderVideo: Boole
             if (session.controlsVisible) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)) {
                     InlineAction(if (session.muted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                        if (session.muted) "Unmute" else "Mute", session.onMute,
+                        if (session.muted) stringResource(R.string.player_unmute) else stringResource(R.string.player_mute), session.onMute,
                         Modifier.onPreviewKeyEvent {
                             if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft) {
                                 moveToTitle(FocusDirection.Left); true
                             } else false
                         })
-                    InlineAction(Icons.Default.PlayArrow, "Start Watching", session.onWatch,
+                    InlineAction(Icons.Default.PlayArrow, stringResource(R.string.player_start_watching), session::startWatching,
                         Modifier.focusRequester(playRequester))
                     InlineAction(if (session.watchlisted) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                        if (session.watchlisted) "Remove From Watchlist" else "Add To Watchlist", session.onWatchlist)
-                    InlineAction(Icons.Default.Fullscreen, "Fullscreen", session.onFullscreen,
+                        if (session.watchlisted) stringResource(R.string.quick_action_remove_watchlist) else stringResource(R.string.details_action_add_watchlist), session.onWatchlist)
+                    InlineAction(Icons.Default.Fullscreen, stringResource(R.string.playback_fullscreen), session.onFullscreen,
                         Modifier.onPreviewKeyEvent {
                             if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionRight) {
                                 moveToTitle(FocusDirection.Right); true

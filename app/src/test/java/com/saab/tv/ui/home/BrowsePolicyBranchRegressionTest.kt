@@ -2,7 +2,8 @@ package com.saab.tv.ui.home
 
 import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.model.stremio.MetaItem
-import com.saab.tv.ui.details.seriesResumeActionLabel
+import com.saab.tv.ui.details.SeriesResumeActionKind
+import com.saab.tv.ui.details.seriesResumeActionKind
 import com.saab.tv.ui.trailer.TrailerPreviewPolicy
 import com.saab.tv.ui.watchlist.WatchlistFocusPolicy
 import com.saab.tv.ui.watchlist.WatchlistFocusTarget
@@ -26,23 +27,24 @@ class BrowsePolicyBranchRegressionTest {
         assertTrue(ContinueResumePolicy.mayReuseOpenStream(""))
     }
     @Test fun previewMetadataPriorityWorksAtEveryFallbackLevel() {
-        val current = MetaItem(id = "current")
-        val enriched = MetaItem(id = "enriched")
-        val hero = MetaItem(id = "hero")
-        val row = MetaItem(id = "row")
-        val history = MetaItem(id = "history")
-        assertSame(enriched, HomePreviewMetadataPolicy.select(current, enriched, hero, row, history))
-        assertSame(hero, HomePreviewMetadataPolicy.select(current, null, hero, row, history))
-        assertSame(row, HomePreviewMetadataPolicy.select(current, null, null, row, history))
-        assertSame(history, HomePreviewMetadataPolicy.select(current, null, null, null, history))
+        val current = MetaItem(id = "tt123", type = "movie")
+        // Each fallback describes the same title. Foreign IDs must never win this policy.
+        val enriched = current.copy(imdbRating = "8.4")
+        val hero = current.copy(imdbRating = "8.3")
+        val row = current.copy(imdbRating = "8.2")
+        val history = current.copy(imdbRating = "8.1")
+        assertEquals("8.4", HomePreviewMetadataPolicy.select(current, enriched, hero, row, history).imdbRating)
+        assertEquals("8.3", HomePreviewMetadataPolicy.select(current, null, hero, row, history).imdbRating)
+        assertEquals("8.2", HomePreviewMetadataPolicy.select(current, null, null, row, history).imdbRating)
+        assertEquals("8.1", HomePreviewMetadataPolicy.select(current, null, null, null, history).imdbRating)
         assertSame(current, HomePreviewMetadataPolicy.select(current, null, null, null, null))
     }
-    @Test fun labelsNeverInventMissingSeasonOrEpisode() {
-        assertEquals("Resume S2 E4", seriesResumeActionLabel(2, 4, false))
-        assertEquals("Play Next S2 E4", seriesResumeActionLabel(2, 4, true))
+    @Test fun resumeActionOnlyIncludesSeasonAndEpisodeWhenBothAreKnown() {
+        assertEquals(SeriesResumeActionKind.RESUME_EPISODE, seriesResumeActionKind(2, 4, false))
+        assertEquals(SeriesResumeActionKind.PLAY_NEXT_EPISODE, seriesResumeActionKind(2, 4, true))
         for ((season, episode) in listOf(null to null, 2 to null, null to 4)) {
-            assertEquals("Resume", seriesResumeActionLabel(season, episode, false))
-            assertEquals("Play Next Episode", seriesResumeActionLabel(season, episode, true))
+            assertEquals(SeriesResumeActionKind.RESUME, seriesResumeActionKind(season, episode, false))
+            assertEquals(SeriesResumeActionKind.PLAY_NEXT, seriesResumeActionKind(season, episode, true))
         }
     }
     @Test fun hoverPreviewRespectsSearchContinueWatchingAndDismissal() {

@@ -18,6 +18,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -28,6 +29,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.saab.tv.remote_input.ServerInfo
 import com.saab.tv.remote_input.ServerManager
 import com.saab.tv.remote_input.RemoteInputMode
+import com.saab.tv.R
 import kotlinx.coroutines.delay
 
 /**
@@ -39,11 +41,11 @@ fun RemotePasteDialog(
     onDismissRequest: () -> Unit,
     onUrlReceived: (String) -> Unit,
     mode: RemoteInputMode = RemoteInputMode.URL,
-    title: String = "Remote Paste",
-    description: String = "Scan with your phone to paste a URL"
+    title: String? = null,
+    description: String? = null
 ) {
     var serverInfo by remember { mutableStateOf<ServerInfo?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableIntStateOf(0) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     
     val serverManager = remember { ServerManager() }
@@ -64,7 +66,7 @@ fun RemotePasteDialog(
             serverInfo = info
             qrBitmap = generateQrCode(info.url)
         } else {
-            error = "Secure pairing unavailable. Check your internet connection and try again."
+            error = R.string.remote_paste_unavailable
         }
     }
 
@@ -72,7 +74,7 @@ fun RemotePasteDialog(
         if (serverInfo != null) {
             delay(5 * 60_000L)
             serverManager.stopServer()
-            error = "Pairing expired. Close and reopen for a new QR code."
+            error = R.string.remote_paste_expired
         }
     }
 
@@ -102,13 +104,13 @@ fun RemotePasteDialog(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    title,
+                    title ?: stringResource(R.string.remote_paste_title),
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = Color.White
                 )
                 
                 Text(
-                    description,
+                    description ?: stringResource(R.string.remote_paste_description),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray,
                     modifier = Modifier.padding(top = 8.dp)
@@ -120,9 +122,9 @@ fun RemotePasteDialog(
                 val currentQrBitmap = qrBitmap
                 val currentServerInfo = serverInfo
                 when {
-                    currentError != null -> {
+                    currentError != 0 -> {
                         Text(
-                            currentError,
+                            stringResource(currentError),
                             color = MaterialTheme.colorScheme.error,
                             textAlign = TextAlign.Center
                         )
@@ -138,7 +140,7 @@ fun RemotePasteDialog(
                         ) {
                             Image(
                                 bitmap = currentQrBitmap.asImageBitmap(),
-                                contentDescription = "QR Code",
+                                contentDescription = stringResource(R.string.remote_paste_qr_code),
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -147,7 +149,7 @@ fun RemotePasteDialog(
                         
                         // Manual URL
                         Text(
-                            "Private QR · expires in 5 minutes",
+                            stringResource(R.string.remote_paste_expiration),
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Gray
                         )
@@ -169,7 +171,7 @@ fun RemotePasteDialog(
                         )
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            "Connecting securely…",
+                            stringResource(R.string.remote_paste_connecting),
                             color = Color.Gray
                         )
                     }

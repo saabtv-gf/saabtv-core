@@ -8,6 +8,8 @@ import android.os.Process
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.saab.tv.data.cache.SeekThumbnailWorkerService
+import com.saab.tv.data.localization.AppLanguage
+import com.saab.tv.ui.components.SaabMotion
 import dagger.hilt.android.HiltAndroidApp
 import org.acra.config.httpSender
 import org.acra.config.toast
@@ -26,7 +28,7 @@ class SaabTvApplication : Application(), ImageLoaderFactory {
     lateinit var startupOptimizer: dagger.Lazy<StartupOptimizer>
 
     override fun attachBaseContext(base: Context) {
-        super.attachBaseContext(base)
+        super.attachBaseContext(AppLanguage.localizedContext(base))
 
         // Do not claim that crash reports are sent when this self-built APK has no
         // configured, authenticated crash endpoint.
@@ -52,6 +54,7 @@ class SaabTvApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         if (isHelperProcess()) return
+        SaabMotion.initialize(this)
         AppHealthMonitor.install(this)
         AppDiagnostics.install(this)
         TvLauncherManager.configure(this)

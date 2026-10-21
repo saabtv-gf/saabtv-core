@@ -4,8 +4,15 @@ import android.content.Context
 import android.util.Log
 import android.util.LruCache
 import com.saab.tv.data.security.SecurePreferences
+import com.saab.tv.data.cache.SingleFlight
+import com.saab.tv.data.cache.metadataRequestScope
+import com.saab.tv.data.repository.CanonicalIdentityStore
+import com.saab.tv.data.repository.CanonicalMetadataRepository
 import com.saab.tv.BuildConfig
 import com.saab.tv.data.remote.TmdbApiService
+import com.saab.tv.domain.schema.ContentIdentity
+import com.saab.tv.domain.schema.ContentKind
+import com.saab.tv.domain.schema.IdentityNamespace
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -19,10 +26,22 @@ import java.io.IOException
 private const val TAG = "TmdbService"
 
 @Singleton
-class TmdbService @Inject constructor(
+class TmdbService private constructor(
     @ApplicationContext context: Context,
-    private val tmdbApi: TmdbApiService
+    private val tmdbApi: TmdbApiService,
+    private val canonicalIdentityStore: CanonicalIdentityStore
 ) {
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        tmdbApi: TmdbApiService,
+        canonicalMetadataRepository: CanonicalMetadataRepository
+    ) : this(context, tmdbApi, canonicalMetadataRepository as CanonicalIdentityStore)
+
+    /** Lightweight constructor for deterministic service tests without a Room graph. */
+    constructor(@ApplicationContext context: Context, tmdbApi: TmdbApiService) :
+        this(context, tmdbApi, com.saab.tv.data.repository.NoopCanonicalIdentityStore)
+
     companion object {
         private const val PREFS_NAME = "tmdb_credentials"
         private const val KEY_API_KEY = "api_key"
@@ -32,9 +51,14 @@ class TmdbService @Inject constructor(
     private val securePrefs by lazy { SecurePreferences.create(context, PREFS_NAME, KEY_ALIAS) }
     private val prefs get() = securePrefs.preferences
 
+    // Keys include media kind: TMDB 123 can identify both a movie and a series.
     private val imdbToTmdbCache = LruCache<String, Int>(256)
-    private val tmdbToImdbCache = LruCache<Int, String>(256)
+    private val tmdbToImdbCache = LruCache<String, String>(256)
     private val cacheMutex = Mutex()
+    private val requestScope = metadataRequestScope()
+    private val identityLookupPermits = kotlinx.coroutines.sync.Semaphore(2)
+    private val imdbLookupFlights = SingleFlight<String, Int?>(requestScope, sharedPermits = identityLookupPermits)
+    private val tmdbLookupFlights = SingleFlight<String, String?>(requestScope, sharedPermits = identityLookupPermits)
 
     /** Runtime configuration keeps self-built APKs usable without embedding a private key. */
     fun apiKey(): String = prefs.getString(KEY_API_KEY, null)
@@ -43,6 +67,10 @@ class TmdbService @Inject constructor(
         ?: BuildConfig.TMDB_API_KEY.trim()
 
     fun hasApiKey(): Boolean = apiKey().isNotEmpty()
+
+    /** Local-only canonical key lookup used to merge rails without adding network latency. */
+    suspend fun canonicalIdentityKey(identity: ContentIdentity): String =
+        runCatching { canonicalIdentityStore.canonicalKey(identity) }.getOrDefault(identity.stableKey)
 
     fun saveApiKey(apiKey: String): Boolean {
         val cleanKey = apiKey.trim()
@@ -65,38 +93,64 @@ class TmdbService @Inject constructor(
     /**
      * Convert an IMDB ID to a TMDB ID.
      */
-    suspend fun imdbToTmdb(imdbId: String, mediaType: String): Int? = withContext(Dispatchers.IO) {
-        if (!imdbId.startsWith("tt")) return@withContext null
+    suspend fun imdbToTmdb(imdbId: String, mediaType: String): Int? {
+        val kind = ContentKind.fromProvider(mediaType)?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
+            ?: return null
+        val imdbIdentity = ContentIdentity.imdb(kind, imdbId) ?: return null
+        val cleanImdbId = imdbIdentity.externalId
+        val imdbKey = imdbIdentity.stableKey
+        return imdbLookupFlights.await(imdbKey) {
+            resolveImdbToTmdb(cleanImdbId, kind, imdbIdentity)
+        }
+    }
 
-        imdbToTmdbCache[imdbId]?.let { return@withContext it }
+    private suspend fun resolveImdbToTmdb(
+        cleanImdbId: String,
+        kind: ContentKind,
+        imdbIdentity: ContentIdentity
+    ): Int? = withContext(Dispatchers.IO) {
+        val imdbKey = imdbIdentity.stableKey
+        imdbToTmdbCache[imdbKey]?.let { return@withContext it }
+        resolveAliasSafely(imdbIdentity, IdentityNamespace.TMDB)?.externalId?.toIntOrNull()
+            ?.takeIf { ContentIdentity.tmdb(kind, it) != null }
+            ?.let { cachedId ->
+                cacheMutex.withLock {
+                    imdbToTmdbCache.put(imdbKey, cachedId)
+                    ContentIdentity.tmdb(kind, cachedId)?.stableKey?.let { tmdbKey ->
+                        tmdbToImdbCache.put(tmdbKey, cleanImdbId)
+                    }
+                }
+                return@withContext cachedId
+            }
 
         try {
             val response = tmdbApi.findByExternalId(
-                externalId = imdbId,
+                externalId = cleanImdbId,
                 apiKey = apiKey(),
                 externalSource = "imdb_id"
             )
             if (!response.isSuccessful) return@withContext null
 
             val body = response.body() ?: return@withContext null
-            val normalizedType = normalizeMediaType(mediaType)
-            val result = when (normalizedType) {
-                "movie" -> body.movieResults?.firstOrNull()
-                "tv" -> body.tvResults?.firstOrNull()
-                else -> body.movieResults?.firstOrNull() ?: body.tvResults?.firstOrNull()
+            val resultWithKind = when (kind) {
+                ContentKind.MOVIE -> body.movieResults?.firstOrNull()?.let { it to ContentKind.MOVIE }
+                ContentKind.SERIES -> body.tvResults?.firstOrNull()?.let { it to ContentKind.SERIES }
+                else -> null
             }
 
-            result?.let { found ->
+            resultWithKind?.let { (found, resultKind) ->
+                val tmdbIdentity = ContentIdentity.tmdb(resultKind, found.id) ?: return@withContext null
                 cacheMutex.withLock {
-                    imdbToTmdbCache.put(imdbId, found.id)
-                    tmdbToImdbCache.put(found.id, imdbId)
+                    imdbToTmdbCache.put(imdbKey, found.id)
+                    tmdbToImdbCache.put(tmdbIdentity.stableKey, cleanImdbId)
                 }
+                rememberAliasSafely(imdbIdentity, tmdbIdentity)
                 found.id
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
-            recordLookupFailure("IMDb Lookup", imdbId, e)
+            recordLookupFailure("IMDb Lookup", cleanImdbId, e)
             null
         }
     }
@@ -104,23 +158,49 @@ class TmdbService @Inject constructor(
     /**
      * Convert a TMDB ID to an IMDB ID.
      */
-    suspend fun tmdbToImdb(tmdbId: Int, mediaType: String): String? = withContext(Dispatchers.IO) {
-        tmdbToImdbCache[tmdbId]?.let { return@withContext it }
+    suspend fun tmdbToImdb(tmdbId: Int, mediaType: String): String? {
+        val kind = ContentKind.fromProvider(mediaType)?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
+            ?: return null
+        val tmdbIdentity = ContentIdentity.tmdb(kind, tmdbId) ?: return null
+        return tmdbLookupFlights.await(tmdbIdentity.stableKey) {
+            resolveTmdbToImdb(tmdbId, kind, tmdbIdentity)
+        }
+    }
+
+    private suspend fun resolveTmdbToImdb(
+        tmdbId: Int,
+        kind: ContentKind,
+        tmdbIdentity: ContentIdentity
+    ): String? = withContext(Dispatchers.IO) {
+        val tmdbKey = tmdbIdentity.stableKey
+        tmdbToImdbCache[tmdbKey]?.let { return@withContext it }
+        resolveAliasSafely(tmdbIdentity, IdentityNamespace.IMDB)?.externalId?.let { cachedImdbId ->
+            cacheMutex.withLock {
+                tmdbToImdbCache.put(tmdbKey, cachedImdbId)
+                ContentIdentity.imdb(kind, cachedImdbId)?.stableKey?.let { imdbKey ->
+                    imdbToTmdbCache.put(imdbKey, tmdbId)
+                }
+            }
+            return@withContext cachedImdbId
+        }
 
         try {
-            val normalizedType = normalizeMediaType(mediaType)
-            val response = when (normalizedType) {
-                "movie" -> tmdbApi.getMovieExternalIds(tmdbId, apiKey())
+            val response = when (kind) {
+                ContentKind.MOVIE -> tmdbApi.getMovieExternalIds(tmdbId, apiKey())
                 else -> tmdbApi.getTvExternalIds(tmdbId, apiKey())
             }
             if (!response.isSuccessful) return@withContext null
 
             val body = response.body() ?: return@withContext null
-            body.imdbId?.let { imdbId ->
+            if (body.id != tmdbId) return@withContext null
+            val imdbIdentity = ContentIdentity.imdb(kind, body.imdbId ?: return@withContext null)
+                ?: return@withContext null
+            imdbIdentity.externalId.let { imdbId ->
                 cacheMutex.withLock {
-                    tmdbToImdbCache.put(tmdbId, imdbId)
-                    imdbToTmdbCache.put(imdbId, tmdbId)
+                    tmdbToImdbCache.put(tmdbKey, imdbId)
+                    imdbToTmdbCache.put(imdbIdentity.stableKey, tmdbId)
                 }
+                rememberAliasSafely(imdbIdentity, tmdbIdentity)
                 imdbId
             }
         } catch (cancelled: CancellationException) {
@@ -145,6 +225,34 @@ class TmdbService @Inject constructor(
         }
     }
 
+    private suspend fun resolveAliasSafely(
+        identity: ContentIdentity,
+        targetNamespace: IdentityNamespace
+    ): ContentIdentity? = try {
+        canonicalIdentityStore.resolveAlias(identity, targetNamespace)
+            ?.takeIf { it.kind == identity.kind && it.namespace == targetNamespace }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        com.saab.tv.AppDiagnostics.event(
+            "TMDB", "Identity Cache Read Failed", "exception=${failure.javaClass.simpleName}"
+        )
+        null
+    }
+
+    private suspend fun rememberAliasSafely(left: ContentIdentity, right: ContentIdentity) {
+        try {
+            canonicalIdentityStore.linkVerifiedIdentities(left, right)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // A local cache write must not turn a successful remote mapping into a playback/UI error.
+            com.saab.tv.AppDiagnostics.event(
+                "TMDB", "Identity Cache Write Failed", "exception=${failure.javaClass.simpleName}"
+            )
+        }
+    }
+
     /**
      * Get a TMDB ID from any video ID format (IMDB, TMDB, prefixed).
      */
@@ -160,21 +268,24 @@ class TmdbService @Inject constructor(
             .substringBefore('/')
             .trim()
 
+        val kind = ContentKind.fromProvider(mediaType)?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
+            ?: return null
         if (idPart.startsWith("tt")) {
-            return imdbToTmdb(idPart, normalizeMediaType(mediaType))?.toString()
+            val imdbIdentity = ContentIdentity.imdb(kind, idPart) ?: return null
+            return imdbToTmdb(imdbIdentity.externalId, mediaType)?.toString()
         }
 
-        if (idPart.all { it.isDigit() }) return idPart
+        return ContentIdentity.tmdb(kind, idPart)?.externalId.also {
+            if (it == null) Log.w(TAG, "Unknown video ID format: $videoId")
+        }
 
-        Log.w(TAG, "Unknown video ID format: $videoId")
-        return null
     }
 
     fun normalizeMediaType(mediaType: String): String {
-        return when (mediaType.lowercase()) {
-            "series", "tv", "show", "tvshow" -> "tv"
-            "movie", "film" -> "movie"
-            else -> mediaType.lowercase()
+        return when (ContentKind.fromProvider(mediaType)) {
+            ContentKind.SERIES -> "tv"
+            ContentKind.MOVIE -> "movie"
+            else -> mediaType.trim().lowercase()
         }
     }
 
@@ -183,8 +294,16 @@ class TmdbService @Inject constructor(
         tmdbToImdbCache.evictAll()
     }
 
-    fun preCacheMapping(imdbId: String, tmdbId: Int) {
-        imdbToTmdbCache.put(imdbId, tmdbId)
-        tmdbToImdbCache.put(tmdbId, imdbId)
+    suspend fun preCacheMapping(imdbId: String, tmdbId: Int, mediaType: String) {
+        val kind = ContentKind.fromProvider(mediaType)?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
+            ?: return
+        val imdbKey = ContentIdentity.imdb(kind, imdbId)?.stableKey ?: return
+        val tmdbKey = ContentIdentity.tmdb(kind, tmdbId)?.stableKey ?: return
+        imdbToTmdbCache.put(imdbKey, tmdbId)
+        tmdbToImdbCache.put(tmdbKey, imdbId.trim())
+        rememberAliasSafely(
+            ContentIdentity.imdb(kind, imdbId) ?: return,
+            ContentIdentity.tmdb(kind, tmdbId) ?: return
+        )
     }
 }

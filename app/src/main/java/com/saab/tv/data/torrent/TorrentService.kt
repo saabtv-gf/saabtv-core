@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.saab.tv.R
 import com.saab.tv.BuildConfig
 
 import dagger.hilt.android.AndroidEntryPoint
@@ -67,13 +68,17 @@ class TorrentService : Service() {
     private fun startForegroundService() {
         val channelId = "torrent_channel"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(channelId, "Torrent Download", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(
+                channelId,
+                getString(R.string.torrent_notification_channel),
+                NotificationManager.IMPORTANCE_LOW
+            )
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
 
         val notification: Notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Saab TV Streaming")
-            .setContentText("Starting torrent engine...")
+            .setContentTitle(getString(R.string.torrent_notification_title))
+            .setContentText(getString(R.string.torrent_notification_starting))
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .build()
 
@@ -209,7 +214,7 @@ class TorrentService : Service() {
     private fun updateNotification(text: String) {
         val channelId = "torrent_channel"
         val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Saab TV Streaming")
+            .setContentTitle(getString(R.string.torrent_notification_title))
             .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .build()

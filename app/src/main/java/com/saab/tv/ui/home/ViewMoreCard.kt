@@ -1,5 +1,6 @@
 package com.saab.tv.ui.home
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,8 +11,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.saab.tv.R
 import com.saab.tv.ui.components.cardFocusSound
+import com.saab.tv.ui.components.SaabMotion
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,7 +30,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -44,10 +46,17 @@ fun ViewMoreCard(
     modifier: Modifier = Modifier,
     onFocused: (() -> Unit)? = null,
     cardWidth: Dp = 140.dp,
-    isLandscape: Boolean = false
+    isLandscape: Boolean = false,
+    label: String = ""
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val roundCorners = LocalRoundCorners.current
+    val resolvedLabel = label.ifBlank { stringResource(R.string.catalog_view_more) }
+    val focusColor by animateColorAsState(
+        targetValue = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.9f),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
+        label = "view-more-focus-color"
+    )
     
     // Shape based on user preference
     val cardShape = if (roundCorners) RoundedCornerShape(12.dp) else RectangleShape
@@ -57,7 +66,6 @@ fun ViewMoreCard(
         modifier = modifier
             .width(cardWidth)
             .aspectRatio(if (isLandscape) 16f / 9f else 2f / 3f)
-            .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
     ) {
         Surface(
@@ -81,7 +89,7 @@ fun ViewMoreCard(
             ),
             border = ClickableSurfaceDefaults.border(
                 focusedBorder = Border(
-                    border = BorderStroke(4.dp, Color.White),
+                    border = BorderStroke(2.dp, Color.White),
                     shape = focusedCardShape
                 )
             )
@@ -93,17 +101,17 @@ fun ViewMoreCard(
             ) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_view_more_arrow),
-                    contentDescription = "View More",
+                    contentDescription = resolvedLabel,
                     modifier = Modifier.size(48.dp),
-                    tint = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.8f)
+                    tint = focusColor.copy(alpha = if (isFocused) 1f else 0.8f)
                 )
                 Text(
-                    text = "View More",
+                    text = resolvedLabel,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 14.sp
                     ),
-                    color = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.9f)
+                    color = focusColor
                 )
             }
         }

@@ -26,6 +26,8 @@ import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.res.stringResource
+import com.saab.tv.R
 
 /** Focus highlights the field. OK explicitly enables editing; focus alone cannot open the IME. */
 @Composable
@@ -84,8 +86,11 @@ internal fun AccountCredentialField(
             colors = IconButtonDefaults.outlinedIconButtonColors(
                 containerColor = if (eyeFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
                 contentColor = if (eyeFocused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)) {
-            Icon(if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                if (visible) "Hide $label" else "Show $label", modifier = Modifier.size(22.dp))
+            Icon(
+                if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                stringResource(if (visible) R.string.common_hide_field else R.string.common_show_field, label),
+                modifier = Modifier.size(22.dp)
+            )
         }
       }
       if (supportingText != null) Box(Modifier.padding(start = 8.dp, top = 2.dp)) {

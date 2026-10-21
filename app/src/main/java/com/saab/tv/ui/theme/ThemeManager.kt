@@ -3,6 +3,7 @@ package com.saab.tv.ui.theme
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.local.AddonDao
+import com.saab.tv.data.account.UserStateCommandRepository
 import com.saab.tv.data.model.ThemeEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ThemeManager @Inject constructor(
-    private val dao: AddonDao
+    private val dao: AddonDao,
+    private val userStateCommands: UserStateCommandRepository
 ) : ViewModel() {
 
     private val themeRequest = AtomicLong()
@@ -90,7 +92,8 @@ class ThemeManager @Inject constructor(
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             val profile = dao.getProfileById(profileId)
             if (profile != null) {
-                dao.insertProfile(profile.copy(themeId = themeId))
+                val updated = profile.copy(themeId = themeId)
+                userStateCommands.saveProfile(updated)
             }
             // Update current theme if this is the active profile
             if (request != null && themeRequest.get() == request && _currentProfileId.value == profileId) {

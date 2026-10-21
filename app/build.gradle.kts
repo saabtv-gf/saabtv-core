@@ -147,6 +147,7 @@ tasks.register<JacocoCoverageVerification>("verifyCorePolicyRegressionCoverage")
         "com.saab.tv.data.cache.ThumbnailTimelinePolicy*",
         "com.saab.tv.ui.home.ContinueResumePolicy*",
         "com.saab.tv.ui.home.HomePreviewMetadataPolicy*",
+        "com.saab.tv.ui.home.HomeFocusRestorationKt*",
         "com.saab.tv.DiagnosticRecordingPolicy*",
         "com.saab.tv.ui.watchlist.WatchlistFocusPolicy*",
         "com.saab.tv.ui.player.base.PlaybackReliabilityStateMachine*",
@@ -174,6 +175,116 @@ tasks.register<JacocoCoverageVerification>("verifyCorePolicyRegressionCoverage")
             element = "CLASS"
             includes = policyClasses
             listOf("LINE", "BRANCH", "METHOD", "CLASS", "INSTRUCTION").forEach { metric ->
+                limit {
+                    counter = metric
+                    value = "COVEREDRATIO"
+                    minimum = "1.0000".toBigDecimal()
+                }
+            }
+        }
+    }
+}
+
+// New, deterministic schema/merge/cache policies must not silently lose line coverage.
+// This gate uses the merged JVM + connected Android instrumentation execution data.
+tasks.register<JacocoCoverageVerification>("verifyCentralInformationPolicyLineCoverage") {
+    dependsOn("unitRegressionCoverage")
+    classDirectories.setFrom(regressionClasses)
+    executionData.setFrom(regressionExecution)
+    val centralPolicyClasses = listOf(
+        "com.saab.tv.domain.schema.ContentIdentity*",
+        "com.saab.tv.domain.schema.ContentKind*",
+        "com.saab.tv.domain.schema.IdentityNamespace*",
+        "com.saab.tv.domain.schema.CanonicalTextField*",
+        "com.saab.tv.domain.schema.MetadataSource*",
+        "com.saab.tv.domain.schema.CanonicalValueCandidate*",
+        "com.saab.tv.domain.schema.CanonicalValueSelection*",
+        "com.saab.tv.domain.schema.CanonicalValueResolver*",
+        "com.saab.tv.domain.schema.TextFieldCandidate*",
+        "com.saab.tv.domain.schema.TextFieldSelection*",
+        "com.saab.tv.domain.schema.CanonicalFieldResolver*",
+        "com.saab.tv.domain.schema.CanonicalEntityKey*",
+        "com.saab.tv.domain.schema.PlaybackIntent*",
+        "com.saab.tv.domain.schema.TitleCardProjection*",
+        "com.saab.tv.domain.schema.CatalogCardProjection*",
+        "com.saab.tv.domain.schema.TrailerReference*",
+        "com.saab.tv.domain.schema.TrailerStreamReference*",
+        "com.saab.tv.domain.CategoryRow*",
+        "com.saab.tv.domain.schema.ArtworkRole*",
+        "com.saab.tv.domain.schema.ArtworkReference*",
+        "com.saab.tv.domain.schema.RatingProjection*",
+        "com.saab.tv.data.cache.BoundedExpiringCache*",
+        "com.saab.tv.data.ott.ProviderFailureCircuit*",
+        "com.saab.tv.data.repository.CanonicalTitleStore*",
+        "com.saab.tv.data.repository.CanonicalTitleMergePolicy*",
+        "com.saab.tv.data.repository.CanonicalMetadataRepository*",
+        "com.saab.tv.data.repository.CanonicalStremioMetadata*",
+        "com.saab.tv.data.repository.CanonicalMovieMetadataCache*",
+        "com.saab.tv.data.repository.CanonicalCinemetaSeriesCache*",
+        "com.saab.tv.data.repository.CanonicalSeriesMetadataStore*",
+        "com.saab.tv.data.local.CanonicalMetadataDao*",
+        "com.saab.tv.data.model.CanonicalTitleEntity*",
+        "com.saab.tv.data.model.CanonicalIdentityAliasEntity*",
+        "com.saab.tv.data.repository.NoopCanonicalTitleStore*",
+        "com.saab.tv.data.repository.NoopCanonicalIdentityStore*",
+        "com.saab.tv.data.tmdb.CanonicalHomeMetadata*",
+        "com.saab.tv.data.tmdb.TmdbTitleProjectionKt*",
+        "com.saab.tv.ui.home.HomePreviewMetadataPolicy*"
+    )
+    doFirst {
+        centralPolicyClasses.forEach { pattern ->
+            val relativePath = pattern.removeSuffix("*").replace('.', '/') + ".class"
+            check(layout.buildDirectory.file("tmp/kotlin-classes/debug/$relativePath").get().asFile.exists()) {
+                "Required central information policy disappeared: $pattern"
+            }
+        }
+    }
+    violationRules {
+        rule {
+            element = "CLASS"
+            includes = centralPolicyClasses
+            // Generated Room adapters and Kotlin inline comparator stubs are not authored
+            // policy code. The underlying DAO transaction lines remain covered by emulator tests.
+            excludes = listOf(
+                "com.saab.tv.data.local.CanonicalMetadataDao_Impl*",
+                "com.saab.tv.data.local.CanonicalMetadataDao*inlined*"
+            )
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "1.0000".toBigDecimal()
+            }
+        }
+        // The full-detail metadata cache handles provider trust and malformed persisted
+        // data; its short-circuit decisions also need both outcomes exercised.
+        rule {
+            element = "CLASS"
+            includes = listOf("com.saab.tv.data.tmdb.CanonicalHomeMetadata")
+            limit {
+                counter = "BRANCH"
+                value = "COVEREDRATIO"
+                minimum = "1.0000".toBigDecimal()
+            }
+        }
+    }
+}
+
+tasks.register<JacocoCoverageVerification>("verifyCanonicalProfilePreferenceCoverage") {
+    dependsOn("unitRegressionCoverage")
+    classDirectories.setFrom(regressionClasses)
+    executionData.setFrom(regressionExecution)
+    val canonicalProfilePreferenceClass = "com.saab.tv.data.profile.ProfileAutoSkipPreferencesKt"
+    doFirst {
+        val classPath = canonicalProfilePreferenceClass.replace('.', '/') + ".class"
+        check(layout.buildDirectory.file("tmp/kotlin-classes/debug/$classPath").get().asFile.exists()) {
+            "Required canonical profile preference policy disappeared."
+        }
+    }
+    violationRules {
+        rule {
+            element = "CLASS"
+            includes = listOf("$canonicalProfilePreferenceClass*")
+            listOf("LINE", "BRANCH", "METHOD", "INSTRUCTION").forEach { metric ->
                 limit {
                     counter = metric
                     value = "COVEREDRATIO"
@@ -228,8 +339,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 126
-        versionName = "0.1.122-beta"
+        versionCode = 129
+        versionName = "0.1.125-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
@@ -297,6 +408,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        create("benchmark") {
+            initWith(getByName("release"))
+            // Keep the authenticated local profile used by UI benchmarks isolated
+            // from the production app while sharing the debug signing certificate.
+            applicationIdSuffix = ".test"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
         }
     }
 
@@ -439,6 +559,37 @@ dependencies {
     androidTestImplementation(libs.catalog.androidx.room.room.testing)
     androidTestImplementation(libs.catalog.androidx.sqlite.sqlite.framework)
 
+}
+
+// The Compose test manifest is intentionally debug-only. Release JVM tests reuse the same
+// Robolectric host/resources so ComponentActivity stays test-only and never enters the APK.
+tasks.matching { it.name == "testReleaseUnitTest" }.configureEach {
+    val debugTestConfig = layout.buildDirectory.file(
+        "intermediates/unit_test_config_directory/debugUnitTest/generateDebugUnitTestConfig/out/com/android/tools/test_config.properties"
+    )
+    val releaseTestConfig = layout.buildDirectory.file(
+        "intermediates/unit_test_config_directory/releaseUnitTest/generateReleaseUnitTestConfig/out/com/android/tools/test_config.properties"
+    )
+    dependsOn("generateDebugUnitTestConfig")
+    doFirst {
+        releaseTestConfig.get().asFile.writeText(debugTestConfig.get().asFile.readText())
+    }
+}
+
+// Like release, benchmark's app manifest excludes the test-only ComponentActivity.
+// Reuse the debug Robolectric host manifest so the benchmark variant can still
+// execute the same JVM regression suite rather than silently dropping coverage.
+tasks.matching { it.name == "testBenchmarkUnitTest" }.configureEach {
+    val debugTestConfig = layout.buildDirectory.file(
+        "intermediates/unit_test_config_directory/debugUnitTest/generateDebugUnitTestConfig/out/com/android/tools/test_config.properties"
+    )
+    val benchmarkTestConfig = layout.buildDirectory.file(
+        "intermediates/unit_test_config_directory/benchmarkUnitTest/generateBenchmarkUnitTestConfig/out/com/android/tools/test_config.properties"
+    )
+    dependsOn("generateDebugUnitTestConfig")
+    doFirst {
+        benchmarkTestConfig.get().asFile.writeText(debugTestConfig.get().asFile.readText())
+    }
 }
 
 tasks.register("generateSbom") {

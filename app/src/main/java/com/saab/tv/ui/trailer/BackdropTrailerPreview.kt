@@ -3,7 +3,6 @@ package com.saab.tv.ui.trailer
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.List
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -25,13 +24,12 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.border
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -47,13 +45,18 @@ import androidx.media3.common.Player
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import com.saab.tv.R
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.navigation.isBackOrEscape
+import com.saab.tv.ui.navigation.isInitialBackPress
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.schema.canonicalPresentationKey
 import com.saab.tv.data.profile.TrailerPreviewSettings
 import com.saab.tv.data.trailer.*
 import kotlinx.coroutines.delay
@@ -64,7 +67,7 @@ import kotlinx.coroutines.CancellationException
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun BackdropTrailerPreview(
-    focusedItem: MetaItem?, catalog: List<MetaItem>, profileId: Int,
+    focusedItem: MetaItem?, profileId: Int,
     settings: TrailerPreviewSettings, enabled: Boolean,
     resolveTrailer: suspend (MetaItem) -> Pair<String, String>?,
     onActiveChanged: (Boolean) -> Unit,
@@ -81,6 +84,7 @@ fun BackdropTrailerPreview(
     val foreground = lifecycleState == Lifecycle.State.RESUMED
     val extractor = remember { YouTubeExtractor() }
     val owner = remember { Any() }
+    val requestGate = remember(owner) { TrailerPreviewRequestGate() }
     val navigationScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     var dismissedKey by remember { mutableStateOf<String?>(null) }
@@ -90,7 +94,7 @@ fun BackdropTrailerPreview(
     // A disappearing inline control can briefly restore focus to a background
     // poster. Once expanded, keep the playing title until an explicit dismissal.
     val previewItem = if (expanded) activeItem ?: focusedItem else focusedItem
-    val key = previewItem?.let { "${it.type}:${it.id}" }
+    val key = previewItem?.canonicalPresentationKey()
     val previewEnabled = enabled || expanded
     val anchor = InlineTrailerAnchor.bounds.takeIf { InlineTrailerAnchor.key == key }
     val inline = InlinePreviewLayout.isInline(settings.presentation, expanded)
@@ -113,27 +117,41 @@ fun BackdropTrailerPreview(
     DisposableEffect(owner) { onDispose {
         com.saab.tv.AppDiagnostics.event("Trailer Preview", "Owner Disposed",
             "titleId=${latestItem?.id} videoId=${latestSource?.videoId} expanded=$latestExpanded")
+        requestGate.invalidate()
         InlineTrailerAnchor.clearSession(owner)
         activeCallback(false); fullscreenCallback(false)
     } }
     LaunchedEffect(key, previewEnabled, settings.enabled, settings.delaySeconds, foreground, activityVersion) {
         source = null; activeItem = null
-        if (!TrailerPreviewPolicy.canStart(settings.enabled && previewEnabled, foreground, key, key,
-                dismissedKey, dismissedKey) || previewItem == null) return@LaunchedEffect
+        val requestedItem = previewItem
+        val request = requestGate.begin(
+            key,
+            allowed = requestedItem != null && TrailerPreviewPolicy.canStart(
+                settings.enabled && previewEnabled, foreground, key, key, dismissedKey, dismissedKey
+            )
+        ) ?: return@LaunchedEffect
+        val targetItem = requireNotNull(requestedItem)
+        com.saab.tv.AppDiagnostics.detailed("Trailer Preview", "Resolution Requested",
+            "titleId=${targetItem.id} presentationKey=$key request=${request.generation}")
         val delayMs = settings.delaySeconds * 1_000L
         // Debounce rapid card navigation, then resolve during the configured
         // hover delay rather than adding extraction latency after that delay.
         val debounceMs = minOf(delayMs, 250L)
         delay(debounceMs)
         val pendingSource = async {
-            val trailer = try { resolveTrailer(previewItem) }
+            val trailer = try { resolveTrailer(targetItem) }
                 catch (e: CancellationException) { throw e } catch (_: Exception) { null }
             trailer?.let { extractor.extractPlaybackSource(it.first) }
         }
         delay(delayMs - debounceMs)
-        homeModel.startTrailerSourcePrefetch(previewItem)
+        homeModel.startTrailerSourcePrefetch(targetItem)
         val resolved = pendingSource.await()
-        if (resolved != null) { source = resolved; activeItem = previewItem }
+        if (!requestGate.accepts(request)) {
+            com.saab.tv.AppDiagnostics.detailed("Trailer Preview", "Stale Resolution Ignored",
+                "titleId=${targetItem.id} presentationKey=$key request=${request.generation}")
+            return@LaunchedEffect
+        }
+        if (resolved != null) { source = resolved; activeItem = targetItem }
         else unavailableCallback()
     }
     if (!visible) {
@@ -152,6 +170,7 @@ fun BackdropTrailerPreview(
     fun dismiss(restoreFocus: Boolean = true, reason: String = "back") {
         com.saab.tv.AppDiagnostics.event("Trailer Preview", "Dismissed",
             "titleId=${item.id} videoId=${source?.videoId} reason=$reason expanded=$expanded positionMs=${previewPlayer[0]?.currentPosition}")
+        requestGate.invalidate()
         dismissedKey = key; expanded = false; activeItem = null; source = null
         InlineTrailerAnchor.clearSession(owner)
         if (restoreFocus) navigationScope.launch {
@@ -159,7 +178,8 @@ fun BackdropTrailerPreview(
             dismissCallback()
         }
     }
-    BackHandler { dismiss() }
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction { dismiss() }
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Preview) { dismiss() }
     LaunchedEffect(started, interactionVersion, inline) {
         if (inline) controlsVisible = true
         else if (started) {
@@ -173,12 +193,16 @@ fun BackdropTrailerPreview(
     }
     val player = rememberNativeTrailerPlayer(source!!, muted, inline,
         onStarted = { started = true }, onEnded = { dismiss(reason = "ended-or-variants-exhausted") })
+    LaunchedEffect(player, muted) { player.volume = TrailerPreviewPolicy.volume(muted) }
     SideEffect { previewPlayer[0] = player }
     val session = remember(player, item) {
         InlineTrailerSession(owner, item, player,
             onInteraction = { controlsVisible = true; interactionVersion++ },
             onMute = { muted = !muted; controlsVisible = true; interactionVersion++ },
-            onWatch = { dismiss(false, "start-watching"); startWatching(item) },
+            onWatch = { selectedItem ->
+                dismiss(false, "start-watching")
+                startWatching(selectedItem)
+            },
             onEpisodes = episodeAction?.let { action -> { dismiss(false, "episodes"); action() } },
             onWatchlist = {
                 homeModel.toggleWatchlist(profileId, item)
@@ -194,11 +218,23 @@ fun BackdropTrailerPreview(
             },
             onDismiss = { dismiss() },
             onNavigate = { direction ->
+                // Dismissing the overlay first can restore focus to its anchor
+                // card immediately. Suppress that intermediate cue, then let
+                // the destination card play the single navigation sound.
+                com.saab.tv.ui.components.suppressNextCardFocusSound()
                 dismiss(false, "card-navigation")
-                // Restore the poster before moving focus from the overlay.
                 navigationScope.launch {
-                    withFrameNanos { }; dismissCallback()
-                    withFrameNanos { }; focusManager.moveFocus(direction)
+                    try {
+                        // Restore the poster and let its focus settle before
+                        // navigating to the neighboring title card.
+                        withFrameNanos { }
+                        dismissCallback()
+                        withFrameNanos { }
+                        focusManager.moveFocus(direction)
+                        withFrameNanos { }
+                    } finally {
+                        com.saab.tv.ui.components.clearCardFocusSoundSuppression()
+                    }
                 }
             })
     }
@@ -218,7 +254,12 @@ fun BackdropTrailerPreview(
     val density = LocalDensity.current
     var rootOrigin by remember { mutableStateOf(Offset.Zero) }
     val expansion = remember(key) { Animatable(0f) }
-    LaunchedEffect(key) { expansion.animateTo(1f, tween(240, easing = FastOutSlowInEasing)) }
+    val fullscreenExpansion = remember(key) { Animatable(0f) }
+    LaunchedEffect(key) { expansion.animateTo(1f, SaabMotion.navigationRevealSpec()) }
+    LaunchedEffect(key, expanded, settings.presentation) {
+        val promoteInlinePlayer = expanded && settings.presentation != "fullscreen"
+        fullscreenExpansion.animateTo(if (promoteInlinePlayer) 1f else 0f, SaabMotion.navigationRevealSpec())
+    }
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(20f)
         .onGloballyPositioned { rootOrigin = it.boundsInRoot().topLeft }) {
         val targetBounds = with(density) {
@@ -228,18 +269,28 @@ fun BackdropTrailerPreview(
         }
         val startBounds = anchor?.let { InlinePreviewLayout.Bounds(
             it.left - rootOrigin.x, it.top - rootOrigin.y, it.width, it.height) } ?: targetBounds
-        fun interpolate(start: Float, end: Float) = start + (end - start) * expansion.value
-        val stage = if (!inline) Modifier.fillMaxSize() else with(density) {
-            Modifier.offset(interpolate(startBounds.left, targetBounds.left).toDp(),
-                interpolate(startBounds.top, targetBounds.top).toDp())
-                .size(interpolate(startBounds.width, targetBounds.width).toDp(),
-                    interpolate(startBounds.height, targetBounds.height).toDp())
+        val viewportBounds = with(density) {
+            InlinePreviewLayout.Bounds(0f, 0f, maxWidth.toPx(), maxHeight.toPx())
+        }
+        val stageBounds = when {
+            settings.presentation == "fullscreen" -> viewportBounds
+            expanded -> InlinePreviewLayout.interpolate(targetBounds, viewportBounds, fullscreenExpansion.value)
+            else -> InlinePreviewLayout.interpolate(startBounds, targetBounds, expansion.value)
+        }
+        val stage = with(density) {
+            Modifier.offset(stageBounds.left.toDp(), stageBounds.top.toDp())
+                .size(stageBounds.width.toDp(), stageBounds.height.toDp())
+        }
+        val inlineFooter = when {
+            settings.presentation == "fullscreen" -> 0.dp
+            expanded -> 72.dp * (1f - fullscreenExpansion.value)
+            else -> 72.dp
         }
         val decoration = if (!inline) Modifier else Modifier.shadow(16.dp, RoundedCornerShape(12.dp))
             .clip(RoundedCornerShape(12.dp))
             .border(2.dp, Color.White, RoundedCornerShape(12.dp))
         Box(stage.then(decoration).background(Color.Black)) {
-            TrailerVideoSurface(player, Modifier.fillMaxSize().padding(bottom = if (inline) 72.dp else 0.dp))
+            TrailerVideoSurface(player, Modifier.fillMaxSize().padding(bottom = inlineFooter))
             if (inline) {
                 InlineTrailerCard(session, renderVideo = false)
             } else {
@@ -252,8 +303,8 @@ fun BackdropTrailerPreview(
                 }
                 Box(Modifier.fillMaxSize().zIndex(20f)
                     .onPreviewKeyEvent { event ->
-                        if (event.key == Key.Back || event.key == Key.Escape) {
-                            if (event.type == KeyEventType.KeyUp) session.onDismiss()
+                        if (event.isBackOrEscape()) {
+                            if (event.isInitialBackPress()) dispatchBackFromKey()
                             return@onPreviewKeyEvent true
                         }
                         if (event.key == revealingKey) {
@@ -271,25 +322,26 @@ fun BackdropTrailerPreview(
                     }.focusRequester(rootRequester).focusable()) {
                     androidx.compose.animation.AnimatedVisibility(
                         visible = controlsVisible, modifier = Modifier.align(Alignment.BottomCenter),
-                        enter = androidx.compose.animation.fadeIn(),
-                        exit = androidx.compose.animation.fadeOut()
+                        enter = androidx.compose.animation.fadeIn(animationSpec = SaabMotion.focusFeedbackSpec<Float>()),
+                        exit = androidx.compose.animation.fadeOut(animationSpec = SaabMotion.focusFeedbackSpec<Float>())
                     ) {
                         Row(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).padding(24.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.Start),
                             verticalAlignment = Alignment.CenterVertically) {
-                            com.saab.tv.ui.components.DetailActionButton("Start Watching",
-                                androidx.compose.material.icons.Icons.Default.PlayArrow, session.onWatch,
+                            com.saab.tv.ui.components.DetailActionButton(stringResource(R.string.player_start_watching),
+                                androidx.compose.material.icons.Icons.Default.PlayArrow,
+                                session::startWatching,
                                 Modifier.focusRequester(playRequester).focusProperties { left = FocusRequester.Cancel })
                             session.onEpisodes?.let { onEpisodes ->
-                                com.saab.tv.ui.components.DetailActionButton("Episodes",
+                                com.saab.tv.ui.components.DetailActionButton(stringResource(R.string.details_action_episodes),
                                     androidx.compose.material.icons.Icons.AutoMirrored.Filled.List, onEpisodes)
                             }
                             com.saab.tv.ui.components.DetailActionButton(
-                                if (watchlisted) "Remove From Watchlist" else "Add To Watchlist",
+                                if (watchlisted) stringResource(R.string.quick_action_remove_watchlist) else stringResource(R.string.details_action_add_watchlist),
                                 if (watchlisted) androidx.compose.material.icons.Icons.Default.Bookmark else androidx.compose.material.icons.Icons.Default.BookmarkBorder,
                                 session.onWatchlist, isActive = watchlisted)
                             com.saab.tv.ui.components.DetailActionButton(
-                                if (muted) "Unmute" else "Mute",
+                                if (muted) stringResource(R.string.player_unmute) else stringResource(R.string.player_mute),
                                 if (muted) androidx.compose.material.icons.Icons.Default.VolumeOff else androidx.compose.material.icons.Icons.Default.VolumeUp,
                                 session.onMute, Modifier.focusProperties { right = FocusRequester.Cancel })
                         }
@@ -323,7 +375,7 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
             .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 15_000, 250, 1_500)
                 .setTargetBufferBytes(24 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build())
             .build().apply {
-                volume = if (muted) 0f else 1f
+                volume = TrailerPreviewPolicy.volume(muted)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .clearVideoSizeConstraints().setViewportSize(Int.MAX_VALUE, Int.MAX_VALUE, true)
                     .setForceHighestSupportedBitrate(true).build()
@@ -340,7 +392,7 @@ private fun rememberNativeTrailerPlayer(source: TrailerPlaybackSource, muted: Bo
     DisposableEffect(player) {
         val preparedAtMs = android.os.SystemClock.elapsedRealtime()
         var variantPreparedAtMs = preparedAtMs
-        var resumeMs = player.currentPosition.coerceAtLeast(0)
+        var resumeMs = TrailerPreviewPolicy.initialStartPositionMs(player.currentPosition)
         var index = 0
         fun play() {
             val variant = variants.getOrNull(index) ?: return latestEnded()

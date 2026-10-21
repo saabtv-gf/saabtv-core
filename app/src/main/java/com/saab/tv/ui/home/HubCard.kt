@@ -1,5 +1,6 @@
 package com.saab.tv.ui.home
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -26,26 +27,44 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import coil.compose.AsyncImage
-import coil.request.CachePolicy
-import coil.request.ImageRequest
-import coil.size.Scale
 import com.saab.tv.domain.HubItem
 import com.saab.tv.domain.HubShape
+import com.saab.tv.ui.components.RetainedArtworkImage
+import com.saab.tv.ui.components.SaabMotion
 import com.saab.tv.ui.components.cardFocusSound
 import com.saab.tv.ui.theme.LocalHubRoundCorners
+import com.saab.tv.ui.utils.ArtworkCacheRole
+import com.saab.tv.ui.utils.artworkDecodeSizePx
+import com.saab.tv.ui.utils.artworkImageRequest
+
+internal fun hubCardWidth(shape: HubShape): Dp = when (shape) {
+    HubShape.HORIZONTAL -> 190.dp
+    HubShape.VERTICAL -> 120.dp
+    HubShape.SQUARE -> 140.dp
+}
+
+internal fun hubCardArtworkSizePx(shape: HubShape, density: Density) =
+    artworkDecodeSizePx(
+        hubCardWidth(shape),
+        hubCardWidth(shape) / shape.aspectRatio,
+        density
+    )
+
+internal fun hubCardArtworkUrl(url: String?): String? = url?.takeIf(String::isNotBlank)
 
 /**
  * ============================================================================
@@ -60,7 +79,7 @@ import com.saab.tv.ui.theme.LocalHubRoundCorners
  * - Dynamic aspect ratio based on HubShape
  * - Custom image loading with bottom scrim for title readability
  * - Gradient fallback when no image is provided
- * - Premium focus animation (scale 1.1f + border glow)
+ * - Stable geometry with a high-contrast focus outline
  * - Netflix-grade visual styling
  * ============================================================================
  */
@@ -71,21 +90,22 @@ fun HubCard(
     shape: HubShape,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    onFocused: (() -> Unit)? = null
+    onFocused: (() -> Unit)? = null,
+    showFocusBorder: Boolean = true
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val roundCorners = LocalHubRoundCorners.current
     
     // Card dimensions based on shape
-    val cardWidth = when (shape) {
-        HubShape.HORIZONTAL -> 190.dp
-        HubShape.VERTICAL -> 120.dp
-        HubShape.SQUARE -> 140.dp
+    val cardWidth = hubCardWidth(shape)
+    val density = LocalDensity.current
+    val artworkSize = remember(shape, density.density) {
+        hubCardArtworkSizePx(shape, density)
     }
     
     // Shape based on user preference
     val cardShape = if (roundCorners) RoundedCornerShape(12.dp) else RectangleShape
-    val focusedCardShape = if (roundCorners) RoundedCornerShape(16.dp) else RectangleShape
+    val focusedCardShape = cardShape
     
 
 
@@ -93,7 +113,6 @@ fun HubCard(
         modifier = modifier
             .width(cardWidth)
             .aspectRatio(shape.aspectRatio)
-            .zIndex(if (isFocused) 10f else 0f)
             .graphicsLayer { clip = false }
     ) {
         Surface(
@@ -109,73 +128,85 @@ fun HubCard(
                 shape = cardShape,
                 focusedShape = focusedCardShape
             ),
-            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = MaterialTheme.colorScheme.surface,
                 focusedContainerColor = MaterialTheme.colorScheme.surface,
                 contentColor = Color.White
             ),
             border = ClickableSurfaceDefaults.border(
-                focusedBorder = Border(
-                    border = BorderStroke(4.dp, Color.White),
-                    shape = focusedCardShape
-                )
+                focusedBorder = if (showFocusBorder) {
+                    Border(border = BorderStroke(2.dp, Color.White), shape = focusedCardShape)
+                } else {
+                    Border(border = BorderStroke(0.dp, Color.Transparent), shape = focusedCardShape)
+                }
             )
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 // Background: Either custom image or Simple Card Style
-                if (hubItem.customImageUrl != null) {
+                val customImageUrl = hubCardArtworkUrl(hubItem.customImageUrl)
+                if (customImageUrl != null) {
                     // Custom Image with Scrim
                     val context = LocalContext.current
-                    val imageRequest = remember(hubItem.customImageUrl) {
-                        ImageRequest.Builder(context)
-                            .data(hubItem.customImageUrl)
-                            .crossfade(false)
-                            .memoryCachePolicy(CachePolicy.ENABLED)
-                            .diskCachePolicy(CachePolicy.ENABLED)
-                            .scale(Scale.FILL)
-                            .allowHardware(true)
-                            .build()
+                    val imageRequest = remember(context, customImageUrl, artworkSize) {
+                        artworkImageRequest(context, customImageUrl, ArtworkCacheRole.Hub, artworkSize)
                     }
                     
-                    AsyncImage(
+                    RetainedArtworkImage(
                         model = imageRequest,
                         contentDescription = hubItem.title,
                         contentScale = ContentScale.Crop,
+                        contentIdentityKey = hubItem.id,
                         modifier = Modifier
                             .fillMaxSize()
-                            .clip(cardShape)
+                            .clip(cardShape),
+                        unavailable = {
+                            HubCardFallback(
+                                title = hubItem.title,
+                                isFocused = isFocused,
+                                modifier = Modifier.fillMaxSize().clip(cardShape)
+                            )
+                        }
                     )
 
                 } else {
-                    // Simple Card Style (ViewMoreCard look)
-                    // No image, just background color + centered text/icon
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(cardShape)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize().padding(8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                text = hubItem.title,
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp
-                                ),
-                                color = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.9f),
-                                textAlign = TextAlign.Center,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                    HubCardFallback(
+                        title = hubItem.title,
+                        isFocused = isFocused,
+                        modifier = Modifier.fillMaxSize().clip(cardShape)
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HubCardFallback(title: String, isFocused: Boolean, modifier: Modifier = Modifier) {
+    val titleColor by animateColorAsState(
+        targetValue = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.9f),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
+        label = "hub-card-title-color"
+    )
+    Box(
+        modifier = modifier.background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp
+                ),
+                color = titleColor,
+                textAlign = TextAlign.Center,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

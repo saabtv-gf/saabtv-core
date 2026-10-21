@@ -1,11 +1,18 @@
 package com.saab.tv.data.repository
 
 import com.google.gson.Gson
+import com.saab.tv.data.cache.BoundedExpiringCache
 import com.saab.tv.data.local.AddonDao
 import com.saab.tv.data.model.AddonEntity
 import com.saab.tv.data.model.CatalogConfigEntity
 import com.saab.tv.data.model.stremio.CatalogManifest
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.schema.ArtworkRole
+import com.saab.tv.domain.schema.ContentIdentity
+import com.saab.tv.domain.schema.CanonicalEntityKey
+import com.saab.tv.domain.schema.addonInstallationKey
+import com.saab.tv.domain.schema.toCanonicalProjection
+import com.saab.tv.domain.schema.toTitleCardProjection
 import com.saab.tv.data.model.stremio.Stream
 import com.saab.tv.data.remote.StremioApiService
 import com.saab.tv.domain.HomeRow
@@ -16,6 +23,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.firstOrNull
@@ -23,12 +35,23 @@ import java.net.URLEncoder
 import javax.inject.Inject
 import javax.inject.Singleton
 
+data class CatalogSearchOutcome(val items: List<MetaItem>, val failedTypes: Set<String>)
+
 @Singleton
 class AddonRepository @Inject constructor(
     private val api: StremioApiService,
     private val dao: AddonDao,
-    private val torBox: com.saab.tv.data.stream.TorBoxAvailabilityService
+    private val torBox: com.saab.tv.data.stream.TorBoxAvailabilityService,
+    private val canonicalTitleStore: CanonicalTitleStore = NoopCanonicalTitleStore,
+    canonicalSeriesMetadataStore: CanonicalSeriesMetadataStore = NoopCanonicalSeriesMetadataStore,
+    private val canonicalIdentityStore: CanonicalIdentityStore = NoopCanonicalIdentityStore
 ) {
+    private data class CanonicalFactEntry(val value: com.saab.tv.data.model.CanonicalTitleEntity?)
+
+    private val canonicalMovieMetadataCache = CanonicalMovieMetadataCache(canonicalTitleStore)
+    private val canonicalSeriesMetadataCache = CanonicalCinemetaSeriesCache(canonicalTitleStore, canonicalSeriesMetadataStore)
+    private val canonicalFacts = BoundedExpiringCache<String, CanonicalFactEntry>(512, 60_000L, System::currentTimeMillis)
+    private val dashboardCatalogPermits = Semaphore(4)
     private val gson = Gson()
     private val previewStreams = com.saab.tv.data.cache.PreviewWarmupCache<List<Stream>>(
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
@@ -47,6 +70,7 @@ class AddonRepository @Inject constructor(
             val key = previewMetadataKey(type, id, addon)
             previewMetadata.prefetch(key) {
                 val meta = fetchMetaDetails(type, id, addon)
+                if (meta != null) cacheResolvedMetadata(meta, id, type)
                 meta.takeIf { previewMetadataKey(type, id, addon) == key }
             }
             previewMetadata.awaitIfPresent(key)
@@ -84,56 +108,159 @@ class AddonRepository @Inject constructor(
     private val CATALOG_TIMEOUT_MS = 10_000L // 10 seconds per catalog request
     private val STREAM_TIMEOUT_MS = 20_000L  // 20 seconds per stream request (torrent addons need more time)
 
+    /** Canonicalized card projection shared by catalog, search and library compatibility edges. */
+    suspend fun canonicalizeCatalogItems(items: List<MetaItem>): List<MetaItem> = withContext(Dispatchers.IO) {
+        val locale = dao.getActiveProfileId()?.let { dao.getProfileById(it)?.tmdbLanguage }.orEmpty()
+        val seen = HashSet<String>(items.size)
+        val canonicalized = ArrayList<MetaItem>(items.size)
+        for (item in items) {
+            val projection = item.toCanonicalProjection()
+            val canonicalKey = projection?.let { canonicalKey(it.identity) }
+                ?: "legacy/${item.type.trim().lowercase()}/${item.id.trim()}"
+            if (!seen.add(canonicalKey)) continue
+            canonicalized += if (projection == null) item
+            else applyCanonicalFacts(item, projection.identity, projection.artwork, locale)
+        }
+        canonicalized
+    }
+
+    private suspend fun canonicalKey(identity: ContentIdentity): String = try {
+        canonicalIdentityStore.canonicalKey(identity)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        identity.stableKey
+    }
+
+    /** Resolves a UI/provider ID to the verified canonical key without a network request. */
+    suspend fun canonicalIdentityKey(item: MetaItem): String? {
+        val identity = item.toCanonicalProjection()?.identity ?: return null
+        return canonicalKey(identity)
+    }
+
+    suspend fun canonicalIdentityKey(id: String, type: String, addonBaseUrl: String? = null): String? {
+        val installationId = addonBaseUrl?.let(::addonInstallationKey)
+        val identity = CanonicalEntityKey.titleIdentity(id, type, installationId) ?: return null
+        return canonicalKey(identity)
+    }
+
+    suspend fun canonicalPlayableIdentityKey(id: String, type: String, addonBaseUrl: String? = null): String? {
+        val installationId = addonBaseUrl?.let(::addonInstallationKey)
+        return try {
+            canonicalIdentityStore.canonicalPlayableKey(id, type, installationId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            CanonicalEntityKey.playable(id, type, installationId)
+        }
+    }
+
+    private suspend fun applyCanonicalFacts(
+        item: MetaItem,
+        identity: ContentIdentity,
+        fallbackArtwork: List<com.saab.tv.domain.schema.ArtworkReference>,
+        locale: String
+    ): MetaItem {
+        val key = "${identity.stableKey}\u0000$locale"
+        val prior = canonicalFacts[key]
+        if (prior != null) return prior.value?.let { projectCanonicalItem(item, identity, fallbackArtwork, it) } ?: item
+        val title = try {
+            canonicalTitleStore.getFreshTitle(identity, locale, CANONICAL_FACT_MAX_AGE_MS)
+                ?: locale.takeIf(String::isNotBlank)?.let {
+                    canonicalTitleStore.getFreshTitle(identity, "", CANONICAL_FACT_MAX_AGE_MS)
+                }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return item
+        }
+        canonicalFacts[key] = CanonicalFactEntry(title)
+        return if (title == null) item else projectCanonicalItem(item, identity, fallbackArtwork, title)
+    }
+
+    private fun projectCanonicalItem(
+        item: MetaItem,
+        identity: ContentIdentity,
+        fallbackArtwork: List<com.saab.tv.domain.schema.ArtworkReference>,
+        title: com.saab.tv.data.model.CanonicalTitleEntity
+    ): MetaItem {
+        val projection = title.toTitleCardProjection(identity, item.name, fallbackArtwork)
+        return item.copy(
+            name = projection.title,
+            poster = projection.artwork(ArtworkRole.POSTER)?.locator ?: item.poster,
+            background = projection.artwork(ArtworkRole.BACKDROP)?.locator ?: item.background,
+            logo = projection.artwork(ArtworkRole.LOGO)?.locator ?: item.logo,
+            description = projection.synopsis ?: item.description,
+            releaseInfo = projection.year ?: item.releaseInfo,
+            imdbRating = projection.rating?.takeIf { it.source == "imdb" && it.scale == "0-10" }
+                ?.value?.toString() ?: item.imdbRating,
+            runtime = projection.runtimeEstimateMillis?.let { (it / 60_000L).coerceAtLeast(1).toString() } ?: item.runtime,
+            genres = projection.genres.takeIf { it.isNotEmpty() } ?: item.genres
+        )
+    }
+
     /**
      * Fetches a single page of catalog items at the given skip offset.
      * Used for on-demand lazy loading as the user scrolls.
      */
-    suspend fun fetchNextCatalogPage(baseUrl: String, skip: Int): List<MetaItem> = withContext(Dispatchers.IO) {
+    data class CatalogPageResult(val items: List<MetaItem>, val failed: Boolean)
+    data class CatalogPreviewResult(val row: HomeRow?, val failed: Boolean)
+
+    suspend fun fetchNextCatalogPage(baseUrl: String, skip: Int): List<MetaItem> =
+        fetchNextCatalogPageWithStatus(baseUrl, skip).items
+
+    suspend fun fetchNextCatalogPageWithStatus(baseUrl: String, skip: Int): CatalogPageResult = withContext(Dispatchers.IO) {
         try {
             val url = if (skip == 0) baseUrl else {
                 baseUrl.replace(".json", "/skip=$skip.json")
             }
-            withTimeout(CATALOG_TIMEOUT_MS) { api.getCatalog(url) }.metas.orEmpty().sanitize()
+            val addonOrigin = baseUrl.substringBefore("/catalog")
+            CatalogPageResult(canonicalizeCatalogItems(
+                withTimeout(CATALOG_TIMEOUT_MS) { api.getCatalog(url) }.metas.orEmpty().sanitize()
+                    .map { it.copy(addonBaseUrl = addonOrigin) }
+            ), failed = false)
+        } catch (_: TimeoutCancellationException) {
+            CatalogPageResult(emptyList(), failed = true)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            emptyList()
+            CatalogPageResult(emptyList(), failed = true)
         }
     }
 
 
-    suspend fun searchMovies(query: String): List<MetaItem> = withContext(Dispatchers.IO) {
-        if (query.length < 3) return@withContext emptyList()
+    suspend fun searchMovies(query: String): List<MetaItem> = searchMoviesWithStatus(query).items
+
+    suspend fun searchMoviesWithStatus(query: String): CatalogSearchOutcome = withContext(Dispatchers.IO) {
+        // Automatic typing still waits for three characters in SearchViewModel,
+        // but an explicit Search action may resolve a useful two-letter title.
+        if (query.trim().length < 2) return@withContext CatalogSearchOutcome(emptyList(), emptySet())
         val encodedQuery = URLEncoder.encode(query.trim(), Charsets.UTF_8.name())
             .replace("+", "%20")
 
-        val movieJob = async {
-            try {
-                withTimeout(CATALOG_TIMEOUT_MS) {
-                    api.getCatalog("https://v3-cinemeta.strem.io/catalog/movie/top/search=$encodedQuery.json")
-                }.metas.orEmpty().sanitize()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                emptyList()
-            }
+        suspend fun fetch(type: String): Pair<List<MetaItem>, Boolean> = try {
+            val results = withTimeout(CATALOG_TIMEOUT_MS) {
+                api.getCatalog("https://v3-cinemeta.strem.io/catalog/$type/top/search=$encodedQuery.json")
+            }.metas.orEmpty().sanitize()
+            results to false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList<MetaItem>() to true
         }
 
-        val seriesJob = async {
-            try {
-                withTimeout(CATALOG_TIMEOUT_MS) {
-                    api.getCatalog("https://v3-cinemeta.strem.io/catalog/series/top/search=$encodedQuery.json")
-                }.metas.orEmpty().sanitize()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                emptyList()
-            }
-        }
-
+        val movieJob = async { fetch("movie") }
+        val seriesJob = async { fetch("series") }
+        val movie = movieJob.await()
+        val series = seriesJob.await()
         val cinemeta = "https://v3-cinemeta.strem.io"
-        return@withContext (movieJob.await() + seriesJob.await())
-            .map { it.copy(addonBaseUrl = cinemeta) }
+        CatalogSearchOutcome(
+            canonicalizeCatalogItems((movie.first + series.first).map { it.copy(addonBaseUrl = cinemeta) }),
+            buildSet {
+                if (movie.second) add("movie")
+                if (series.second) add("series")
+            }
+        )
     }
 
     /** Search a single canonical Cinemeta catalog while preserving its metadata origin. */
@@ -154,6 +281,7 @@ class AddonRepository @Inject constructor(
                 .sanitize()
                 .filter { it.type.equals(normalizedType, ignoreCase = true) }
                 .map { it.copy(addonBaseUrl = cinemeta) }
+                .let { canonicalizeCatalogItems(it) }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -239,7 +367,10 @@ class AddonRepository @Inject constructor(
         }
 
         try {
-            withTimeout(CATALOG_TIMEOUT_MS) { api.getCatalog(url) }.metas.orEmpty().sanitize()
+            canonicalizeCatalogItems(
+                withTimeout(CATALOG_TIMEOUT_MS) { api.getCatalog(url) }.metas.orEmpty().sanitize()
+                    .map { it.copy(addonBaseUrl = transportUrl) }
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -285,9 +416,26 @@ class AddonRepository @Inject constructor(
                 try {
                     val url = "${config.transportUrl}/catalog/${config.catalogType}/${config.catalogId}.json"
                     // Fetch only the first page for fast initial load
-                    val rawMetas = try { withTimeout(catalogTimeoutMs) { api.getCatalog(url) }.metas.orEmpty().sanitize() } catch (e: Exception) { emptyList() }
+                    val rawMetas = try {
+                        val response = if (maxConfigs == Int.MAX_VALUE) {
+                            // Background catalog fan-out is bounded; the small first-paint
+                            // batch above the fold never waits behind those requests.
+                            dashboardCatalogPermits.withPermit {
+                                withTimeout(catalogTimeoutMs) { api.getCatalog(url) }
+                            }
+                        } else {
+                            withTimeout(catalogTimeoutMs) { api.getCatalog(url) }
+                        }
+                        response.metas.orEmpty().sanitize()
+                    } catch (_: TimeoutCancellationException) {
+                        emptyList()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
                     if (rawMetas.isNotEmpty()) {
-                        val metas = rawMetas.map { it.copy(addonBaseUrl = config.transportUrl) }
+                        val metas = canonicalizeCatalogItems(rawMetas.map { it.copy(addonBaseUrl = config.transportUrl) })
                         val typeSuffix = config.catalogType.replaceFirstChar { it.uppercase() }
                         val defaultTitle = if (config.catalogName != null) "${config.catalogName} - ${typeSuffix}" else "${config.addonName} - ${config.catalogId.replaceFirstChar { it.uppercase() }}"
                         val finalTitle = config.customTitle ?: defaultTitle
@@ -322,24 +470,31 @@ class AddonRepository @Inject constructor(
         configId: String,
         maxItems: Int,
         timeoutMs: Long = CATALOG_TIMEOUT_MS
-    ): HomeRow? = withContext(Dispatchers.IO) {
-        val config = dao.getCatalogConfig(configId) ?: return@withContext null
-        val addon = dao.getAddon(config.transportUrl) ?: return@withContext null
-        if (!addon.isEnabled) return@withContext null
+    ): HomeRow? = getCategoryRowPreviewWithStatus(configId, maxItems, timeoutMs).row
+
+    suspend fun getCategoryRowPreviewWithStatus(
+        configId: String,
+        maxItems: Int,
+        timeoutMs: Long = CATALOG_TIMEOUT_MS
+    ): CatalogPreviewResult = withContext(Dispatchers.IO) {
+        val config = dao.getCatalogConfig(configId)
+            ?: return@withContext CatalogPreviewResult(row = null, failed = true)
+        val addon = dao.getAddon(config.transportUrl)
+            ?: return@withContext CatalogPreviewResult(row = null, failed = true)
+        if (!addon.isEnabled) return@withContext CatalogPreviewResult(row = null, failed = true)
 
         try {
             val url = "${config.transportUrl}/catalog/${config.catalogType}/${config.catalogId}.json"
-            val metas = try {
-                withTimeout(timeoutMs) { api.getCatalog(url) }.metas.orEmpty().sanitize()
-            } catch (_: Exception) {
-                emptyList()
-            }.take(maxItems.coerceAtLeast(1))
+            val metas = withTimeout(timeoutMs) { api.getCatalog(url) }.metas.orEmpty().sanitize()
+                .map { it.copy(addonBaseUrl = config.transportUrl) }
+                .let { canonicalizeCatalogItems(it) }
+                .take(maxItems.coerceAtLeast(1))
 
-            if (metas.isNotEmpty()) {
-                val typeSuffix = config.catalogType.replaceFirstChar { it.uppercase() }
-                val defaultTitle = if (config.catalogName != null) "${config.catalogName} - ${typeSuffix}" else "${config.addonName} - ${config.catalogId.replaceFirstChar { it.uppercase() }}"
-                val finalTitle = config.customTitle ?: defaultTitle
-                HomeRow(
+            val typeSuffix = config.catalogType.replaceFirstChar { it.uppercase() }
+            val defaultTitle = if (config.catalogName != null) "${config.catalogName} - ${typeSuffix}" else "${config.addonName} - ${config.catalogId.replaceFirstChar { it.uppercase() }}"
+            val finalTitle = config.customTitle ?: defaultTitle
+            CatalogPreviewResult(
+                row = HomeRow(
                     configId = config.uniqueId,
                     title = finalTitle,
                     items = metas,
@@ -349,9 +504,16 @@ class AddonRepository @Inject constructor(
                     isInfiniteScrollingEnabled = config.isInfiniteScrollingEnabled,
                     order = 999,
                     supportsSkip = catalogSupportsSkip(addon, config.catalogType, config.catalogId)
-                )
-            } else null
-        } catch (_: Exception) { null }
+                ),
+                failed = false
+            )
+        } catch (_: TimeoutCancellationException) {
+            CatalogPreviewResult(row = null, failed = true)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            CatalogPreviewResult(row = null, failed = true)
+        }
     }
 
     suspend fun getHubRows(screen: String = "home"): List<HubGroupRow> = withContext(Dispatchers.IO) {
@@ -408,29 +570,117 @@ class AddonRepository @Inject constructor(
         warmed ?: fetchStreams(type, id)
     }
 
-    private suspend fun fetchStreams(type: String, id: String): List<Stream> = withContext(Dispatchers.IO) {
+    /**
+     * Foreground source picker path. Each completed addon batch is TorBox-enriched and delivered
+     * immediately so the caller can apply the same source policy used for the final result.
+     */
+    suspend fun getStreamsProgressively(
+        type: String,
+        id: String,
+        onPartial: (List<Stream>) -> Unit
+    ): List<Stream> = withContext(Dispatchers.IO) {
+        val key = previewStreamKey(type, id)
+        val warmed = previewStreams.awaitIfComplete(key)?.takeIf { it.isNotEmpty() }
+        if (warmed != null) {
+            onPartial(warmed)
+            return@withContext warmed
+        }
+        // An unfinished trailer warmup must not recreate the all-addons barrier on the
+        // foreground picker path. Cancel it and let this request publish per-addon progress.
+        previewStreams.invalidate(key)
+        fetchStreams(type, id, onPartial)
+    }
+
+    private suspend fun fetchStreams(
+        type: String,
+        id: String,
+        onPartial: ((List<Stream>) -> Unit)? = null
+    ): List<Stream> = withContext(Dispatchers.IO) {
         val addons = dao.getAllAddons().firstOrNull()
             ?.filter { it.isEnabled && it.supportsStream }
             ?: emptyList()
 
-        val jobs = addons.map { addon ->
-            async {
-                try {
-                    val url = "${addon.transportUrl}/stream/$type/$id.json"
-                    val response = withTimeout(STREAM_TIMEOUT_MS) { api.getStreams(url) }
-                    val sourceLabel = addon.nickname ?: addon.name
-                    response.streams.orEmpty().map { stream ->
-                        stream.copy(
-                            name = "[$sourceLabel] ${stream.name ?: ""}".trim(),
-                            addonTransportUrl = addon.transportUrl
-                        )
-                    }
-                } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { emptyList<Stream>() }
+        suspend fun fetchAddon(addon: AddonEntity): List<Stream> = try {
+            val url = "${addon.transportUrl}/stream/$type/$id.json"
+            val response = withTimeout(STREAM_TIMEOUT_MS) { api.getStreams(url) }
+            val sourceLabel = addon.nickname ?: addon.name
+            response.streams.orEmpty().map { stream ->
+                stream.copy(
+                    name = "[$sourceLabel] ${stream.name ?: ""}".trim(),
+                    addonTransportUrl = addon.transportUrl
+                )
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList()
         }
 
-        torBox.enrich(jobs.awaitAll().flatten())
+        if (onPartial == null) {
+            return@withContext torBox.enrich(
+                addons.map { addon -> async { fetchAddon(addon) } }.awaitAll().flatten()
+            )
+        }
+
+        val completed = Channel<List<Stream>>(capacity = addons.size.coerceAtLeast(1))
+        val jobs = addons.map { addon -> launch { completed.send(fetchAddon(addon)) } }
+        val accumulated = mutableListOf<Stream>()
+        val checkedHashes = mutableSetOf<String>()
+        val checkedStreams = mutableSetOf<String>()
+        val availabilityByHash = mutableMapOf<String, Stream>()
+        val availabilityByStream = mutableMapOf<String, Stream>()
+
+        fun streamKey(stream: Stream): String = listOf(
+            stream.url.orEmpty(),
+            stream.addonTransportUrl.orEmpty(),
+            stream.fileIdx?.toString().orEmpty(),
+            stream.behaviorHints?.filename.orEmpty()
+        ).joinToString("\u0000")
+
+        fun applyAvailability(stream: Stream, availability: Stream): Stream = stream.copy(
+            torBoxChecked = availability.torBoxChecked,
+            torBoxCached = availability.torBoxCached,
+            torBoxSeeders = availability.torBoxSeeders
+        )
+
+        fun currentResults() = accumulated.map { stream ->
+            val evidence = com.saab.tv.data.stream.TorBoxAvailabilityPolicy.hash(stream)
+                ?.let(availabilityByHash::get)
+                ?: availabilityByStream[streamKey(stream)]
+            if (evidence == null) stream else applyAvailability(stream, evidence)
+        }
+
+        try {
+            repeat(addons.size) {
+                val batch = completed.receive()
+                if (batch.isNotEmpty()) {
+                    accumulated += batch
+
+                    // Verify just the new batch before publishing it. This avoids waiting for
+                    // a slow unrelated addon while still preserving TorBox-first status when
+                    // configured. Hashless/provider streams share one lookup per exact URL.
+                    val needsCheck = batch.filter { stream ->
+                        val hash = com.saab.tv.data.stream.TorBoxAvailabilityPolicy.hash(stream)
+                        if (hash != null) hash !in checkedHashes
+                        else streamKey(stream) !in checkedStreams
+                    }
+                    torBox.enrich(needsCheck).forEach { evidence ->
+                        val hash = com.saab.tv.data.stream.TorBoxAvailabilityPolicy.hash(evidence)
+                        if (hash == null) availabilityByStream[streamKey(evidence)] = evidence
+                        else availabilityByHash[hash] = evidence
+                    }
+                    batch.forEach { stream ->
+                        val hash = com.saab.tv.data.stream.TorBoxAvailabilityPolicy.hash(stream)
+                        if (hash != null) checkedHashes += hash else checkedStreams += streamKey(stream)
+                    }
+                    onPartial(currentResults())
+                }
+            }
+        } finally {
+            completed.cancel()
+            jobs.forEach { it.cancel() }
+        }
+        currentResults()
     }
 
     suspend fun getAddonSortOrders(): Map<String, Int> = withContext(Dispatchers.IO) {
@@ -504,19 +754,26 @@ class AddonRepository @Inject constructor(
 
     suspend fun getMetaDetails(url: String) = withContext(Dispatchers.IO) { api.getMeta(url).meta.sanitize() }
 
-    /**
-     * Resolves meta details using a priority system:
-     * 1. Try the preferred addon (the one the catalog item came from) first
-     * 2. Fall back to all meta addons with type-based priority ordering
-     * 3. Last resort: Cinemeta for standard types
-     */
+    /** Resolves canonical Cinemeta details first for IMDb titles, then uses addon fallbacks. */
     suspend fun resolveMetaDetails(
         type: String,
         id: String,
         preferredAddonBaseUrl: String? = null
     ): MetaItem? = withContext(Dispatchers.IO) {
-        previewMetadata.awaitIfPresent(previewMetadataKey(type, id, preferredAddonBaseUrl))
+        canonicalMovieMetadataCache.read(type, id, preferredAddonBaseUrl)?.let { return@withContext it }
+        canonicalSeriesMetadataCache.read(type, id)?.let { return@withContext it }
+
+        val result = previewMetadata.awaitIfPresent(previewMetadataKey(type, id, preferredAddonBaseUrl))
             ?: fetchMetaDetails(type, id, preferredAddonBaseUrl)
+        if (result != null) cacheResolvedMetadata(result, id, type)
+        result
+    }
+
+    private suspend fun cacheResolvedMetadata(meta: MetaItem, id: String, type: String) {
+        val now = System.currentTimeMillis()
+        canonicalMovieMetadataCache.write(meta, id, type, now)
+        canonicalSeriesMetadataCache.write(meta, id, type, now)
+        canonicalFacts.clear()
     }
 
     private suspend fun fetchMetaDetails(
@@ -541,6 +798,23 @@ class AddonRepository @Inject constructor(
             }
         }
 
+        // Cinemeta is the canonical display-metadata source for standard IMDb movies.
+        // Use it before a catalog's preferred addon so a catalog-specific title or artwork
+        // cannot displace the same title's canonical metadata. Addons remain a fallback.
+        if (type.equals("movie", ignoreCase = true) && id.matches(Regex("tt[0-9]+"))) {
+            try {
+                val url = "$CINEMETA_BASE_URL/meta/movie/$id.json"
+                val meta = withTimeout(CATALOG_TIMEOUT_MS) { api.getMeta(url) }.meta.sanitize()
+                if (meta != null && meta.id == id && meta.type.equals("movie", ignoreCase = true)) {
+                    return@withContext meta.copy(addonBaseUrl = CINEMETA_BASE_URL)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Continue to the preferred addon and enabled metadata addons.
+            }
+        }
+
         val allAddons = dao.getAllAddons().firstOrNull()?.filter { it.isEnabled } ?: emptyList()
         val preferredTimeout = 5_000L
 
@@ -551,7 +825,13 @@ class AddonRepository @Inject constructor(
             try {
                 val url = "${preferredAddonBaseUrl.trimEnd('/')}/meta/$type/$id.json"
                 val meta = withTimeout(preferredTimeout) { api.getMeta(url) }.meta.sanitize()
-                if (meta != null) return@withContext meta
+                if (meta != null) {
+                    return@withContext if (CanonicalStremioMetadata.isCinemetaOrigin(preferredAddonBaseUrl)) {
+                        meta.copy(addonBaseUrl = CINEMETA_BASE_URL)
+                    } else meta
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) { /* try fallback */ }
         }
 
@@ -607,6 +887,7 @@ class AddonRepository @Inject constructor(
         try {
             val url = "https://v3-cinemeta.strem.io/meta/$type/$id.json"
             return@withContext withTimeout(CATALOG_TIMEOUT_MS) { api.getMeta(url) }.meta.sanitize()
+                ?.copy(addonBaseUrl = CINEMETA_BASE_URL)
         } catch (_: Exception) { null }
     }
 
@@ -630,5 +911,10 @@ class AddonRepository @Inject constructor(
             ":anime:" in normalizedId -> "anime"
             else -> type
         }
+    }
+
+    private companion object {
+        const val CINEMETA_BASE_URL = "https://v3-cinemeta.strem.io"
+        const val CANONICAL_FACT_MAX_AGE_MS = 30L * 24 * 60 * 60 * 1_000
     }
 }

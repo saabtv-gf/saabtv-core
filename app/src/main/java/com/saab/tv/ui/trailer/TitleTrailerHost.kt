@@ -25,7 +25,8 @@ val LocalTrailerStartWatching = staticCompositionLocalOf<((MetaItem) -> Unit)?> 
 @Composable
 fun TitleTrailerHost(onOpen: (MetaItem) -> Unit, defaultItem: MetaItem? = null,
     defaultEnabled: Boolean = true, onEpisodes: (() -> Unit)? = null,
-    model: HomeViewModel? = null, content: @Composable () -> Unit) {
+    model: HomeViewModel? = null, onStartWatching: ((MetaItem) -> Unit)? = null,
+    content: @Composable () -> Unit) {
     val resolvedModel = model ?: hiltViewModel()
     var profileId by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(resolvedModel) { profileId = resolvedModel.activeProfileId() }
@@ -69,16 +70,20 @@ fun TitleTrailerHost(onOpen: (MetaItem) -> Unit, defaultItem: MetaItem? = null,
         val focusedItem = item
         val isDetailsAutoplay = defaultItem != null && focusedItem == null
         val previewSettings = TrailerPreviewPolicy.settingsForPreview(settings, isDetailsAutoplay)
-        BackdropTrailerPreview(focusedItem = item ?: defaultItem, catalog = emptyList(), profileId = profileId ?: 0,
-            settings = previewSettings,
-            enabled = !LocalManualTrailerActive.current && profileId != null && defaultEnabled &&
-                (!isDetailsAutoplay || TrailerPreviewPolicy.allowsDetailsAutoplay(true, userActivityDetected)),
-            resolveTrailer = resolvedModel::trailerFor, onActiveChanged = { active = it }, onOpen = onOpen,
-            onDismiss = { runCatching { requester?.requestFocus() ?: contentRequester.requestFocus() } },
-            activityVersion = activityVersion,
-            homeViewModel = resolvedModel,
-            onEpisodes = if ((item ?: defaultItem)?.type == "series" &&
-                (item ?: defaultItem)?.id == defaultItem?.id) onEpisodes else null)
+        CompositionLocalProvider(
+            LocalTrailerStartWatching provides (onStartWatching ?: LocalTrailerStartWatching.current)
+        ) {
+            BackdropTrailerPreview(focusedItem = item ?: defaultItem, profileId = profileId ?: 0,
+                settings = previewSettings,
+                enabled = !LocalManualTrailerActive.current && profileId != null && defaultEnabled &&
+                    (!isDetailsAutoplay || TrailerPreviewPolicy.allowsDetailsAutoplay(true, userActivityDetected)),
+                resolveTrailer = resolvedModel::trailerFor, onActiveChanged = { active = it }, onOpen = onOpen,
+                onDismiss = { runCatching { requester?.requestFocus() ?: contentRequester.requestFocus() } },
+                activityVersion = activityVersion,
+                homeViewModel = resolvedModel,
+                onEpisodes = if ((item ?: defaultItem)?.type == "series" &&
+                    (item ?: defaultItem)?.id == defaultItem?.id) onEpisodes else null)
+        }
     }
 }
 

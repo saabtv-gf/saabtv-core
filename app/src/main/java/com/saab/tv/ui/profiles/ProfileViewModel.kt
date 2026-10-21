@@ -3,6 +3,7 @@ package com.saab.tv.ui.profiles
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.local.AddonDao
+import com.saab.tv.data.account.UserStateCommandRepository
 import com.saab.tv.data.cache.SeekThumbnailCache
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.profile.ProfileConfigurationManager
@@ -23,7 +24,8 @@ class ProfileViewModel @Inject constructor(
     private val dao: AddonDao,
     private val profileConfigurationManager: ProfileConfigurationManager,
     private val traktAuthManager: TraktAuthManager,
-    private val seekThumbnailCache: SeekThumbnailCache
+    private val seekThumbnailCache: SeekThumbnailCache,
+    private val userStateCommands: UserStateCommandRepository
 ) : ViewModel() {
 
     private data class PinAttempt(var failures: Int = 0, var lockedUntilMs: Long = 0L)
@@ -153,21 +155,24 @@ class ProfileViewModel @Inject constructor(
                         avatarRef = tempAvatarRef,
                         themeId = tempThemeId
                     )
-                    if (updatedProfile != null) dao.updateProfile(updatedProfile)
+                    if (updatedProfile != null) persistProfile(updatedProfile)
                 } else {
                     val newProfile = ProfileEntity(
                         name = tempName, avatarRef = tempAvatarRef, themeId = tempThemeId
                     ).withOnboardingPreferences(tempLanguages)
                     val profileId = createdProfileId?.also {
                         // A retry may follow changes to setup; keep the pending profile in sync.
-                        dao.updateProfile(newProfile.copy(id = it))
-                    } ?: dao.insertProfile(newProfile).toInt()
+                        val existing = dao.getProfileById(it)
+                        persistProfile(newProfile.copy(id = it, portableId = existing?.portableId ?: newProfile.portableId)).id
+                    } ?: persistProfile(newProfile).id
                     check(profileId > 0) { "Profile Was Not Created" }
                     createdProfileId = profileId
                     profileConfigurationManager.markPendingSetup(profileId)
                     val source = copySourceId
                     if (source != null) profileConfigurationManager.initializeByCopying(profileId, source)
                     else profileConfigurationManager.initializeFromScratch(profileId)
+                    dao.getProfileById(profileId)?.let { persistProfile(it) }
+                    persistRuntimeSnapshot(profileId)
                 }
                 _wizardStep.value = 0
                 editingProfileId = null
@@ -189,6 +194,7 @@ class ProfileViewModel @Inject constructor(
             _isInitializingProfile.value = true
             try {
                 profileConfigurationManager.initializeFromScratch(profileId)
+                persistRuntimeSnapshot(profileId)
                 onComplete()
             } finally {
                 _isInitializingProfile.value = false
@@ -201,6 +207,7 @@ class ProfileViewModel @Inject constructor(
             _isInitializingProfile.value = true
             try {
                 profileConfigurationManager.initializeByCopying(targetProfileId, sourceProfileId)
+                persistRuntimeSnapshot(targetProfileId)
                 onComplete()
             } finally {
                 _isInitializingProfile.value = false
@@ -210,12 +217,9 @@ class ProfileViewModel @Inject constructor(
 
     fun deleteProfile(id: Int) {
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            dao.deleteWatchlistForProfile(id)
-            dao.deleteHistoryForProfile(id)
-            dao.deleteSeriesNextUpForProfile(id)
+            userStateCommands.deleteProfile(id)
             seekThumbnailCache.clearProfile(id)
             traktAuthManager.clearTokensForProfile(id)
-            dao.deleteProfile(id)
             profileConfigurationManager.deleteProfileState(id)
             pinAttempts.remove(id)
         }
@@ -233,7 +237,7 @@ class ProfileViewModel @Inject constructor(
                 viewModelScope.launch(Dispatchers.IO) {
                     dao.getProfileById(profile.id)?.let { current ->
                         if (current.pinHash == profile.pinHash) {
-                            dao.updateProfile(current.copy(pinHash = ProfilePin.hash(profile.id, pin)))
+                            persistProfile(current.copy(pinHash = ProfilePin.hash(profile.id, pin)))
                         }
                     }
                 }
@@ -253,7 +257,7 @@ class ProfileViewModel @Inject constructor(
         if (!ProfilePin.isValid(pin)) return
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             val profile = dao.getProfileById(profileId) ?: return@launch
-            dao.updateProfile(profile.copy(pinHash = ProfilePin.hash(profileId, pin)))
+            persistProfile(profile.copy(pinHash = ProfilePin.hash(profileId, pin)))
             pinAttempts.remove(profileId)
         }
     }
@@ -261,9 +265,15 @@ class ProfileViewModel @Inject constructor(
     fun removeProfilePin(profileId: Int) {
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             val profile = dao.getProfileById(profileId) ?: return@launch
-            dao.updateProfile(profile.copy(pinHash = null))
+            persistProfile(profile.copy(pinHash = null))
             pinAttempts.remove(profileId)
         }
+    }
+
+    private suspend fun persistProfile(profile: ProfileEntity): ProfileEntity = userStateCommands.saveProfile(profile)
+
+    private suspend fun persistRuntimeSnapshot(profileId: Int) {
+        userStateCommands.saveProfileRuntime(profileId, profileConfigurationManager.runtimeSnapshot(profileId))
     }
 
     fun goBackStep() {

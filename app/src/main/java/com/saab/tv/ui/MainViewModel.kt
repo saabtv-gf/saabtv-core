@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.local.AddonDao
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.profile.ProfileConfigurationManager
+import com.saab.tv.data.profile.AudioLanguagePreferencePolicy
+import com.saab.tv.data.account.UserStateCommandRepository
 import com.saab.tv.data.trakt.TraktAuthManager
 import com.saab.tv.data.trakt.TraktSyncManager
 import kotlinx.coroutines.Dispatchers
@@ -30,15 +32,24 @@ class MainViewModel @Inject constructor(
     private val profileConfigurationManager: ProfileConfigurationManager,
     private val traktAuthManager: TraktAuthManager,
     private val traktSyncManager: TraktSyncManager,
-    private val deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences
+    private val deviceDisplay: com.saab.tv.data.profile.DeviceDisplayPreferences,
+    private val userStateCommands: UserStateCommandRepository
 ) : ViewModel() {
 
     private val _activeProfile = MutableStateFlow<ProfileEntity?>(null)
     val activeProfile: StateFlow<ProfileEntity?> = _activeProfile
 
     fun watchlistIdsForProfile(profileId: Int?): Flow<Set<String>> = profileId?.let { id ->
-        dao.getWatchlist(id).map { entries -> entries.mapTo(mutableSetOf()) { it.id } }.distinctUntilChanged()
+        dao.getWatchlistBadgeKeysForProfile(id).map { it.toSet() }.distinctUntilChanged()
     } ?: flowOf(emptySet())
+
+    fun promoteAudioLanguagePreference(profileId: Int, language: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val profile = dao.getProfileById(profileId) ?: return@launch
+            val updated = AudioLanguagePreferencePolicy.promote(profile, language)
+            if (updated != profile) userStateCommands.saveProfile(updated)
+        }
+    }
 
     private var profileJob: Job? = null
     private var loginJob: Job? = null

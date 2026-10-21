@@ -22,6 +22,7 @@ fun DetailActionButton(
     icon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     isActive: Boolean = false,
     compact: Boolean = false,
     destructive: Boolean = false,
@@ -40,61 +41,58 @@ fun DetailActionButton(
     // Bubble width: icon-only → icon + label
     val bubbleWidth by animateDpAsState(
         targetValue = if (showText) expandedWidth else 42.dp,
-        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        animationSpec = SaabMotion.focusRetargetSpec(),
         label = "bubbleWidth"
     )
 
     // Text fade + slide
     val textAlpha by animateFloatAsState(
         targetValue = if (showText) 1f else 0f,
-        animationSpec = tween(200),
+        animationSpec = SaabMotion.focusLabelSpec(),
         label = "textAlpha"
     )
     val textOffset by animateDpAsState(
         targetValue = if (showText) 0.dp else (-8).dp,
-        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        animationSpec = SaabMotion.focusRetargetSpec(),
         label = "textOffset"
     )
 
     // Icon and border colors
     val iconColor by animateColorAsState(
         targetValue = when {
+            !enabled -> Color.White.copy(alpha = 0.28f)
             isFocused -> accentColor
             isActive -> accentColor
             else -> Color.White.copy(alpha = 0.7f)
         },
-        animationSpec = tween(200),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "iconColor"
     )
     val borderColor by animateColorAsState(
         targetValue = when {
+            !enabled -> Color.White.copy(alpha = 0.08f)
             isFocused -> accentColor
             isActive -> accentColor.copy(alpha = 0.5f)
             else -> Color.White.copy(alpha = 0.15f)
         },
-        animationSpec = tween(200),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "borderColor"
     )
     val bgColor by animateColorAsState(
         targetValue = when {
+            !enabled -> Color.White.copy(alpha = 0.03f)
             isFocused -> accentColor.copy(alpha = 0.15f)
             isActive -> accentColor.copy(alpha = 0.08f)
             else -> Color.White.copy(alpha = 0.07f)
         },
-        animationSpec = tween(200),
+        animationSpec = SaabMotion.focusFeedbackSpec(),
         label = "bgColor"
-    )
-
-    val scale by animateFloatAsState(
-        targetValue = if (isFocused) 1.04f else 1f,
-        label = "btnScale"
     )
 
     Row(
         modifier = modifier
             .width(bubbleWidth)
             .height(42.dp)
-            .scale(scale)
             .clip(RoundedCornerShape(21.dp))
             .background(bgColor)
             .border(
@@ -102,8 +100,12 @@ fun DetailActionButton(
                 color = borderColor,
                 shape = RoundedCornerShape(21.dp)
             )
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusable(interactionSource = interactionSource)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null
+            ) { onClick() }
+            .focusable(enabled = enabled, interactionSource = interactionSource)
             .padding(start = 12.dp, end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start

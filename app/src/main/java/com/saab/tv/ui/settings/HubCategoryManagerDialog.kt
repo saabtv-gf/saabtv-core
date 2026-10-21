@@ -15,13 +15,16 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import com.saab.tv.R
 import com.saab.tv.data.model.HubRowItemEntity
 import com.saab.tv.domain.HubShape
 import com.saab.tv.ui.addons.VoidButton
 import com.saab.tv.ui.addons.VoidDialog
 import com.saab.tv.ui.addons.VoidInput
+import com.saab.tv.ui.components.scrollToItemUsingSaabMotion
 import kotlinx.coroutines.delay
 
 @Composable
@@ -52,9 +55,25 @@ fun HubCategoryManagerDialog(
     }
 
     if (managingItem == null && confirmRemoveItem == null && confirmRemoveImageItem == null && renameItem == null) {
-        VoidDialog(onDismissRequest = onDismiss, title = if (reorderingItem != null) "Reordering..." else "Manage Categories") {
+        VoidDialog(
+            onDismissRequest = onDismiss,
+            title = if (reorderingItem != null) stringResource(R.string.hub_reordering_title)
+            else stringResource(R.string.hub_manage_categories_title),
+            footer = {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    VoidButton(stringResource(R.string.common_cancel), onDismiss, Modifier.weight(1f))
+                    VoidButton(
+                        stringResource(R.string.hub_save_changes),
+                        { onSave(currentItems) },
+                        Modifier.weight(1f),
+                        isPrimary = true,
+                        focusRequester = if (currentItems.isEmpty()) focusRequester else saveFocusRequester
+                    )
+                }
+            }
+        ) {
             if (currentItems.isEmpty()) {
-                Text("No categories to manage.", color = Color.White.copy(0.5f))
+                Text(stringResource(R.string.hub_no_categories), color = Color.White.copy(0.5f))
             } else {
                 LazyColumn(
                     state = categoryListState,
@@ -75,7 +94,7 @@ fun HubCategoryManagerDialog(
                                     mutable.add(index - 1, moved)
                                     currentItems = mutable
                                     val target = index - 1
-                                    scope.launch { delay(50); categoryListState.animateScrollToItem((target - 1).coerceAtLeast(0)) }
+                                    scope.launch { delay(50); categoryListState.scrollToItemUsingSaabMotion((target - 1).coerceAtLeast(0)) }
                                 }
                             },
                             onMoveDown = {
@@ -85,7 +104,7 @@ fun HubCategoryManagerDialog(
                                     mutable.add(index + 1, moved)
                                     currentItems = mutable
                                     val target = index + 1
-                                    scope.launch { delay(50); categoryListState.animateScrollToItem((target - 1).coerceAtLeast(0)) }
+                                    scope.launch { delay(50); categoryListState.scrollToItemUsingSaabMotion((target - 1).coerceAtLeast(0)) }
                                 }
                             },
                             onClick = {
@@ -104,7 +123,7 @@ fun HubCategoryManagerDialog(
 
             // Bulk Upload Button
             VoidButton(
-                text = "Manage Images",
+                text = stringResource(R.string.hub_manage_images),
                 onClick = {
                     showBulkUpload = true
                 },
@@ -116,19 +135,15 @@ fun HubCategoryManagerDialog(
                 }
             )
 
-            Spacer(Modifier.height(16.dp))
-
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                VoidButton("Cancel", onDismiss, Modifier.weight(1f))
-                VoidButton("Save Changes", {
-                    onSave(currentItems)
-                }, Modifier.weight(1f), isPrimary = true, focusRequester = if (currentItems.isEmpty()) focusRequester else saveFocusRequester)
-            }
         }
     } else if (managingItem != null && confirmRemoveItem == null && confirmRemoveImageItem == null && renameItem == null) {
         // Item Actions Dialog (Move, Remove, Remove Image)
-        VoidDialog(onDismissRequest = { managingItem = null }, title = managingItem?.title ?: "Item Options") {
-             VoidButton("Rename", {
+        VoidDialog(
+            onDismissRequest = { managingItem = null },
+            title = managingItem?.title ?: stringResource(R.string.hub_item_options_title),
+            footer = { VoidButton(stringResource(R.string.common_close), { managingItem = null }, Modifier.fillMaxWidth()) }
+        ) {
+             VoidButton(stringResource(R.string.common_rename), {
                  renameItem = managingItem
                  newRenameName = managingItem?.title ?: ""
                  managingItem = null
@@ -136,7 +151,7 @@ fun HubCategoryManagerDialog(
 
              Spacer(Modifier.height(12.dp))
 
-             VoidButton("Move Item", {
+             VoidButton(stringResource(R.string.hub_move_item), {
                  reorderingItem = managingItem
                  managingItem = null
              }, Modifier.fillMaxWidth())
@@ -145,20 +160,16 @@ fun HubCategoryManagerDialog(
 
              // Remove Image (only shown when item has a custom image)
              if (managingItem?.customImageUrl != null) {
-                 VoidButton("Remove Image", {
+                 VoidButton(stringResource(R.string.hub_remove_image), {
                      confirmRemoveImageItem = managingItem
                  }, Modifier.fillMaxWidth(), isDestructive = true)
 
                  Spacer(Modifier.height(12.dp))
              }
 
-             VoidButton("Remove from Hub", {
+             VoidButton(stringResource(R.string.hub_remove_from_hub), {
                  confirmRemoveItem = managingItem
              }, Modifier.fillMaxWidth(), isDestructive = true)
-
-             Spacer(Modifier.height(24.dp))
-
-             VoidButton("Close", { managingItem = null }, Modifier.fillMaxWidth())
         }
     }
 
@@ -168,32 +179,28 @@ fun HubCategoryManagerDialog(
 
         VoidDialog(
             onDismissRequest = { confirmRemoveItem = null },
-            title = "Remove from Hub?"
+            title = stringResource(R.string.hub_remove_from_hub_title),
+            footer = {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    VoidButton(stringResource(R.string.common_cancel), { confirmRemoveItem = null }, Modifier.weight(1f), focusRequester = focusRequester)
+                    VoidButton(
+                        stringResource(R.string.common_remove),
+                        {
+                            val targetId = itemToRemove.configUniqueId
+                            currentItems = currentItems.filterNot { it.configUniqueId == targetId }
+                            confirmRemoveItem = null
+                            managingItem = null
+                        },
+                        Modifier.weight(1f),
+                        isDestructive = true
+                    )
+                }
+            }
         ) {
             Text(
-                "Are you sure you want to remove \"${itemToRemove.title}\" from this hub?",
+                stringResource(R.string.hub_confirm_remove_item, itemToRemove.title),
                 color = Color.Gray
             )
-            Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                VoidButton(
-                    "Cancel",
-                    { confirmRemoveItem = null },
-                    Modifier.weight(1f),
-                    focusRequester = focusRequester
-                )
-                VoidButton(
-                    "Remove",
-                    {
-                        val targetId = itemToRemove.configUniqueId
-                        currentItems = currentItems.filterNot { it.configUniqueId == targetId }
-                        confirmRemoveItem = null
-                        managingItem = null
-                    },
-                    Modifier.weight(1f),
-                    isDestructive = true
-                )
-            }
         }
     }
 
@@ -204,37 +211,33 @@ fun HubCategoryManagerDialog(
 
         VoidDialog(
             onDismissRequest = { confirmRemoveImageItem = null },
-            title = "Remove Image?"
+            title = stringResource(R.string.hub_remove_image_title),
+            footer = {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    VoidButton(stringResource(R.string.common_cancel), { confirmRemoveImageItem = null }, Modifier.weight(1f), focusRequester = focusRequester)
+                    VoidButton(
+                        stringResource(R.string.common_remove),
+                        {
+                            val targetId = itemWhoseImageWillBeRemoved.configUniqueId
+                            val mutable = currentItems.toMutableList()
+                            val idx = mutable.indexOfFirst { it.configUniqueId == targetId }
+                            if (idx != -1) {
+                                mutable[idx] = mutable[idx].copy(customImageUrl = null)
+                                currentItems = mutable
+                            }
+                            confirmRemoveImageItem = null
+                            managingItem = null
+                        },
+                        Modifier.weight(1f),
+                        isDestructive = true
+                    )
+                }
+            }
         ) {
             Text(
-                "This will remove the custom image for \"${itemWhoseImageWillBeRemoved.title}\".",
+                stringResource(R.string.hub_confirm_remove_image, itemWhoseImageWillBeRemoved.title),
                 color = Color.Gray
             )
-            Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                VoidButton(
-                    "Cancel",
-                    { confirmRemoveImageItem = null },
-                    Modifier.weight(1f),
-                    focusRequester = focusRequester
-                )
-                VoidButton(
-                    "Remove",
-                    {
-                        val targetId = itemWhoseImageWillBeRemoved.configUniqueId
-                        val mutable = currentItems.toMutableList()
-                        val idx = mutable.indexOfFirst { it.configUniqueId == targetId }
-                        if (idx != -1) {
-                            mutable[idx] = mutable[idx].copy(customImageUrl = null)
-                            currentItems = mutable
-                        }
-                        confirmRemoveImageItem = null
-                        managingItem = null
-                    },
-                    Modifier.weight(1f),
-                    isDestructive = true
-                )
-            }
         }
     }
 
@@ -243,27 +246,35 @@ fun HubCategoryManagerDialog(
         val focusRequester = remember { FocusRequester() }
         LaunchedEffect(Unit) { delay(100); runCatching { focusRequester.requestFocus() } }
 
-        VoidDialog(onDismissRequest = { renameItem = null }, title = "Rename Item") {
+        VoidDialog(
+            onDismissRequest = { renameItem = null },
+            title = stringResource(R.string.hub_rename_item_title),
+            footer = {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    VoidButton(stringResource(R.string.common_cancel), { renameItem = null }, Modifier.weight(1f))
+                    VoidButton(
+                        stringResource(R.string.common_save),
+                        {
+                            val mutable = currentItems.toMutableList()
+                            val idx = mutable.indexOfFirst { it.configUniqueId == itemToRename.configUniqueId }
+                            if (idx != -1) {
+                                mutable[idx] = mutable[idx].copy(title = newRenameName)
+                                currentItems = mutable
+                            }
+                            renameItem = null
+                        },
+                        Modifier.weight(1f),
+                        isPrimary = true
+                    )
+                }
+            }
+        ) {
             com.saab.tv.ui.addons.VoidInput(
                 value = newRenameName,
                 onValueChange = { newRenameName = it },
-                placeholder = "Item Name",
+                placeholder = stringResource(R.string.hub_item_name),
                 focusRequester = focusRequester
             )
-            Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                VoidButton("Cancel", { renameItem = null }, Modifier.weight(1f))
-                VoidButton("Save", {
-                    // Update item title
-                    val mutable = currentItems.toMutableList()
-                    val idx = mutable.indexOfFirst { it.configUniqueId == itemToRename.configUniqueId }
-                    if (idx != -1) {
-                        mutable[idx] = mutable[idx].copy(title = newRenameName)
-                        currentItems = mutable
-                    }
-                    renameItem = null
-                }, Modifier.weight(1f), isPrimary = true)
-            }
         }
     }
 

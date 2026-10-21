@@ -2,8 +2,16 @@ package com.saab.tv.data.tmdb
 
 import android.app.Application
 import com.saab.tv.data.model.tmdb.*
+import com.saab.tv.data.model.CanonicalTitleEntity
 import com.saab.tv.data.remote.TmdbApiService
+import com.saab.tv.data.repository.CanonicalTitleStore
+import com.saab.tv.domain.schema.ContentIdentity
+import com.saab.tv.domain.schema.ContentKind
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -11,6 +19,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import retrofit2.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import java.lang.reflect.Proxy
 import java.util.Collections
 import kotlinx.coroutines.CancellationException
@@ -55,6 +64,7 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals(listOf("Drama"), result.genres)
         assertEquals(listOf(1, 2), result.genreIds)
         assertEquals("U/A 16+", result.ageRating)
+        assertEquals("IN", result.ageRatingRegion)
         assertEquals("https://image.tmdb.org/t/p/w500/localized.png", result.logo)
         assertEquals("https://image.tmdb.org/t/p/w500/poster.jpg", result.poster)
         assertEquals("https://image.tmdb.org/t/p/w1280/backdrop.jpg", result.backdrop)
@@ -64,6 +74,55 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals("IN", result.countries?.single())
         assertEquals(44, result.collectionId)
         assertEquals(listOf("getMovieDetails", "getMovieCredits", "getMovieImages", "getMovieReleaseDates").toSet(), stub.calls.toSet())
+    }
+
+    @Test fun playbackCastFetchUsesOnlyCreditsAndCachesTheResult() = runBlocking {
+        val stub = ApiStub(mapOf(
+            "getMovieCredits" to TmdbCreditsResponse(cast = listOf(
+                TmdbCastMember(21, "Lead Actor", "Hero", "/lead.jpg"),
+                TmdbCastMember(22, " ", "Ignored")
+            ))
+        ))
+        val service = service(stub)
+
+        val first = service.fetchCastMembers("10", "movie", "en")
+        val second = service.fetchCastMembers("10", "movie", "en")
+
+        assertEquals(first, second)
+        assertEquals(listOf(TmdbCastInfo("Lead Actor", "Hero", "https://image.tmdb.org/t/p/w500/lead.jpg", 21)), first)
+        assertEquals(listOf("getMovieCredits"), stub.calls.toList())
+    }
+
+    @Test fun fullDetailsDoNotReuseHomePayloadAndAreReusableAfterServiceRestart() = runBlocking {
+        val store = object : CanonicalTitleStore {
+            var row: CanonicalTitleEntity? = null
+            override suspend fun getTitle(identity: ContentIdentity, locale: String) =
+                row?.takeIf { it.identityKey == identity.stableKey && it.locale == locale }
+            override suspend fun putTitle(title: CanonicalTitleEntity) { row = title }
+        }
+        val stub = ApiStub(mapOf(
+            "getMovieDetails" to TmdbDetailsResponse(91, title = "Cached detail", overview = "Overview"),
+            "getMovieCredits" to TmdbCreditsResponse(cast = listOf(TmdbCastMember(5, "Actor", "Lead"))),
+            "getMovieImages" to TmdbImagesResponse(),
+            "getMovieReleaseDates" to TmdbMovieReleaseDatesResponse(emptyList())
+        ))
+        val metadata = TmdbMetadataService(stub.api, TmdbService(RuntimeEnvironment.getApplication(), stub.api), store)
+
+        metadata.fetchHomeEnrichment("91", "movie")
+        val details = metadata.fetchEnrichment("91", "movie")
+
+        assertEquals("Actor", details?.castMembers?.single()?.name)
+        assertEquals(2, stub.calls.count { it == "getMovieDetails" })
+        assertTrue(stub.calls.containsAll(listOf("getMovieCredits", "getMovieImages", "getMovieReleaseDates")))
+
+        val restartedStub = ApiStub(emptyMap())
+        val restarted = TmdbMetadataService(
+            restartedStub.api,
+            TmdbService(RuntimeEnvironment.getApplication(), restartedStub.api),
+            store
+        )
+        assertEquals(details, restarted.fetchEnrichment("91", "movie"))
+        assertTrue("fresh durable detail hit must not make network requests", restartedStub.calls.isEmpty())
     }
 
     @Test fun movieWithoutDirectorFallsBackToWriterCredits() = runBlocking {
@@ -118,6 +177,31 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals(first, cached)
         assertEquals(1, stub.calls.count { it == "getMovieDetails" })
         assertEquals(1, stub.calls.count { it == "getMovieImages" })
+    }
+
+    @Test fun concurrentHomeAndDetailsConsumersShareTheSameTmdbRead() = runBlocking {
+        val requests = AtomicInteger()
+        val api = Proxy.newProxyInstance(
+            TmdbApiService::class.java.classLoader,
+            arrayOf(TmdbApiService::class.java)
+        ) { _, method, _ ->
+            if (method.name != "getMovieDetails") error("Unexpected TMDB request: ${method.name}")
+            requests.incrementAndGet()
+            // Keep the first request in flight long enough for the second screen to join it.
+            Thread.sleep(100)
+            Response.success(200, TmdbDetailsResponse(90, title = "Shared title", overview = "Synopsis"))
+        } as TmdbApiService
+        val metadata = TmdbMetadataService(api, TmdbService(RuntimeEnvironment.getApplication(), api))
+
+        val results = coroutineScope {
+            listOf(
+                async(Dispatchers.Default) { metadata.fetchHomeEnrichment("90", "movie") },
+                async(Dispatchers.Default) { metadata.fetchHomeEnrichment("90", "movie") }
+            ).awaitAll()
+        }
+
+        assertEquals(listOf("Shared title", "Shared title"), results.map { it?.localizedTitle })
+        assertEquals("same title/language requests should share an in-flight fetch", 1, requests.get())
     }
 
     @Test fun metadataEnrichmentPropagatesCancellationInsteadOfConvertingItToEmptyData() = runBlocking {
@@ -225,11 +309,66 @@ class TmdbMetadataServiceRegressionTest {
         val service = service(stub)
 
         val recommendations = service.fetchRecommendations("2", "movie", language = "en_us", maxItems = 2)
-        assertEquals(listOf("English Match", "Popular"), recommendations.map { it.name })
+        assertEquals(listOf("English Match", "Popular"), recommendations.map { it.title })
         assertEquals(recommendations, service.fetchRecommendations("2", "movie", language = "en-US", maxItems = 2))
-        assertEquals(listOf("Earlier", "Later"), service.fetchCollection(9).map { it.name })
+        assertEquals(listOf("Earlier", "Later"), service.fetchCollection(9).map { it.title })
         assertEquals(1, stub.calls.count { it == "getMovieRecommendations" })
         assertEquals(1, stub.calls.count { it == "getCollectionDetails" })
+    }
+
+    @Test fun recommendationAndIntentPagesExposeMoreResultsAndRequestTheRequestedPage() = runBlocking {
+        val recommendationStub = ApiStub(mapOf(
+            "getMovieRecommendations" to TmdbRecommendationsResponse(
+                results = listOf(TmdbRecommendationResult(31, title = "Recommendation page two")),
+                totalPages = 3
+            )
+        ))
+        val recommendationPage = service(recommendationStub).fetchRecommendationsPage(
+            "2", "movie", page = 2, maxItems = 20
+        )
+
+        assertEquals(2, recommendationPage.page)
+        assertTrue(recommendationPage.hasMore)
+        assertEquals("Recommendation page two", recommendationPage.items.single().title)
+        assertEquals(2, recommendationStub.arguments.getValue("getMovieRecommendations")[3])
+
+        val discoverStub = ApiStub(mapOf(
+            "discoverMovies" to TmdbDiscoverResponse(
+                page = 2,
+                totalPages = 4,
+                results = listOf(TmdbDiscoverResult(42, title = "Discovery page two", posterPath = "/42.jpg"))
+            )
+        ))
+        val discoveryPage = service(discoverStub).discoverByIntentPage(
+            TmdbNaturalQuery("movie", null, null, "popularity.desc"),
+            page = 2,
+            maxItems = 20
+        )
+
+        assertEquals(2, discoveryPage.page)
+        assertTrue(discoveryPage.hasMore)
+        assertEquals("Discovery page two", discoveryPage.items.single().title)
+        assertEquals(2, discoverStub.arguments.getValue("discoverMovies")[2])
+    }
+
+    @Test fun intentDiscoverySurfacesUnsuccessfulHttpResponsesForSearchRecovery() = runBlocking {
+        val api = Proxy.newProxyInstance(
+            TmdbApiService::class.java.classLoader,
+            arrayOf(TmdbApiService::class.java)
+        ) { _, method, _ ->
+            if (method.name != "discoverMovies") error("Unexpected TMDB request: ${method.name}")
+            Response.error<TmdbDiscoverResponse>(503, "temporarily unavailable".toResponseBody())
+        } as TmdbApiService
+        val metadata = TmdbMetadataService(api, TmdbService(RuntimeEnvironment.getApplication(), api))
+
+        val result = metadata.discoverByIntentPage(
+            TmdbNaturalQuery("movie", null, null, "popularity.desc"),
+            page = 1,
+            maxItems = 15
+        )
+
+        assertTrue(result.failed)
+        assertTrue(result.items.isEmpty())
     }
 
     @Test fun personDetailUsesCastCreditsAndSeparatesMovieAndTvFilmography() = runBlocking {
@@ -247,10 +386,10 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals("Performer", person.name)
         assertEquals("Biography", person.biography)
         assertEquals("https://image.tmdb.org/t/p/w500/person.jpg", person.profilePhoto)
-        assertEquals("Film", person.movieCredits.single().name)
-        assertEquals("movie", person.movieCredits.single().type)
-        assertEquals("Show", person.tvCredits.single().name)
-        assertEquals("series", person.tvCredits.single().type)
+        assertEquals("Film", person.movieCredits.single().title)
+        assertEquals("movie", person.movieCredits.single().kind.keyPart)
+        assertEquals("Show", person.tvCredits.single().title)
+        assertEquals("series", person.tvCredits.single().kind.keyPart)
     }
 
     @Test fun trailersPreferOfficialYoutubeAndDiscoverMapsPosterRequiredResults() = runBlocking {
@@ -272,8 +411,8 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals("official", service.fetchVideos("10", "movie").first().key)
         val (discover, pages) = service.fetchDiscover(77, "company", "movie", "popularity.desc", page = 2)
         assertEquals(4, pages)
-        assertEquals(listOf("Has Poster", "Alternate Title"), discover.map { it.name })
-        assertEquals("2023", discover.first().releaseInfo)
+        assertEquals(listOf("Has Poster", "Alternate Title"), discover.map { it.title })
+        assertEquals("2023", discover.first().year)
         assertNull(service.fetchBestTrailerKey("bad-id", "movie"))
     }
 
@@ -325,9 +464,9 @@ class TmdbMetadataServiceRegressionTest {
             maxItems = 4
         )
 
-        assertEquals(listOf("movie", "series", "movie", "series"), mixed.map { it.type })
-        assertEquals(listOf(1, 11, 2, 12), mixed.map { it.tmdbId })
-        assertTrue(moviesOnly.all { it.type == "movie" })
+        assertEquals(listOf("movie", "series", "movie", "series"), mixed.map { it.kind.keyPart })
+        assertEquals(listOf("1", "11", "2", "12"), mixed.map { it.identity.externalId })
+        assertTrue(moviesOnly.all { it.kind.keyPart == "movie" })
     }
 
     @Test fun entityDetailsDistinguishCompaniesAndNetworksAndDiscoverTvRoutesToNetwork() = runBlocking {
@@ -348,9 +487,9 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals("company", company.kind)
         assertNull(network.description)
         assertEquals("network", network.kind)
-        assertEquals(listOf("Series"), series.map { it.name })
-        assertEquals("series", series.single().type)
-        assertEquals("2022", series.single().releaseInfo)
+        assertEquals(listOf("Series"), series.map { it.title })
+        assertEquals("series", series.single().kind.keyPart)
+        assertEquals("2022", series.single().year)
         assertEquals(2, pages)
     }
 

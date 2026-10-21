@@ -5,6 +5,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.io.IOException
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -33,9 +34,55 @@ internal data class JustWatchCandidate(
     val addedDate: String? = null
 )
 
+internal class ProviderCircuitOpenException : IOException("JustWatch requests are temporarily paused after repeated endpoint failures.")
+
+/** A small endpoint-level kill switch: stale catalog rows remain usable while the provider recovers. */
+internal class ProviderFailureCircuit(
+    private val failureThreshold: Int = 2,
+    private val openDurationMs: Long = TimeUnit.MINUTES.toMillis(5)
+) {
+    private var consecutiveFailures = 0
+    private var openUntilMs = 0L
+
+    @Synchronized
+    fun check(nowMs: Long) {
+        if (openUntilMs > nowMs) throw ProviderCircuitOpenException()
+        if (openUntilMs != 0L) {
+            openUntilMs = 0L
+            consecutiveFailures = 0
+        }
+    }
+
+    @Synchronized
+    fun recordSuccess() {
+        consecutiveFailures = 0
+        openUntilMs = 0L
+    }
+
+    @Synchronized
+    fun recordFailure(nowMs: Long) {
+        consecutiveFailures++
+        if (consecutiveFailures >= failureThreshold) openUntilMs = nowMs + openDurationMs
+    }
+
+    @Synchronized
+    fun openFor(nowMs: Long, durationMs: Long = openDurationMs) {
+        openUntilMs = nowMs + durationMs.coerceIn(1_000L, TimeUnit.MINUTES.toMillis(10))
+    }
+}
+
+private class JustWatchHttpException(
+    val statusCode: Int,
+    val retryAfterMs: Long? = null
+) : IOException("JustWatch returned HTTP $statusCode")
+
+private class JustWatchContractException(message: String) : IOException(message)
+
 /** Endpoint-specific client for JustWatch's undocumented GraphQL API. */
 internal class JustWatchOttClient(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val circuit: ProviderFailureCircuit = ProviderFailureCircuit()
 ) {
     companion object {
         private const val ENDPOINT = "https://apis.justwatch.com/graphql"
@@ -89,11 +136,12 @@ internal class JustWatchOttClient(
             }
         """.trimIndent()
 
-        val edges = postGraphQl(query)
+        val root = postGraphQl(query)
+        val edges = root
             .objectOrNull("data")
             ?.objectOrNull("popularTitles")
             ?.arrayOrNull("edges")
-            ?: throw IOException("JustWatch returned no popularity results")
+            ?: contractFailure("JustWatch popularity response schema changed")
         return parseEdges(edges, kind, provider, addedDate = null)
     }
 
@@ -119,11 +167,14 @@ internal class JustWatchOttClient(
             }
         """.trimIndent()
 
-        val dates = postGraphQl(bucketQuery)
+        val bucketRoot = postGraphQl(bucketQuery)
+        val bucketEdges = bucketRoot
             .objectOrNull("data")
             ?.objectOrNull("newTitleBuckets")
             ?.arrayOrNull("edges")
-            ?.mapNotNull { edge -> edge.asJsonObject.objectOrNull("key")?.stringOrNull("date") }
+            ?: contractFailure("JustWatch new-title response schema changed")
+        val dates = bucketEdges
+            .mapNotNull { edge -> edge.asJsonObject.objectOrNull("key")?.stringOrNull("date") }
             ?.distinct()
             .orEmpty()
         if (dates.isEmpty()) return emptyList()
@@ -131,11 +182,12 @@ internal class JustWatchOttClient(
         val candidates = mutableListOf<JustWatchCandidate>()
         val seen = mutableSetOf<String>()
         for (date in dates) {
-            val edges = postGraphQl(newTitlesQuery(provider, kind, date))
+            val root = postGraphQl(newTitlesQuery(provider, kind, date))
+            val edges = root
                 .objectOrNull("data")
                 ?.objectOrNull("newTitles")
                 ?.arrayOrNull("edges")
-                ?: continue
+                ?: contractFailure("JustWatch new-title page schema changed")
             parseEdges(edges, kind, provider, date).forEach { candidate ->
                 if (seen.add("${candidate.kind}:${candidate.imdbId}")) candidates += candidate
             }
@@ -256,6 +308,7 @@ internal class JustWatchOttClient(
     }
 
     private suspend fun postGraphQl(query: String): JsonObject {
+        circuit.check(nowMs())
         val payload = JsonObject().apply { addProperty("query", query) }.toString()
         var lastError: Exception? = null
         repeat(3) { attempt ->
@@ -270,7 +323,12 @@ internal class JustWatchOttClient(
                         .build()
                     okHttpClient.newCall(request).execute().use { response ->
                         val body = response.body?.string().orEmpty()
-                        if (!response.isSuccessful) throw IOException("JustWatch returned HTTP ${response.code}")
+                        if (!response.isSuccessful) {
+                            val retryAfter = response.header("Retry-After")?.toLongOrNull()
+                                ?.coerceIn(1L, TimeUnit.MINUTES.toSeconds(10))
+                                ?.let(TimeUnit.SECONDS::toMillis)
+                            throw JustWatchHttpException(response.code, retryAfter)
+                        }
                         if (body.isBlank()) throw IOException("JustWatch returned an empty response")
                         body
                     }
@@ -279,9 +337,21 @@ internal class JustWatchOttClient(
                 val errors = root.arrayOrNull("errors")
                 if (errors != null && errors.size() > 0) {
                     val message = errors.first().asJsonObject.stringOrNull("message")
-                    throw IOException("JustWatch GraphQL error: ${message ?: "unknown error"}")
+                    throw JustWatchContractException("JustWatch GraphQL error: ${message ?: "unknown error"}")
                 }
+                circuit.recordSuccess()
                 return root
+            } catch (e: JustWatchContractException) {
+                circuit.openFor(nowMs())
+                throw e
+            } catch (e: JustWatchHttpException) {
+                when {
+                    e.statusCode == 429 -> circuit.openFor(nowMs(), e.retryAfterMs ?: TimeUnit.MINUTES.toMillis(1))
+                    e.statusCode in 400..499 -> circuit.openFor(nowMs())
+                    else -> lastError = e
+                }
+                if (e.statusCode !in 500..599) throw e
+                if (attempt < 2) delay(500L * (attempt + 1))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -289,7 +359,13 @@ internal class JustWatchOttClient(
                 if (attempt < 2) delay(500L * (attempt + 1))
             }
         }
+        circuit.recordFailure(nowMs())
         throw lastError ?: IOException("JustWatch request failed")
+    }
+
+    private fun contractFailure(message: String): Nothing {
+        circuit.openFor(nowMs())
+        throw JustWatchContractException(message)
     }
 
     private fun contentFields(): String = """

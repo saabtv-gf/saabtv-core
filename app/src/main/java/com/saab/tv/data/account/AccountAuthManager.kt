@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-class AccountApiException(val status: Int, message: String) : IOException(message)
+class AccountApiException(val status: Int, message: String, val serviceCode: String? = null) : IOException(message)
 
 @Singleton
 class AccountAuthManager @Inject constructor(@ApplicationContext private val context: Context) {
@@ -44,6 +44,12 @@ class AccountAuthManager @Inject constructor(@ApplicationContext private val con
     val hasSession: Boolean get() = userId != null && !prefs.getString("cookie", null).isNullOrBlank()
     val syncKey: ByteArray get() = Base64.decode(prefs.getString("sync_key", null)
         ?: throw IOException("Please sign in again to unlock account sync."), Base64.NO_WRAP)
+
+    /** Use a short-lived key copy and clear it even when encryption/decryption fails. */
+    internal fun <T> withSyncKey(block: (ByteArray) -> T): T {
+        val key = syncKey
+        return try { block(key) } finally { key.fill(0) }
+    }
 
     init {
         // The encrypted session is authoritative. Repair the non-secret routing
@@ -182,9 +188,10 @@ class AccountAuthManager @Inject constructor(@ApplicationContext private val con
                 status == 404 -> "Account sync is not configured in Neon yet."
                 status == 409 || status == 412 -> "Another device changed this account. Reload before syncing."
                 status == 429 -> "Too many attempts. Please wait and try again."
+                status == 413 -> "The sync payload is larger than the server accepts. Reduce account data before retrying."
                 else -> "Neon request failed (HTTP $status). Please try again."
             }
-            throw AccountApiException(status, message)
+            throw AccountApiException(status, message, code)
         }
         return JsonParser.parseString(raw).asJsonObject
     }

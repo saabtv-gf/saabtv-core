@@ -3,18 +3,23 @@ package com.saab.tv.ui.settings
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import com.saab.tv.ui.addons.VoidDialog
+import com.saab.tv.ui.components.SaabMotion
 import com.saab.tv.ui.details.FilterDropdown
 import com.saab.tv.data.stream.StreamSortingService
+import com.saab.tv.ui.navigation.isBackOrEscape
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.text.style.TextOverflow
+import com.saab.tv.ui.navigation.isInitialBackPress
+import androidx.compose.ui.res.stringResource
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -40,12 +45,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontWeight
@@ -59,6 +69,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.saab.tv.BuildConfig
+import com.saab.tv.R
+import com.saab.tv.data.localization.AppLanguage
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.profile.autoSkipCountdownSeconds
 import com.saab.tv.data.model.ThemeEntity
@@ -139,6 +151,7 @@ fun PersonalizationSettings(
 ) {
     if (currentProfile == null) return
 
+    val settingsContext = androidx.compose.ui.platform.LocalContext.current
     val roundCorners = currentProfile.roundCorners
     val hubRoundCorners = currentProfile.hubRoundCorners
     val navPos = currentProfile.navPosition
@@ -152,27 +165,38 @@ fun PersonalizationSettings(
     ) {
         // HEADER
         Text(
-            "Personalization",
+            stringResource(R.string.personalization_heading),
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
             color = Color.White
         )
         Text(
-            "Customize your viewing experience.",
+            stringResource(R.string.personalization_description),
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = Color.White.copy(0.6f),
             modifier = Modifier.padding(top = 4.dp)
         )
 
+        Spacer(Modifier.height(10.dp))
+        SettingToggleRow(
+            label = stringResource(R.string.personalization_reduce_motion),
+            subtitle = stringResource(R.string.personalization_reduce_motion_description),
+            isChecked = SaabMotion.isReducedMotion,
+            onCheckedChange = { SaabMotion.setReducedMotion(settingsContext, it) },
+            onBack = onGoBack,
+            modifier = Modifier.testTag("personalization-reduce-motion")
+        )
+
         Spacer(Modifier.height(15.dp))
 
         // POSTER CORNERS
-        SettingRow("Poster Corners") {
+        SettingRow(stringResource(R.string.personalization_poster_corners)) {
             VoidSegmentedControl(
-                options = listOf("Round" to true, "Sharp" to false),
+                options = listOf(stringResource(R.string.common_round) to true, stringResource(R.string.common_sharp) to false),
                 selectedOption = roundCorners,
                 onOptionSelected = { viewModel.updateRoundCorners(currentProfile.id, it) },
                 onBack = onGoBack,
-                blockUp = true
+                blockUp = true,
+                optionTestTagPrefix = "personalization-poster-corners"
             )
         }
         Spacer(Modifier.height(15.dp))
@@ -180,13 +204,14 @@ fun PersonalizationSettings(
         Spacer(Modifier.height(15.dp))
 
         // HUB SHAPE
-        SettingRow("Hub Shape") {
+        SettingRow(stringResource(R.string.personalization_hub_shape)) {
             VoidSegmentedControl(
-                options = listOf("Round" to true, "Sharp" to false),
+                options = listOf(stringResource(R.string.common_round) to true, stringResource(R.string.common_sharp) to false),
                 selectedOption = hubRoundCorners,
                 onOptionSelected = { viewModel.updateHubRoundCorners(currentProfile.id, it) },
                 onBack = onGoBack,
-                blockUp = false
+                blockUp = false,
+                optionTestTagPrefix = "personalization-hub-shape"
             )
         }
         Spacer(Modifier.height(15.dp))
@@ -194,13 +219,14 @@ fun PersonalizationSettings(
         Spacer(Modifier.height(15.dp))
 
         // Profile-wide title-card layout
-        SettingRow("Title Cards") {
+        SettingRow(stringResource(R.string.personalization_title_cards)) {
             VoidSegmentedControl(
-                options = listOf("Poster" to "poster", "Landscape" to "landscape"),
+                options = listOf(stringResource(R.string.common_poster) to "poster", stringResource(R.string.common_landscape) to "landscape"),
                 selectedOption = currentProfile.titleCardShape,
                 onOptionSelected = { viewModel.updateTitleCardShape(currentProfile.id, it) },
                 onBack = onGoBack,
-                blockUp = false
+                blockUp = false,
+                optionTestTagPrefix = "personalization-title-card-layout"
             )
         }
         Spacer(Modifier.height(15.dp))
@@ -208,13 +234,14 @@ fun PersonalizationSettings(
         Spacer(Modifier.height(15.dp))
 
         // MENU POSITION
-        SettingRow("Menu Position") {
+        SettingRow(stringResource(R.string.personalization_menu_position)) {
             VoidSegmentedControl(
-                options = listOf("Left" to "left", "Top" to "top"),
+                options = listOf(stringResource(R.string.common_left) to "left", stringResource(R.string.common_top) to "top"),
                 selectedOption = navPos,
                 onOptionSelected = { viewModel.updateNavPosition(currentProfile.id, it) },
                 onBack = onGoBack,
-                blockUp = false
+                blockUp = false,
+                optionTestTagPrefix = "personalization-menu-position"
             )
         }
         Spacer(Modifier.height(15.dp))
@@ -222,13 +249,15 @@ fun PersonalizationSettings(
         Spacer(Modifier.height(15.dp))
 
         // SPLASH SCREEN
-        SettingRow("Splash Screen") {
+        SettingRow(stringResource(R.string.personalization_splash_screen)) {
             VoidSegmentedControl(
-                options = listOf("On" to true, "Off" to false),
+                options = listOf(stringResource(R.string.common_on) to true, stringResource(R.string.common_off) to false),
                 selectedOption = currentProfile.splashEnabled,
                 onOptionSelected = { viewModel.updateSplashEnabled(currentProfile.id, it) },
                 onBack = onGoBack,
-                blockUp = false
+                blockUp = false,
+                modifier = Modifier.testTag("personalization-splash-control"),
+                optionTestTagPrefix = "personalization-splash-option"
             )
         }
     }
@@ -288,12 +317,12 @@ fun PlaybackSettings(
         ) {
             // HEADER
             Text(
-                "Playback",
+                stringResource(R.string.playback_heading),
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
                 color = Color.White
             )
             Text(
-                "Configure video decoding and display settings.",
+                stringResource(R.string.playback_description),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                 color = Color.White.copy(0.6f),
                 modifier = Modifier.padding(top = 4.dp)
@@ -301,17 +330,17 @@ fun PlaybackSettings(
 
             Spacer(Modifier.height(15.dp))
 
-            SettingsSection("Display & Player", onGoBack, initiallyExpanded = true) {
+            SettingsSection(stringResource(R.string.playback_display_player), onGoBack, initiallyExpanded = true) {
             // TUNNELED PLAYBACK
             SettingToggleRow(
-                label = "This Device Has A 4K Display",
-                subtitle = "Device-only. Changing this resets local display-quality defaults for your profiles, not your other TVs.",
+                label = stringResource(R.string.playback_4k_label),
+                subtitle = stringResource(R.string.playback_4k_description),
                 isChecked = viewModel.deviceDisplay.is4k(),
                 onCheckedChange = { viewModel.deviceDisplay.configure(it) }, onBack = onGoBack
             )
             SettingToggleRow(
-                label = "Tunneled Playback",
-                subtitle = "Better 4K/HDR support, may not work on all devices",
+                label = stringResource(R.string.playback_tunneled),
+                subtitle = stringResource(R.string.playback_tunneled_description),
                 isChecked = currentProfile.tunnelingEnabled,
                 onCheckedChange = { viewModel.updateTunnelingEnabled(currentProfile.id, it) },
                 onBack = onGoBack
@@ -319,8 +348,8 @@ fun PlaybackSettings(
 
             // DV7 → HEVC FALLBACK
             SettingToggleRow(
-                label = "Dolby Vision Profile 7 Fallback",
-                subtitle = "Play DV7 content as HDR on compatible displays",
+                label = stringResource(R.string.playback_dolby_fallback),
+                subtitle = stringResource(R.string.playback_dolby_fallback_description),
                 isChecked = currentProfile.mapDV7ToHevc,
                 onCheckedChange = { viewModel.updateMapDV7ToHevc(currentProfile.id, it) },
                 onBack = onGoBack
@@ -328,8 +357,8 @@ fun PlaybackSettings(
 
             // FRAME RATE MATCHING
             SettingToggleRow(
-                label = "Frame Rate Matching",
-                subtitle = "Match display refresh rate to video frame rate",
+                label = stringResource(R.string.playback_frame_rate_matching),
+                subtitle = stringResource(R.string.playback_frame_rate_description),
                 isChecked = currentProfile.frameRateMatching,
                 onCheckedChange = { viewModel.updateFrameRateMatching(currentProfile.id, it) },
                 onBack = onGoBack
@@ -337,8 +366,8 @@ fun PlaybackSettings(
 
             // DECODER PRIORITY
             SettingOptionRow(
-                label = "Decoder Priority",
-                options = listOf("Device" to 0, "Prefer Device" to 1, "Prefer App" to 2),
+                label = stringResource(R.string.playback_decoder_priority),
+                options = listOf(stringResource(R.string.playback_device) to 0, stringResource(R.string.playback_prefer_device) to 1, stringResource(R.string.playback_prefer_app) to 2),
                 selectedOption = currentProfile.decoderPriority,
                 onOptionSelected = { viewModel.updateDecoderPriority(currentProfile.id, it) },
                 onBack = onGoBack
@@ -346,8 +375,8 @@ fun PlaybackSettings(
 
             // PLAYER PREFERENCE
             SettingOptionRow(
-                label = "Player",
-                options = listOf("Internal" to "internal", "External" to "external", "Ask" to "ask"),
+                label = stringResource(R.string.playback_player),
+                options = listOf(stringResource(R.string.playback_internal) to "internal", stringResource(R.string.playback_external) to "external", stringResource(R.string.playback_ask) to "ask"),
                 selectedOption = currentProfile.playerPreference,
                 onOptionSelected = { viewModel.updatePlayerPreference(currentProfile.id, it) },
                 onBack = onGoBack
@@ -355,10 +384,10 @@ fun PlaybackSettings(
 
 
             }
-            SettingsSection("Seeking & Source Selection", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.playback_seeking_source), onGoBack, initiallyExpanded = false) {
             SettingOptionRow(
-                label = "Seek Interval",
-                options = listOf("10 Seconds" to 10, "20 Seconds" to 20, "30 Seconds" to 30),
+                label = stringResource(R.string.playback_seek_interval),
+                options = listOf(stringResource(R.string.seconds_count, 10) to 10, stringResource(R.string.seconds_count, 20) to 20, stringResource(R.string.seconds_count, 30) to 30),
                 selectedOption = currentProfile.seekTimeIntervalSeconds,
                 onOptionSelected = {
                     viewModel.updateSeekTimeInterval(currentProfile.id, it)
@@ -367,8 +396,8 @@ fun PlaybackSettings(
             )
 
             SettingToggleRow(
-                label = "Seek Scene Thumbnails",
-                subtitle = "Preload previews with an isolated low-priority libmpv worker",
+                label = stringResource(R.string.playback_seek_thumbnails),
+                subtitle = stringResource(R.string.playback_seek_thumbnails_description),
                 isChecked = currentProfile.seekThumbnailsEnabled,
                 onCheckedChange = {
                     viewModel.updateSeekThumbnailsEnabled(currentProfile.id, it)
@@ -378,8 +407,8 @@ fun PlaybackSettings(
 
             // REMEMBER SOURCE SELECTION
             SettingToggleRow(
-                label = "Remember Source Selection",
-                subtitle = "Save your source choice and reuse it on resume",
+                label = stringResource(R.string.playback_remember_source),
+                subtitle = stringResource(R.string.playback_remember_source_description),
                 isChecked = currentProfile.rememberSourceSelection,
                 onCheckedChange = { viewModel.updateRememberSourceSelection(currentProfile.id, it) },
                 onBack = onGoBack
@@ -387,8 +416,8 @@ fun PlaybackSettings(
 
             // AUTO-SELECT SOURCE
             SettingToggleRow(
-                label = "Auto-select Source",
-                subtitle = "Automatically pick the first available source for new content",
+                label = stringResource(R.string.playback_auto_select_source),
+                subtitle = stringResource(R.string.playback_auto_select_source_description),
                 isChecked = currentProfile.autoSelectSource,
                 onCheckedChange = { viewModel.updateAutoSelectSource(currentProfile.id, it) },
                 onBack = onGoBack
@@ -396,34 +425,34 @@ fun PlaybackSettings(
 
 
             }
-            SettingsSection("Episodes & Auto-Skip", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.playback_episodes_auto_skip), onGoBack, initiallyExpanded = false) {
             SettingToggleRow(
-                label = "Hide Unwatched Episode Spoilers",
-                subtitle = "Blur episode artwork and collapse descriptions until the episode is watched.",
+                label = stringResource(R.string.playback_hide_episode_spoilers),
+                subtitle = stringResource(R.string.playback_hide_episode_spoilers_description),
                 isChecked = hideSpoilers,
                 onCheckedChange = { com.saab.tv.data.profile.EpisodeSpoilerPreferences.set(spoilerContext, currentProfile.id, it) },
                 onBack = onGoBack
             )
             // SKIP INTRO
             SettingToggleRow(
-                label = "Skip Intro",
-                subtitle = "Show a skip button for IntroDB intro segments",
+                label = stringResource(R.string.playback_skip_intro),
+                subtitle = stringResource(R.string.playback_skip_intro_description),
                 isChecked = currentProfile.skipIntro,
                 onCheckedChange = { viewModel.updateSkipIntro(currentProfile.id, it) },
                 onBack = onGoBack
             )
 
             SettingToggleRow(
-                label = "Skip Recap",
-                subtitle = "Show a skip button for IntroDB recap segments",
+                label = stringResource(R.string.playback_skip_recap),
+                subtitle = stringResource(R.string.playback_skip_recap_description),
                 isChecked = currentProfile.skipRecap,
                 onCheckedChange = { viewModel.updateSkipRecap(currentProfile.id, it) },
                 onBack = onGoBack
             )
 
             SettingOptionRow(
-                label = "Auto-Skip Countdown",
-                options = listOf("Off" to 0, "5 Seconds" to 5, "10 Seconds" to 10),
+                label = stringResource(R.string.playback_autoskip_countdown),
+                options = listOf(stringResource(R.string.common_off) to 0, stringResource(R.string.seconds_count, 5) to 5, stringResource(R.string.seconds_count, 10) to 10),
                 selectedOption = currentProfile.autoSkipCountdownSeconds,
                 onOptionSelected = {
                     viewModel.updateAutoSkipCountdown(currentProfile.id, it)
@@ -433,8 +462,8 @@ fun PlaybackSettings(
 
             // AUTOPLAY NEXT EPISODE
             SettingToggleRow(
-                label = "Autoplay Next Episode",
-                subtitle = "Use the Auto-Skip Countdown for detected outros and the next episode",
+                label = stringResource(R.string.playback_autoplay_next),
+                subtitle = stringResource(R.string.playback_autoplay_next_description),
                 isChecked = currentProfile.autoplayNextEpisode,
                 onCheckedChange = { viewModel.updateAutoplayNextEpisode(currentProfile.id, it) },
                 onBack = onGoBack
@@ -445,27 +474,28 @@ fun PlaybackSettings(
                 Spacer(Modifier.height(4.dp))
 
                 SettingOptionRow(
-                    label = "Manual Next-Episode Prompt Without IntroDB",
-                    options = listOf("Off" to "introdb", "Percentage" to "percentage", "Time" to "time", "Smart" to "smart"),
+                    label = stringResource(R.string.playback_next_prompt_fallback),
+                    options = listOf(stringResource(R.string.common_off) to "introdb", stringResource(R.string.playback_percentage) to "percentage", stringResource(R.string.playback_time) to "time", stringResource(R.string.playback_smart) to "smart"),
                     selectedOption = currentProfile.autoplayThresholdMode,
                     onOptionSelected = { viewModel.updateAutoplayThresholdMode(currentProfile.id, it) },
                     onBack = onGoBack
                 )
 
                 if (currentProfile.autoplayThresholdMode == "smart") {
-                    Text("On-device OCR checks cached frames in the final five minutes; missing frames are prioritized by the isolated decoder. Requires Seek Thumbnails. Shows the next-episode button one interval before likely credits and never auto-advances.",
+                    Text(stringResource(R.string.playback_smart_fallback_description),
                         color = Color.White.copy(0.6f), style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp))
                 } else if (currentProfile.autoplayThresholdMode == "percentage") {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "Trigger at ${currentProfile.autoplayThresholdPercent}%",
+                        text = stringResource(R.string.playback_trigger_percent, currentProfile.autoplayThresholdPercent),
                         color = Color.White.copy(0.6f),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                         modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
                     )
                     VoidSlider(
                         value = currentProfile.autoplayThresholdPercent.toFloat(),
+                        accessibilityLabel = stringResource(R.string.playback_trigger_percent, currentProfile.autoplayThresholdPercent),
                         onValueChange = { viewModel.updateAutoplayThresholdPercent(currentProfile.id, it.toInt()) },
                         valueRange = 50f..99f,
                         steps = 48
@@ -473,15 +503,16 @@ fun PlaybackSettings(
                 } else if (currentProfile.autoplayThresholdMode == "time") {
                     Spacer(Modifier.height(4.dp))
                     val secs = currentProfile.autoplayThresholdSeconds
-                    val display = if (secs >= 60) "${secs / 60}m ${secs % 60}s remaining" else "${secs}s remaining"
+                    val display = if (secs >= 60) stringResource(R.string.playback_remaining_minutes_seconds, secs / 60, secs % 60) else stringResource(R.string.playback_remaining_seconds, secs)
                     Text(
-                        text = "Trigger with $display",
+                        text = stringResource(R.string.playback_trigger_remaining, display),
                         color = Color.White.copy(0.6f),
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                         modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
                     )
                     VoidSlider(
                         value = secs.toFloat(),
+                        accessibilityLabel = stringResource(R.string.playback_trigger_remaining, display),
                         onValueChange = { viewModel.updateAutoplayThresholdSeconds(currentProfile.id, it.toInt()) },
                         valueRange = 10f..300f,
                         steps = 28
@@ -491,45 +522,45 @@ fun PlaybackSettings(
 
 
             }
-            SettingsSection("Trailer Previews", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.playback_trailer_previews), onGoBack, initiallyExpanded = false) {
             SettingToggleRow(
-                label = "Autoplay Trailers",
-                subtitle = "Preview a focused title after a delay. Back restores the normal catalog.",
+                label = stringResource(R.string.playback_autoplay_trailers),
+                subtitle = stringResource(R.string.playback_autoplay_trailers_description),
                 isChecked = trailerPreview.enabled,
                 onCheckedChange = { com.saab.tv.data.profile.TrailerPreviewPreferences.set(spoilerContext, currentProfile.id, trailerPreview.copy(enabled = it)) },
                 onBack = onGoBack
             )
             SettingOptionRow(
-                label = "Trailer Preview Style",
-                options = listOf("Inline Card" to "inline", "Fullscreen" to "fullscreen"),
+                label = stringResource(R.string.playback_trailer_preview_style),
+                options = listOf(stringResource(R.string.playback_inline_card) to "inline", stringResource(R.string.playback_fullscreen) to "fullscreen"),
                 selectedOption = trailerPreview.presentation,
                 onOptionSelected = { com.saab.tv.data.profile.TrailerPreviewPreferences.set(spoilerContext, currentProfile.id, trailerPreview.copy(presentation = it)) },
                 onBack = onGoBack
             )
             SettingOptionRow(
-                label = "Trailer Preview Delay",
-                options = listOf("3 Seconds" to 3, "5 Seconds" to 5, "10 Seconds" to 10, "15 Seconds" to 15),
+                label = stringResource(R.string.playback_trailer_preview_delay),
+                options = listOf(3, 5, 10, 15).map { stringResource(R.string.seconds_count, it) to it },
                 selectedOption = trailerPreview.delaySeconds,
                 onOptionSelected = { com.saab.tv.data.profile.TrailerPreviewPreferences.set(spoilerContext, currentProfile.id, trailerPreview.copy(delaySeconds = it)) },
                 onBack = onGoBack
             )
             SettingToggleRow(
-                label = "Mute Trailer Previews",
-                subtitle = "Mute autoplay previews. Manual trailers start with sound.",
+                label = stringResource(R.string.playback_mute_trailers),
+                subtitle = stringResource(R.string.playback_mute_trailers_description),
                 isChecked = trailerPreview.muted,
                 onCheckedChange = { com.saab.tv.data.profile.TrailerPreviewPreferences.set(spoilerContext, currentProfile.id, trailerPreview.copy(muted = it)) },
                 onBack = onGoBack
             )
 
             }
-            SettingsSection("Languages", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.playback_languages), onGoBack, initiallyExpanded = false) {
             // LANGUAGE PREFERENCES SECTION
             Spacer(Modifier.height(12.dp))
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(12.dp))
 
             Text(
-                "Audio & Subtitle Languages",
+                stringResource(R.string.playback_audio_subtitle_languages),
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                 color = Color.White.copy(0.7f),
                 modifier = Modifier.padding(bottom = 8.dp)
@@ -537,62 +568,69 @@ fun PlaybackSettings(
 
             Spacer(Modifier.height(12.dp))
             Text(
-                "Language Priority",
+                stringResource(R.string.playback_language_priority),
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                 color = Color.White
             )
             Text(
-                "One language order for playback audio and stream ranking. Earlier choices take priority.",
+                stringResource(R.string.playback_language_priority_description),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
                 color = Color.White.copy(0.6f),
                 modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
             )
             SettingLanguagePriorityRow(
-                label = "1st Priority",
+                label = stringResource(R.string.playback_first_priority),
                 value = currentProfile.sourceLanguagePriority1,
-                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 1, it) }
+                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 1, it) },
+                testTag = "language-priority-1"
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(12.dp))
             SettingLanguagePriorityRow(
-                label = "2nd Priority",
+                label = stringResource(R.string.playback_second_priority),
                 value = currentProfile.sourceLanguagePriority2,
-                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 2, it) }
+                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 2, it) },
+                testTag = "language-priority-2"
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(12.dp))
             SettingLanguagePriorityRow(
-                label = "3rd Priority",
+                label = stringResource(R.string.playback_third_priority),
                 value = currentProfile.sourceLanguagePriority3,
-                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 3, it) }
+                onSelect = { viewModel.updateSourceLanguagePriority(currentProfile.id, 3, it) },
+                testTag = "language-priority-3"
             )
+            Spacer(Modifier.height(20.dp))
 
             SettingLanguageRow(
-                label = "Subtitle Language",
+                label = stringResource(R.string.playback_subtitle_language),
                 currentDisplayName = languageDisplayName(currentProfile.preferredSubtitleLanguage),
                 isSet = currentProfile.preferredSubtitleLanguage.isNotEmpty(),
                 onClick = { activeLanguageField = LanguageField.SUBTITLE_PRIMARY },
                 onBack = onGoBack,
-                focusRequester = subtitlePrimaryFR
+                focusRequester = subtitlePrimaryFR,
+                testTag = "subtitle-language-primary"
             )
 
+            Spacer(Modifier.height(12.dp))
             SettingLanguageRow(
-                label = "Subtitle Language (Secondary)",
+                label = stringResource(R.string.playback_subtitle_language_secondary),
                 currentDisplayName = languageDisplayName(currentProfile.preferredSubtitleLanguageSecondary),
                 isSet = currentProfile.preferredSubtitleLanguageSecondary.isNotEmpty(),
                 onClick = { activeLanguageField = LanguageField.SUBTITLE_SECONDARY },
                 onBack = onGoBack,
-                focusRequester = subtitleSecondaryFR
+                focusRequester = subtitleSecondaryFR,
+                testTag = "subtitle-language-secondary"
             )
 
 
             }
-            SettingsSection("Subtitle Appearance", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.playback_subtitle_appearance), onGoBack, initiallyExpanded = false) {
             // SUBTITLE STYLE SECTION
             Spacer(Modifier.height(12.dp))
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(12.dp))
 
             Text(
-                "Subtitle Style",
+                stringResource(R.string.playback_subtitle_style),
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                 color = Color.White.copy(0.7f),
                 modifier = Modifier.padding(bottom = 8.dp)
@@ -601,8 +639,8 @@ fun PlaybackSettings(
             val subtitleStyleFR = remember { FocusRequester() }
 
             SettingLanguageRow(
-                label = "Subtitle Appearance",
-                currentDisplayName = "Manage",
+                label = stringResource(R.string.playback_subtitle_appearance),
+                currentDisplayName = stringResource(R.string.common_manage),
                 isSet = currentProfile.subtitleSize != 100 ||
                         currentProfile.subtitleOffset != 0 ||
                         currentProfile.subtitleTextColor != 0xFFFFFFFFL ||
@@ -615,8 +653,8 @@ fun PlaybackSettings(
             Spacer(Modifier.height(8.dp))
 
             SettingToggleRow(
-                label = "Styled ASS/SSA Subtitles",
-                subtitle = "Render ASS/SSA subtitles with full styling via libass (experimental)",
+                label = stringResource(R.string.playback_styled_subtitles),
+                subtitle = stringResource(R.string.playback_styled_subtitles_description),
                 isChecked = currentProfile.assRendererEnabled,
                 onCheckedChange = { viewModel.updateAssRendererEnabled(currentProfile.id, it) },
                 onBack = onGoBack
@@ -667,10 +705,10 @@ fun PlaybackSettings(
             null -> ""
         }
         val sidebarTitle = when (activeLanguageField) {
-            LanguageField.AUDIO_PRIMARY -> "Audio Language"
-            LanguageField.AUDIO_SECONDARY -> "Audio Language (Secondary)"
-            LanguageField.SUBTITLE_PRIMARY -> "Subtitle Language"
-            LanguageField.SUBTITLE_SECONDARY -> "Subtitle Language (Secondary)"
+            LanguageField.AUDIO_PRIMARY -> stringResource(R.string.playback_audio_language)
+            LanguageField.AUDIO_SECONDARY -> stringResource(R.string.playback_audio_language_secondary)
+            LanguageField.SUBTITLE_PRIMARY -> stringResource(R.string.playback_subtitle_language)
+            LanguageField.SUBTITLE_SECONDARY -> stringResource(R.string.playback_subtitle_language_secondary)
             null -> ""
         }
 
@@ -756,13 +794,13 @@ fun SettingToggleRow(
         if (isFocused) onFocus()
     }
 
-    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
     val borderColor by animateColorAsState(
         when {
             isFocused -> Color.White
             isChecked -> accentColor.copy(0.5f)
             else -> Color.Transparent
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
 
     val backModifier = if (onBack != null) {
@@ -785,7 +823,6 @@ fun SettingToggleRow(
             .heightIn(min = 48.dp)
             .then(backModifier)
             .then(upBlockModifier)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(if (isFocused) accentColor else Color.White.copy(0.05f))
             .border(
@@ -793,9 +830,13 @@ fun SettingToggleRow(
                 borderColor,
                 RoundedCornerShape(8.dp)
             )
-            .clickable(interactionSource = interactionSource, indication = null) {
-                onCheckedChange(!isChecked)
-            }
+            .toggleable(
+                value = isChecked,
+                role = Role.Switch,
+                interactionSource = interactionSource,
+                indication = null,
+                onValueChange = onCheckedChange
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -816,7 +857,7 @@ fun SettingToggleRow(
             if (subtitle != null) {
                 Text(
                     text = subtitle,
-                    color = if (isFocused) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.78f) else Color.White.copy(0.4f),
+                    color = if (isFocused) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.86f) else Color.White.copy(0.72f),
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp)
                 )
             }
@@ -824,6 +865,7 @@ fun SettingToggleRow(
         Checkbox(
             checked = isChecked,
             onCheckedChange = null,
+            modifier = Modifier.clearAndSetSemantics { },
             colors = CheckboxDefaults.colors(
                 checkedColor = if (isFocused) MaterialTheme.colorScheme.onPrimary else accentColor,
                 uncheckedColor = if (isFocused) MaterialTheme.colorScheme.onPrimary.copy(0.8f) else Color.White.copy(0.3f),
@@ -845,13 +887,13 @@ fun SettingToggleChip(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val accentColor = MaterialTheme.colorScheme.primary
 
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
     val borderColor by animateColorAsState(
         when {
             isFocused -> Color.White
             isChecked -> accentColor.copy(0.5f)
             else -> Color.White.copy(0.15f)
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
 
     val backModifier = if (onBack != null) {
@@ -865,14 +907,17 @@ fun SettingToggleChip(
     Row(
         modifier = Modifier
             .then(backModifier)
-            .scale(scale)
+                .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (isFocused) accentColor else if (isChecked) accentColor.copy(0.15f) else Color.White.copy(0.05f))
             .border(if (isFocused) 3.dp else 1.dp, borderColor, RoundedCornerShape(8.dp))
-            .clickable(interactionSource = interactionSource, indication = null) {
-                onCheckedChange(!isChecked)
-            }
-            .focusable(interactionSource = interactionSource)
+            .toggleable(
+                value = isChecked,
+                role = Role.Switch,
+                interactionSource = interactionSource,
+                indication = null,
+                onValueChange = onCheckedChange
+            )
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -959,26 +1004,25 @@ fun <T> SettingOptionRow(
                     if (isFocused) onFocus()
                 }
 
-                val scale by animateFloatAsState(if (isFocused) 1.06f else 1f)
                 val chipBorder by animateColorAsState(
                     when {
                         isFocused -> Color.White
                         isSelected -> accentColor
                         else -> Color.White.copy(0.15f)
-                    }
+                    },
+                    animationSpec = SaabMotion.focusFeedbackSpec()
                 )
                 val chipTextColor = when {
                     isFocused -> MaterialTheme.colorScheme.onPrimary
                     isSelected -> accentColor
-                    else -> Color.White.copy(0.6f)
+                    else -> Color.White.copy(0.76f)
                 }
 
                 Box(
                     modifier = Modifier
-                        .height(32.dp)
+                        .heightIn(min = 48.dp)
                         .then(if (index == 0) backModifier else Modifier)
                         .then(if (index == 0) upBlockModifier else Modifier)
-                        .scale(scale)
                         .clip(RoundedCornerShape(6.dp))
                         .background(if (isFocused) accentColor else if (isSelected) accentColor.copy(0.1f) else Color.Transparent)
                         .border(
@@ -986,10 +1030,13 @@ fun <T> SettingOptionRow(
                             chipBorder,
                             RoundedCornerShape(6.dp)
                         )
-                        .clickable(interactionSource = interactionSource, indication = null) {
-                            onOptionSelected(value)
-                        }
-                        .focusable(interactionSource = interactionSource)
+                        .selectable(
+                            selected = isSelected,
+                            role = Role.RadioButton,
+                            interactionSource = interactionSource,
+                            indication = null,
+                            onClick = { onOptionSelected(value) }
+                        )
                         .padding(horizontal = 12.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -1032,12 +1079,13 @@ fun <T> VoidSegmentedControl(
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
     blockUp: Boolean = false,
-    onFocus: () -> Unit = {}
+    onFocus: () -> Unit = {},
+    optionTestTagPrefix: String? = null
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(40.dp)
+            .height(52.dp)
             .then(modifier),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -1069,7 +1117,8 @@ fun <T> VoidSegmentedControl(
                 isSelected = isSelected,
                 onClick = { onOptionSelected(value) },
                 onFocus = onFocus,
-                keyModifier = backModifier.then(upBlockModifier)
+                keyModifier = backModifier.then(upBlockModifier),
+                testTag = optionTestTagPrefix?.let { "$it-$index" }
             )
         }
     }
@@ -1081,7 +1130,8 @@ fun RowScope.SegmentItem(
     isSelected: Boolean,
     onClick: () -> Unit,
     onFocus: () -> Unit,
-    keyModifier: Modifier = Modifier
+    keyModifier: Modifier = Modifier,
+    testTag: String? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -1090,12 +1140,14 @@ fun RowScope.SegmentItem(
         if (isFocused) onFocus()
     }
     
-    val scale by animateFloatAsState(if (isFocused) 1.04f else 1f)
-
-    val bgColor = if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(0.05f)
+    val bgColor = when {
+        isFocused -> MaterialTheme.colorScheme.primary
+        isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+        else -> Color.White.copy(0.05f)
+    }
     val textColor = when {
         isFocused -> MaterialTheme.colorScheme.onPrimary
-        isSelected -> MaterialTheme.colorScheme.primary
+        isSelected -> Color.White
         else -> Color.White.copy(0.7f)
     }
     
@@ -1104,7 +1156,8 @@ fun RowScope.SegmentItem(
             isFocused -> Color.White
             isSelected -> MaterialTheme.colorScheme.primary
             else -> Color.Transparent
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     val borderWidth = if (isFocused) 3.dp else if (isSelected) 2.dp else 0.dp
 
@@ -1114,12 +1167,17 @@ fun RowScope.SegmentItem(
             .widthIn(min = 100.dp)
             .fillMaxHeight()
             .then(keyModifier)
-            .scale(scale)
             .clip(RoundedCornerShape(6.dp))
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(6.dp))
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusable(interactionSource = interactionSource)
+            .selectable(
+                selected = isSelected,
+                role = Role.RadioButton,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .then(testTag?.let { Modifier.testTag(it) } ?: Modifier)
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -1146,20 +1204,22 @@ fun ColorItemFixed(
         if (isFocused) onFocus()
     }
 
-    val scale by animateFloatAsState(if (isFocused) 1.2f else 1.0f)
-    val borderWidth by animateDpAsState(if (isFocused || isSelected) 2.dp else 0.dp)
+    val borderWidth by animateDpAsState(
+        if (isFocused || isSelected) 2.dp else 0.dp,
+        animationSpec = SaabMotion.focusFeedbackSpec()
+    )
     val borderColor by animateColorAsState(
         when {
             isFocused -> Color.White
             isSelected -> MaterialTheme.colorScheme.primary
             else -> Color.Transparent
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
 
     Box(
         modifier = modifier // Applied here
             .size(40.dp)
-            .scale(scale)
             .clip(CircleShape)
             .background(color)
             .border(borderWidth, borderColor, CircleShape)
@@ -1236,7 +1296,7 @@ private fun SubtitleStyleSidebarContent(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(
-            text = "Subtitle Style",
+            text = stringResource(R.string.playback_subtitle_style),
             color = Color.White,
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
         )
@@ -1287,7 +1347,7 @@ private fun SubtitleStyleSidebarContent(
             val bottomOffset = previewHeight * bottomPaddingFraction
 
             Text(
-                text = "Your subtitles will\nlook like this",
+                text = stringResource(R.string.playback_subtitle_preview),
                 color = previewTextColor,
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontSize = scaledFontSize.sp,
@@ -1310,7 +1370,7 @@ private fun SubtitleStyleSidebarContent(
 
         // Size
         Text(
-            text = "Size: ${profile.subtitleSize}%",
+            text = stringResource(R.string.playback_subtitle_size, profile.subtitleSize),
             color = Color.White.copy(0.7f),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp)
         )
@@ -1324,7 +1384,7 @@ private fun SubtitleStyleSidebarContent(
 
         // Offset
         Text(
-            text = "Offset: ${profile.subtitleOffset}%",
+            text = stringResource(R.string.playback_subtitle_offset, profile.subtitleOffset),
             color = Color.White.copy(0.7f),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp)
         )
@@ -1337,7 +1397,7 @@ private fun SubtitleStyleSidebarContent(
 
         // Text Color
         Text(
-            text = "Text Color",
+            text = stringResource(R.string.playback_subtitle_text_color),
             color = Color.White.copy(0.7f),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp)
         )
@@ -1349,7 +1409,7 @@ private fun SubtitleStyleSidebarContent(
 
         // Background Color
         Text(
-            text = "Background",
+            text = stringResource(R.string.playback_subtitle_background),
             color = Color.White.copy(0.7f),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp)
         )
@@ -1361,26 +1421,26 @@ private fun SubtitleStyleSidebarContent(
     }
 }
 
-private val SUBTITLE_TEXT_COLORS: List<Pair<String, Long>> = listOf(
-    "White" to 0xFFFFFFFFL,
-    "Gray" to 0xFFBDBDBDL,
-    "Yellow" to 0xFFFFEB3BL,
-    "Cyan" to 0xFF00BCD4L,
-    "Red" to 0xFFF44336L,
-    "Orange" to 0xFFFF9800L,
-    "Green" to 0xFF8BC34AL
+private val SUBTITLE_TEXT_COLORS: List<Pair<Int, Long>> = listOf(
+    R.string.subtitle_color_white to 0xFFFFFFFFL,
+    R.string.subtitle_color_gray to 0xFFBDBDBDL,
+    R.string.subtitle_color_yellow to 0xFFFFEB3BL,
+    R.string.subtitle_color_cyan to 0xFF00BCD4L,
+    R.string.subtitle_color_red to 0xFFF44336L,
+    R.string.subtitle_color_orange to 0xFFFF9800L,
+    R.string.subtitle_color_green to 0xFF8BC34AL
 )
 
-private val SUBTITLE_BACKGROUND_COLORS: List<Pair<String, Long>> = listOf(
-    "None" to 0x00000000L,
-    "Black" to 0xFF000000L,
-    "Semi" to 0x80000000L,
-    "Dark" to 0xFF212121L
+private val SUBTITLE_BACKGROUND_COLORS: List<Pair<Int, Long>> = listOf(
+    R.string.subtitle_background_none to 0x00000000L,
+    R.string.subtitle_background_black to 0xFF000000L,
+    R.string.subtitle_background_semi to 0x80000000L,
+    R.string.subtitle_background_dark to 0xFF212121L
 )
 
 @Composable
 private fun SubtitleColorChipRow(
-    colors: List<Pair<String, Long>>,
+    colors: List<Pair<Int, Long>>,
     selectedColor: Long,
     onSelect: (Long) -> Unit
 ) {
@@ -1388,9 +1448,9 @@ private fun SubtitleColorChipRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        colors.forEach { (label, colorValue) ->
+        colors.forEach { (labelRes, colorValue) ->
             SubtitleColorChip(
-                label = label,
+                label = stringResource(labelRes),
                 color = Color(colorValue.toInt()),
                 isSelected = selectedColor == colorValue,
                 onClick = { onSelect(colorValue) },
@@ -1410,13 +1470,11 @@ private fun SubtitleColorChip(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f, label = "chipScale")
     val accentColor = MaterialTheme.colorScheme.primary
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .scale(scale)
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
             .focusable(interactionSource = interactionSource)
             .padding(2.dp)
@@ -1459,16 +1517,19 @@ private fun CompactVoidSlider(
     focusRequester: FocusRequester? = null
 ) {
     val accentColor = MaterialTheme.colorScheme.primary
+    val decreaseLabel = stringResource(R.string.common_decrease_value)
+    val increaseLabel = stringResource(R.string.common_increase_value)
     val stepSize = (valueRange.endInclusive - valueRange.start) / (steps + 1)
     val progress = (value - valueRange.start) / (valueRange.endInclusive - valueRange.start)
 
     Row(
-        modifier = Modifier.fillMaxWidth().height(36.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         CompactSliderButton(
             text = "−",
+            accessibilityLabel = decreaseLabel,
             enabled = value > valueRange.start,
             onClick = { onValueChange((value - stepSize).coerceIn(valueRange)) },
             focusRequester = focusRequester
@@ -1492,6 +1553,7 @@ private fun CompactVoidSlider(
 
         CompactSliderButton(
             text = "+",
+            accessibilityLabel = increaseLabel,
             enabled = value < valueRange.endInclusive,
             onClick = { onValueChange((value + stepSize).coerceIn(valueRange)) }
         )
@@ -1501,6 +1563,7 @@ private fun CompactVoidSlider(
 @Composable
 private fun CompactSliderButton(
     text: String,
+    accessibilityLabel: String,
     enabled: Boolean,
     onClick: () -> Unit,
     focusRequester: FocusRequester? = null
@@ -1508,12 +1571,14 @@ private fun CompactSliderButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val accentColor = MaterialTheme.colorScheme.primary
-    val scale by animateFloatAsState(if (isFocused) 1.1f else 1f, label = "compactBtnScale")
 
     Box(
         modifier = Modifier
-            .size(32.dp)
-            .scale(scale)
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+            .semantics {
+                contentDescription = accessibilityLabel
+                role = Role.Button
+            }
             .clip(RoundedCornerShape(6.dp))
             .background(Color.White.copy(0.1f))
             .border(
@@ -1525,9 +1590,14 @@ private fun CompactSliderButton(
                 },
                 RoundedCornerShape(6.dp)
             )
-            .clickable(interactionSource = interactionSource, indication = null) { if (enabled) onClick() }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable(interactionSource = interactionSource),
+            .clickable(
+                enabled = enabled,
+                role = Role.Button,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -1558,7 +1628,8 @@ private fun SettingLanguageRow(
     onClick: () -> Unit,
     onBack: (() -> Unit)? = null,
     focusRequester: FocusRequester? = null,
-    onFocus: () -> Unit = {}
+    onFocus: () -> Unit = {},
+    testTag: String? = null
 ) {
     val accentColor = MaterialTheme.colorScheme.primary
     val interactionSource = remember { MutableInteractionSource() }
@@ -1567,8 +1638,6 @@ private fun SettingLanguageRow(
     LaunchedEffect(isFocused) {
         if (isFocused) onFocus()
     }
-
-    val scale by animateFloatAsState(if (isFocused) 1.02f else 1f)
 
     val backModifier = if (onBack != null) {
         Modifier.onPreviewKeyEvent {
@@ -1582,9 +1651,9 @@ private fun SettingLanguageRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
             .then(backModifier)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .scale(scale)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(0.05f))
             .border(
@@ -1630,6 +1699,8 @@ internal fun LanguagePickerContent(
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val dispatchBackFromKey = com.saab.tv.ui.navigation.rememberAppBackKeyAction(onDismiss)
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Modal, onBack = onDismiss)
     val selectedIndex = options.indexOfFirst { it.second == selectedValue }.coerceAtLeast(0)
     val listState = rememberLazyListState()
     val accentColor = MaterialTheme.colorScheme.primary
@@ -1658,7 +1729,10 @@ internal fun LanguagePickerContent(
             modifier = Modifier.onPreviewKeyEvent {
                 when {
                     it.key == Key.DirectionLeft && it.type == KeyEventType.KeyDown -> true
-                    it.key == Key.Back && it.type == KeyEventType.KeyUp -> { onDismiss(); true }
+                    it.isBackOrEscape() -> {
+                        if (it.isInitialBackPress()) dispatchBackFromKey()
+                        true
+                    }
                     else -> false
                 }
             }
@@ -1715,7 +1789,7 @@ internal fun LanguagePickerContent(
                     )
                     if (isSelected) {
                         Text(
-                            "Selected",
+                            stringResource(R.string.common_selected),
                             style = MaterialTheme.typography.labelSmall,
                             color = accentColor
                         )
@@ -1730,7 +1804,8 @@ internal fun LanguagePickerContent(
 private fun SettingLanguagePriorityRow(
     label: String,
     value: String,
-    onSelect: (String) -> Unit
+    onSelect: (String) -> Unit,
+    testTag: String
 ) {
     val options = AUDIO_LANGUAGE_OPTIONS
     val selectedLabel = options.firstOrNull { it.second == value }?.first
@@ -1739,6 +1814,7 @@ private fun SettingLanguagePriorityRow(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
+            .testTag(testTag)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.White.copy(0.05f))
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1781,12 +1857,12 @@ fun SourcePreferencesSettings(
     ) {
         // HEADER
         Text(
-            "Sort & Filter",
+            stringResource(R.string.sort_filter_title),
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
             color = Color.White
         )
         Text(
-            "Configure how sources are sorted and filtered.",
+            stringResource(R.string.sort_filter_description),
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = Color.White.copy(0.6f),
             modifier = Modifier.padding(top = 4.dp)
@@ -1796,8 +1872,8 @@ fun SourcePreferencesSettings(
 
         // ENABLE SORTING
         SettingToggleRow(
-            label = "Sort Sources",
-            subtitle = "Rank sources by quality, file size, language, playback compatibility, or seeders",
+            label = stringResource(R.string.sort_filter_sort_sources),
+            subtitle = stringResource(R.string.sort_filter_source_sorting_description),
             isChecked = currentProfile.sourceSortingEnabled,
             onCheckedChange = { viewModel.updateSourceSortingEnabled(currentProfile.id, it) },
             onBack = onGoBack,
@@ -1809,27 +1885,27 @@ fun SourcePreferencesSettings(
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(0.1f)))
             Spacer(Modifier.height(15.dp))
 
-            SettingsSection("Ranking", onGoBack, initiallyExpanded = true) {
+            SettingsSection(stringResource(R.string.sort_filter_ranking), onGoBack, initiallyExpanded = true) {
             // SORT BY
             Text(
-                "Sort By",
+                stringResource(R.string.sort_filter_sort_by),
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                 color = Color.White
             )
             Text(
-                "Choose what matters most when ranking sources.",
+                stringResource(R.string.sort_filter_ranking_description),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
                 color = Color.White.copy(0.6f),
                 modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
             )
 
             SettingOptionRow(
-                label = "Sort By",
+                label = stringResource(R.string.sort_filter_sort_by),
                 options = listOf(
-                    "Best Stream" to StreamSortingService.SMART_TCL_C755,
-                    "Quality" to "quality",
-                    "File Size" to "size",
-                    "Seeders" to "seeds"
+                    stringResource(R.string.sort_filter_best_stream) to StreamSortingService.SMART_TCL_C755,
+                    stringResource(R.string.sort_filter_quality) to "quality",
+                    stringResource(R.string.sort_filter_file_size) to "size",
+                    stringResource(R.string.sort_filter_seeders) to "seeds"
                 ),
                 selectedOption = currentProfile.sourceSortPrimary,
                 onOptionSelected = { viewModel.updateSourceSortPrimary(currentProfile.id, it) },
@@ -1842,15 +1918,15 @@ fun SourcePreferencesSettings(
 
 
             }
-            SettingsSection("Allowed Qualities", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.sort_filter_allowed_qualities), onGoBack, initiallyExpanded = false) {
             // QUALITY FILTER
             Text(
-                "Allowed Qualities",
+                stringResource(R.string.sort_filter_allowed_qualities),
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                 color = Color.White
             )
             Text(
-                "Sources with disabled qualities will be hidden.",
+                stringResource(R.string.sort_filter_allowed_qualities_description),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
                 color = Color.White.copy(0.6f),
                 modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
@@ -1874,7 +1950,7 @@ fun SourcePreferencesSettings(
                 SettingToggleChip(label = "720p", isChecked = "720p" in enabledKeys, onCheckedChange = { toggleQuality("720p") })
                 SettingToggleChip(label = "480p / SD", isChecked = "sd" in enabledKeys, onCheckedChange = { toggleQuality("sd") })
                 SettingToggleChip(label = "CAM", isChecked = "cam" in enabledKeys, onCheckedChange = { toggleQuality("cam") })
-                SettingToggleChip(label = "Unknown", isChecked = "unknown" in enabledKeys, onCheckedChange = { toggleQuality("unknown") }, onBack = onGoBack)
+                SettingToggleChip(label = stringResource(R.string.sort_filter_unknown), isChecked = "unknown" in enabledKeys, onCheckedChange = { toggleQuality("unknown") }, onBack = onGoBack)
             }
 
             Spacer(Modifier.height(15.dp))
@@ -1883,17 +1959,18 @@ fun SourcePreferencesSettings(
 
 
             }
-            SettingsSection("Size, Seasons & Seeders", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.sort_filter_size_seasons_seeders), onGoBack, initiallyExpanded = false) {
             // MAX FILE SIZE
-            val sizeOptions = listOf("No Limit") + (listOf(2, 5) + (10..100 step 5).toList()).map { "$it GB" }
-            val currentSizeLabel = if (currentProfile.sourceMaxSizeGb == 0) "No Limit" else "${currentProfile.sourceMaxSizeGb} GB"
+            val noLimit = stringResource(R.string.sort_filter_no_limit)
+            val sizeOptions = listOf(noLimit) + (listOf(2, 5) + (10..100 step 5).toList()).map { "$it GB" }
+            val currentSizeLabel = if (currentProfile.sourceMaxSizeGb == 0) noLimit else "${currentProfile.sourceMaxSizeGb} GB"
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "Max File Size",
+                    stringResource(R.string.sort_filter_max_file_size),
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                     color = Color.White,
                     modifier = Modifier.weight(1f)
@@ -1903,7 +1980,7 @@ fun SourcePreferencesSettings(
                     options = sizeOptions,
                     modifier = Modifier.width(160.dp),
                     onSelect = { selected ->
-                        val gb = if (selected == "No Limit") 0 else selected.replace(" GB", "").toIntOrNull() ?: 0
+                        val gb = if (selected == noLimit) 0 else selected.replace(" GB", "").toIntOrNull() ?: 0
                         viewModel.updateSourceMaxSizeGb(currentProfile.id, gb)
                     }
                 )
@@ -1914,8 +1991,8 @@ fun SourcePreferencesSettings(
             Spacer(Modifier.height(15.dp))
 
             SettingToggleRow(
-                label = "Complete Season Torrents Only",
-                subtitle = "For series, hide single-episode torrents and keep season packs, season ranges, and complete collections",
+                label = stringResource(R.string.sort_filter_season_packs),
+                subtitle = stringResource(R.string.sort_filter_season_packs_description),
                 isChecked = currentProfile.sourceSeasonPacksOnly,
                 onCheckedChange = { viewModel.updateSourceSeasonPacksOnly(currentProfile.id, it) },
                 onBack = onGoBack
@@ -1926,8 +2003,8 @@ fun SourcePreferencesSettings(
             Spacer(Modifier.height(15.dp))
 
             SettingToggleRow(
-                label = "Hide Zero-Seeder Streams",
-                subtitle = "Hide sources that explicitly report 0 seeders; sources without seeder data remain visible",
+                label = stringResource(R.string.sort_filter_hide_zero_seeders),
+                subtitle = stringResource(R.string.sort_filter_zero_seeders_description),
                 isChecked = currentProfile.sourceHideZeroSeeders,
                 onCheckedChange = { viewModel.updateSourceHideZeroSeeders(currentProfile.id, it) },
                 onBack = onGoBack
@@ -1939,15 +2016,15 @@ fun SourcePreferencesSettings(
 
 
             }
-            SettingsSection("Excluded Formats", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.sort_filter_excluded_formats), onGoBack, initiallyExpanded = false) {
             // EXCLUDE FORMATS
             Text(
-                "Exclude Formats",
+                stringResource(R.string.sort_filter_excluded_formats),
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                 color = Color.White
             )
             Text(
-                "Hide sources with these codecs and formats.",
+                stringResource(R.string.sort_filter_excluded_formats_description),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
                 color = Color.White.copy(0.6f),
                 modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
@@ -1981,11 +2058,11 @@ fun SourcePreferencesSettings(
 
 
             }
-            SettingsSection("Excluded Phrases", onGoBack, initiallyExpanded = false) {
+            SettingsSection(stringResource(R.string.sort_filter_exclude_phrases), onGoBack, initiallyExpanded = false) {
             // EXCLUDE PHRASES
             var showExcludeDialog by remember { mutableStateOf(false) }
             val currentPhrases = currentProfile.sourceExcludePhrases
-            val displayPhrases = if (currentPhrases.isBlank()) "None" else currentPhrases
+            val displayPhrases = if (currentPhrases.isBlank()) stringResource(R.string.sort_filter_none) else currentPhrases
 
             val interactionSource = remember { MutableInteractionSource() }
             val isFocused by interactionSource.collectIsFocusedAsState()
@@ -2008,7 +2085,7 @@ fun SourcePreferencesSettings(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "Exclude Phrases",
+                    stringResource(R.string.sort_filter_exclude_phrases),
                     color = Color.White.copy(0.8f),
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium, fontSize = 15.sp),
                     modifier = Modifier.weight(1f)
@@ -2032,10 +2109,10 @@ fun SourcePreferencesSettings(
                         viewModel.updateSourceExcludePhrases(currentProfile.id, dialogInput)
                         showExcludeDialog = false
                     },
-                    title = "Exclude Phrases"
+                    title = stringResource(R.string.sort_filter_exclude_phrases)
                 ) {
                     Text(
-                        "Sources containing these words will be hidden. Comma-separated.",
+                        stringResource(R.string.sort_filter_exclude_phrases_description),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White.copy(0.6f),
                         modifier = Modifier.padding(bottom = 16.dp)
@@ -2062,7 +2139,7 @@ fun SourcePreferencesSettings(
                         decorationBox = { innerTextField ->
                             Box {
                                 if (dialogInput.isEmpty()) {
-                                    Text("e.g. sample, remux, cam", color = Color.White.copy(0.3f), fontSize = 14.sp)
+                                    Text(stringResource(R.string.sort_filter_exclude_phrases_hint), color = Color.White.copy(0.3f), fontSize = 14.sp)
                                 }
                                 innerTextField()
                             }
@@ -2114,18 +2191,33 @@ fun AboutSettings(
     ) {
         // HEADER
         Text(
-            "About",
+            stringResource(R.string.settings_section_about),
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
             color = Color.White
         )
         Text(
-            "App information and updates.",
+            stringResource(R.string.about_description),
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
             color = Color.White.copy(0.6f),
             modifier = Modifier.padding(top = 4.dp)
         )
 
         Spacer(Modifier.height(20.dp))
+
+        SettingOptionRow(
+            label = stringResource(R.string.app_language),
+            options = listOf(
+                stringResource(R.string.app_language_system) to "system",
+                stringResource(R.string.app_language_english) to "en",
+                stringResource(R.string.app_language_malayalam) to "ml",
+                stringResource(R.string.app_language_kannada) to "kn"
+            ),
+            selectedOption = AppLanguage.currentTag(diagnosticsContext),
+            onOptionSelected = { AppLanguage.setLanguage(diagnosticsContext, it) },
+            onBack = onGoBack
+        )
+
+        Spacer(Modifier.height(12.dp))
 
         // VERSION ROW
         Row(
@@ -2139,7 +2231,7 @@ fun AboutSettings(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                "Version",
+                stringResource(R.string.about_version),
                 color = Color.White.copy(0.8f),
                 style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium, fontSize = 15.sp)
             )
@@ -2157,7 +2249,7 @@ fun AboutSettings(
         val isDownloading = updateState is UpdateState.Downloading || updateState is UpdateState.Verifying || updateState is UpdateState.AwaitingInstallPermission
 
         SetupButton(
-            text = if (isChecking) "Checking…" else "Check For Updates",
+            text = stringResource(if (isChecking) R.string.about_checking_updates else R.string.about_check_updates),
             enabled = !isChecking && !isDownloading,
             onClick = { scope.launch { updateManager.checkForUpdate() } },
             modifier = Modifier
@@ -2168,11 +2260,52 @@ fun AboutSettings(
                     } else false
                 }
         )
-        if (updateState is UpdateState.UpToDate) Text("You’re Up To Date", modifier = Modifier.padding(top = 12.dp), color = accentColor)
+        if (updateState is UpdateState.UpToDate) Text(stringResource(R.string.about_up_to_date), modifier = Modifier.padding(top = 12.dp), color = accentColor)
         if (updateState is UpdateState.Error) {
-            Text((updateState as UpdateState.Error).message, modifier = Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.error,
+            val failure = updateState as UpdateState.Error
+            val failureTitle = when (failure.kind) {
+                com.saab.tv.data.update.UpdateFailureKind.UPDATE_CHECK -> R.string.about_error_update_check
+                com.saab.tv.data.update.UpdateFailureKind.UNTRUSTED_SOURCE,
+                com.saab.tv.data.update.UpdateFailureKind.MISSING_CHECKSUM,
+                com.saab.tv.data.update.UpdateFailureKind.PACKAGE_VERIFICATION -> R.string.about_error_verification
+                com.saab.tv.data.update.UpdateFailureKind.UNSUPPORTED_DEVICE -> R.string.about_error_unsupported
+                com.saab.tv.data.update.UpdateFailureKind.DOWNLOAD -> R.string.about_error_download
+                com.saab.tv.data.update.UpdateFailureKind.STORAGE -> R.string.about_error_storage
+                com.saab.tv.data.update.UpdateFailureKind.INSTALL_PERMISSION -> R.string.about_error_permission
+                com.saab.tv.data.update.UpdateFailureKind.INSTALLER -> R.string.about_error_installer
+                com.saab.tv.data.update.UpdateFailureKind.UNKNOWN -> R.string.about_error_generic
+            }
+            Text(
+                stringResource(failureTitle),
+                modifier = Modifier.padding(top = 12.dp),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(failure.message, modifier = Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodyMedium)
-            SetupButton("Retry Update", { scope.launch { updateManager.retryDownload() } }, modifier = Modifier.padding(top = 12.dp))
+            val actionLabel = when (failure.recovery) {
+                com.saab.tv.data.update.UpdateRecoveryAction.CHECK_FOR_UPDATES -> R.string.about_retry_update
+                com.saab.tv.data.update.UpdateRecoveryAction.RETRY_DOWNLOAD -> R.string.about_retry_download
+                com.saab.tv.data.update.UpdateRecoveryAction.DOWNLOAD_AGAIN -> R.string.about_download_again
+                com.saab.tv.data.update.UpdateRecoveryAction.OPEN_INSTALL_SETTINGS -> R.string.about_open_tv_settings
+            }
+            val recover: () -> Unit = when (failure.recovery) {
+                com.saab.tv.data.update.UpdateRecoveryAction.CHECK_FOR_UPDATES -> {
+                    { scope.launch { updateManager.checkForUpdate() }; Unit }
+                }
+                com.saab.tv.data.update.UpdateRecoveryAction.RETRY_DOWNLOAD,
+                com.saab.tv.data.update.UpdateRecoveryAction.DOWNLOAD_AGAIN -> {
+                    { scope.launch { updateManager.retryDownload() }; Unit }
+                }
+                com.saab.tv.data.update.UpdateRecoveryAction.OPEN_INSTALL_SETTINGS ->
+                    updateManager::openInstallPermissionSettings
+            }
+            SetupButton(
+                stringResource(actionLabel),
+                recover,
+                primary = failure.recovery == com.saab.tv.data.update.UpdateRecoveryAction.OPEN_INSTALL_SETTINGS,
+                modifier = Modifier.padding(top = 12.dp)
+            )
         }
 
         // UPDATE AVAILABLE SECTION
@@ -2184,7 +2317,7 @@ fun AboutSettings(
             Spacer(Modifier.height(16.dp))
 
             Text(
-                "Update Available: v${info.versionName}",
+                stringResource(R.string.about_update_available, info.versionName),
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                 color = accentColor
             )
@@ -2201,7 +2334,7 @@ fun AboutSettings(
             Spacer(Modifier.height(12.dp))
 
             // DOWNLOAD BUTTON
-            SetupButton("Download And Install", {
+            SetupButton(stringResource(R.string.about_download_install), {
                 com.saab.tv.AppDiagnostics.event(diagnosticsContext, "Updater", "Button Activated", important = true)
                 scope.launch { updateManager.downloadAndInstall(info.apkUrl, info.sha256) }
             },
@@ -2224,17 +2357,17 @@ fun AboutSettings(
         }
 
         if (updateState is UpdateState.AwaitingInstallPermission) {
-            Text("Allow Saab TV To Install Updates", modifier = Modifier.padding(top = 16.dp), color = accentColor)
-            Text("In TV Settings, enable installation from Saab TV. The download starts only after permission is granted. Return here with Back.",
+            Text(stringResource(R.string.about_allow_install), modifier = Modifier.padding(top = 16.dp), color = accentColor)
+            Text(stringResource(R.string.about_install_permission_help),
                 style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp), color = Color.White.copy(alpha = 0.8f))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SetupButton("Open TV Settings", { updateManager.openInstallPermissionSettings() }, primary = true)
-                SetupButton("Cancel", { updateManager.cancelPendingUpdate() })
+                SetupButton(stringResource(R.string.about_open_tv_settings), { updateManager.openInstallPermissionSettings() }, primary = true)
+                SetupButton(stringResource(R.string.common_cancel), { updateManager.cancelPendingUpdate() })
             }
         }
         if (updateState is UpdateState.Verifying) {
-            Text("Verifying Update…", modifier = Modifier.padding(top = 16.dp), color = accentColor)
-            Text("Checking checksum, package, Android version, CPU and signing certificate.", style = MaterialTheme.typography.bodyMedium,
+            Text(stringResource(R.string.about_verifying_update), modifier = Modifier.padding(top = 16.dp), color = accentColor)
+            Text(stringResource(R.string.about_verifying_details), style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.8f))
         }
 
@@ -2243,18 +2376,28 @@ fun AboutSettings(
         if (readyToInstall != null) {
             Spacer(Modifier.height(16.dp))
             Text(
-                "Update Verified. Confirm Installation On Your TV.",
+                stringResource(R.string.about_update_verified),
                 color = accentColor,
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)
             )
-            SetupButton("Install Update", { scope.launch { updateManager.installDownloaded(readyToInstall.file) } },
+            SetupButton(stringResource(R.string.about_install_update), { scope.launch { updateManager.installDownloaded(readyToInstall.file) } },
                 primary = true, modifier = Modifier.padding(top = 12.dp))
         }
         if (updateState is UpdateState.InstallError) {
             val failed = updateState as UpdateState.InstallError
-            Text(failed.message, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp), style = MaterialTheme.typography.bodyMedium)
-            SetupButton("Retry Installation", { scope.launch { updateManager.installDownloaded(failed.file) } }, primary = true, modifier = Modifier.padding(top = 12.dp))
-            SetupButton("Download Again", { scope.launch { updateManager.retryDownload() } }, modifier = Modifier.padding(top = 12.dp))
+            val failureTitle = when (failed.kind) {
+                com.saab.tv.data.update.UpdateFailureKind.PACKAGE_VERIFICATION -> R.string.about_error_verification
+                else -> R.string.about_error_installer
+            }
+            Text(
+                stringResource(failureTitle),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 16.dp),
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(failed.message, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
+            SetupButton(stringResource(R.string.about_retry_installation), { scope.launch { updateManager.installDownloaded(failed.file) } }, primary = true, modifier = Modifier.padding(top = 12.dp))
+            SetupButton(stringResource(R.string.about_download_again), { scope.launch { updateManager.retryDownload() } }, modifier = Modifier.padding(top = 12.dp))
         }
     }
 }

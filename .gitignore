@@ -15,6 +15,7 @@ bin/
 gen/
 out/
 build/
+graphify-out/
 
 # Gradle files
 .gradle/

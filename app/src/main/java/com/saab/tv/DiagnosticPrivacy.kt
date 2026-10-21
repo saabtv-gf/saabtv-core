@@ -18,6 +18,12 @@ internal object DiagnosticPrivacy {
     // Structured, allow-listed fields only; never include arbitrary messages/bodies.
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun safeFailureCode(error: Throwable): String = when (error) {
+        is com.saab.tv.data.account.AccountApiException -> " httpStatus=${error.status}" +
+            (error.serviceCode?.takeIf { it in setOf("PT429", "PT413", "PGRST202", "PGRST301", "42501", "42883", "22P02", "P0001") }
+                ?.let { " serviceCode=$it" } ?: "")
+        is javax.crypto.AEADBadTagException -> " category=authentication_tag"
+        is IllegalStateException -> if (error.message?.contains("FocusRequester is not initialized") == true)
+            " category=focus_target_uninitialized" else ""
         is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException -> " httpStatus=${error.responseCode}"
         is androidx.media3.common.PlaybackException -> " playbackCode=${error.errorCode}"
         is java.net.SocketTimeoutException -> " category=timeout"

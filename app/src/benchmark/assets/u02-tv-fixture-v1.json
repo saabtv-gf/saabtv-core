@@ -1,0 +1,8 @@
+{
+  "fixtureId": "u02-tv-browse-v1",
+  "titleCardShape": "poster",
+  "rowCount": 4,
+  "cardsPerRow": 24,
+  "artworkUri": "android.resource://com.saab.tv/drawable/avatar_1",
+  "rowTypes": ["movie", "series", "movie", "series"]
+}

@@ -6,6 +6,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.platform.testTag
@@ -67,6 +68,28 @@ class SettingsAndOnboardingInteractionTest {
         compose.runOnIdle { assertTrue(checked.value) }
         chip.performKeyInput { pressKey(Key.DirectionLeft) }
         compose.runOnIdle { assertTrue(checked.value); assertEquals(1, backs) }
+    }
+    @Test fun settingsChoiceControlsKeepTheirBoundsWhenFocused() {
+        compose.setContent { MaterialTheme { Column {
+            SettingToggleChip("Hide Zero Seeders", false, {})
+            SettingOptionRow("Seek Interval", intervals, 30, {})
+            VoidSegmentedControl(listOf("Off" to "off", "On" to "on"), "off", {})
+            ColorItemFixed(Color.Red, isSelected = false, modifier = Modifier.testTag("subtitle-color"), onClick = {}, onFocus = {})
+        } } }
+
+        listOf("Hide Zero Seeders", "10 Seconds", "Off").forEach { label ->
+            val node = compose.onNodeWithText(label)
+            val initialBounds = node.fetchSemanticsNode().boundsInRoot
+            node.performSemanticsAction(SemanticsActions.RequestFocus)
+            node.assertIsFocused()
+            assertEquals("$label must not resize when focused", initialBounds, node.fetchSemanticsNode().boundsInRoot)
+        }
+
+        val color = compose.onNodeWithTag("subtitle-color")
+        val initialColorBounds = color.fetchSemanticsNode().boundsInRoot
+        color.performSemanticsAction(SemanticsActions.RequestFocus)
+        color.assertIsFocused()
+        assertEquals("Subtitle color swatch must not resize when focused", initialColorBounds, color.fetchSemanticsNode().boundsInRoot)
     }
     @Test fun segmentedOptionsSelectLanguageAndConsumeBackAtFirstItem() {
         val selected = mutableStateOf("en"); var backs = 0

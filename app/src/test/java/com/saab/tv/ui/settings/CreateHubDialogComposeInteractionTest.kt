@@ -3,11 +3,8 @@ package com.saab.tv.ui.settings
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import com.saab.tv.data.model.CatalogConfigEntity
 import com.saab.tv.data.model.HubRowItemEntity
 import com.saab.tv.domain.HubShape
@@ -47,8 +44,10 @@ class CreateHubDialogComposeInteractionTest {
         }
 
         compose.onNode(hasSetTextAction()).performTextInput("Favorites")
-        compose.onNodeWithText("SQUARE").performClick()
+        compose.onNodeWithText("Create New Hub Row").assertExists()
+        compose.onNodeWithText("Square").performClick()
         compose.onNodeWithText("Add Category").performClick()
+        compose.onNodeWithText("Select Categories").assertExists()
         compose.onNodeWithText("Popular - Movie").performClick()
         compose.onNodeWithText("Confirm").performClick()
         compose.onNodeWithText("Save").performClick()

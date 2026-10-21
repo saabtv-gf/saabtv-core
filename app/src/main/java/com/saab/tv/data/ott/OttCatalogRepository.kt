@@ -102,31 +102,41 @@ class OttCatalogRepository @Inject constructor(
     private val gson = Gson()
     private val justWatchClient = JustWatchOttClient(okHttpClient)
     private val cacheMutex = Mutex()
+    private val refreshMutex = Mutex()
     private var cache: CachedRows? = null
     private var diskCacheLoaded = false
 
-    suspend fun getCatalogRows(forceRefresh: Boolean = false): List<HomeRow> = cacheMutex.withLock {
-        ensureDiskCacheLoaded()
-        val now = System.currentTimeMillis()
-        if (!forceRefresh) {
-            cache?.takeIf { now - it.loadedAt < CACHE_DURATION_MS }?.let { return@withLock it.rows }
+    suspend fun getCatalogRows(forceRefresh: Boolean = false): List<HomeRow> {
+        cachedRowsIfFresh()?.let { if (!forceRefresh) return it }
+        return refreshMutex.withLock {
+            cachedRowsIfFresh()?.let { if (!forceRefresh) return@withLock it }
+            try {
+                val rows = buildCatalogRows()
+                if (rows.isEmpty()) throw OttCatalogException("JustWatch returned no usable OTT catalogs.")
+                val loadedAt = System.currentTimeMillis()
+                cacheMutex.withLock {
+                    cache = CachedRows(loadedAt, rows)
+                    persistLastGood(loadedAt, rows)
+                }
+                rows
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                cacheMutex.withLock { cache?.rows?.takeIf { it.isNotEmpty() } }
+                    ?.let { return@withLock it }
+                throw OttCatalogException(
+                    "The JustWatch OTT catalog is temporarily unavailable. Try Refresh again later.",
+                    e
+                )
+            }
         }
+    }
 
-        try {
-            val rows = buildCatalogRows()
-            if (rows.isEmpty()) throw OttCatalogException("JustWatch returned no usable OTT catalogs.")
-            cache = CachedRows(now, rows)
-            persistLastGood(now, rows)
-            rows
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            cache?.rows?.takeIf { it.isNotEmpty() }?.let { return@withLock it }
-            throw OttCatalogException(
-                "The JustWatch OTT catalog is temporarily unavailable. Try Refresh again later.",
-                e
-            )
-        }
+    private suspend fun cachedRowsIfFresh(): List<HomeRow>? = cacheMutex.withLock {
+        ensureDiskCacheLoaded()
+        cache?.takeIf {
+            (System.currentTimeMillis() - it.loadedAt) in 0 until CACHE_DURATION_MS
+        }?.rows
     }
 
     private suspend fun buildCatalogRows(): List<HomeRow> = coroutineScope {

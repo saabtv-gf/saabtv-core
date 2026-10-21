@@ -34,4 +34,22 @@ internal object ContinueResumePolicy {
     // A series card represents one episode, not whichever episode's stream is
     // retained from an earlier player session. Resolve it from fresh history.
     fun mayReuseOpenStream(mediaType: String): Boolean = mediaType != "series"
+
+    fun canReuseCurrentStream(
+        contentId: String,
+        mediaType: String,
+        selectedContentId: String,
+        selectedContentType: String,
+        selectedPlaybackId: String,
+        videoUrl: String,
+        hasCurrentStream: Boolean,
+        history: List<WatchHistoryEntity>
+    ): Boolean = mayReuseOpenStream(mediaType) &&
+        selectedContentId == contentId &&
+        selectedContentType == mediaType &&
+        videoUrl.startsWith("https://") &&
+        hasCurrentStream &&
+        history.any { entry ->
+            !entry.watched && entry.id == selectedPlaybackId
+        }
 }

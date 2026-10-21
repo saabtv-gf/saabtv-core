@@ -1,5 +1,7 @@
 package com.saab.tv.data.tmdb
 
+import com.saab.tv.domain.schema.TitleCardProjection
+
 /**
  * Enriched metadata from TMDB for a movie or TV show.
  */
@@ -20,6 +22,7 @@ data class TmdbEnrichment(
     val productionCompanies: List<TmdbCompanyInfo>,
     val networks: List<TmdbCompanyInfo>,
     val ageRating: String?,
+    val ageRatingRegion: String? = null,
     val status: String?,
     val countries: List<String>?,
     val language: String?,
@@ -60,7 +63,7 @@ data class TmdbCompanyInfo(
 /**
  * Minimal preview for recommendations, collections, and filmographies.
  */
-data class TmdbMetaPreview(
+internal data class TmdbMetaPreview(
     val tmdbId: Int,
     val type: String,
     val name: String,
@@ -84,8 +87,8 @@ data class TmdbPersonDetail(
     val placeOfBirth: String?,
     val profilePhoto: String?,
     val knownFor: String?,
-    val movieCredits: List<TmdbMetaPreview>,
-    val tvCredits: List<TmdbMetaPreview>
+    val movieCredits: List<TitleCardProjection>,
+    val tvCredits: List<TitleCardProjection>
 )
 
 /**
@@ -104,9 +107,16 @@ data class TmdbEntityDetail(
 data class TmdbDiscoverRail(
     val mediaType: String, // "movie" or "tv"
     val railType: String, // "popular", "top_rated", "recent"
-    val items: List<TmdbMetaPreview>,
+    val items: List<TitleCardProjection>,
     val currentPage: Int = 1,
     val hasMore: Boolean = false
+)
+
+data class TmdbDiscoveryPage(
+    val items: List<TitleCardProjection>,
+    val page: Int,
+    val hasMore: Boolean,
+    val failed: Boolean = false
 )
 
 /**

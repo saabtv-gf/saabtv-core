@@ -39,6 +39,7 @@ import com.saab.tv.ui.player.base.PlayerSourceOption
 import com.saab.tv.ui.player.base.PlayerSubtitleSource
 import com.saab.tv.ui.player.base.SkipSegmentInfo
 import com.saab.tv.data.model.stremio.MetaVideo
+import com.saab.tv.data.tmdb.TmdbCastInfo
 import com.saab.tv.data.torrent.TorrentProgress
 import com.saab.tv.data.trailer.TrailerPlaybackVariant
 import com.saab.tv.data.cache.SeekThumbnailProgress
@@ -48,7 +49,7 @@ import com.saab.tv.data.cache.TorBoxStreamUrlPolicy
 import com.saab.tv.data.cache.ThumbnailSourceSelector
 import com.saab.tv.data.player.PlaybackDiagnostics
 
-private const val THUMBNAIL_WORKER_RESTART_INTERVAL_MS = 1_000L
+private const val THUMBNAIL_WORKER_RESTART_INTERVAL_MS = 15_000L
 private const val THUMBNAIL_WORKER_INITIAL_DELAY_MS = 1_000L
 
 data class PlayerSessionResult(
@@ -103,11 +104,50 @@ fun PlayerScreen(
     val coroutineScope = rememberCoroutineScope()
     val hostView = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val runtime = remember(movieId, backendType, playbackSettings) {
+    // Audio-language changes are profile preferences and should update the
+    // current selector without tearing down/recreating the active player.
+    val backendSettingsKey = playbackSettings.copy(
+        preferredAudioLanguage = "",
+        preferredAudioLanguageSecondary = "",
+        preferredAudioLanguageTertiary = ""
+    )
+    val runtime = remember(movieId, backendType, backendSettingsKey) {
         PlayerBackendFactory.create(context, backendType, playbackSettings)
     }
     val playbackController = runtime.playbackController
     val renderSurface = runtime.renderSurface
+    var playbackCast by remember(movieId, mediaType, playbackSettings.profileId) {
+        mutableStateOf(emptyList<TmdbCastInfo>())
+    }
+    var playbackCastLoaded by remember(movieId, mediaType, playbackSettings.profileId) { mutableStateOf(false) }
+    var playbackCastLoading by remember(movieId, mediaType, playbackSettings.profileId) { mutableStateOf(false) }
+    val loadPlaybackCast = {
+        if (!playbackCastLoaded && !playbackCastLoading) {
+            coroutineScope.launch {
+                playbackCastLoading = true
+                try {
+                    playbackCast = viewModel.loadPlaybackCast(movieId, mediaType, playbackSettings.profileId)
+                    playbackCastLoaded = true
+                } finally {
+                    playbackCastLoading = false
+                }
+            }
+        }
+    }
+    LaunchedEffect(
+        playbackController,
+        playbackSettings.preferredAudioLanguage,
+        playbackSettings.preferredAudioLanguageSecondary,
+        playbackSettings.preferredAudioLanguageTertiary
+    ) {
+        playbackController.setPreferredAudioLanguages(
+            listOf(
+                playbackSettings.preferredAudioLanguage,
+                playbackSettings.preferredAudioLanguageSecondary,
+                playbackSettings.preferredAudioLanguageTertiary
+            )
+        )
+    }
     DisposableEffect(playbackController, movieId, mediaType) {
         val backend = playbackController as? ExoPlayerBackend
         backend?.resolveStreamSubtitles = { source ->
@@ -131,6 +171,11 @@ fun PlayerScreen(
     val latestFirstFrame by rememberUpdatedState(onFirstFrame)
     LaunchedEffect(playbackController, uiState.hasRenderedFirstFrame) {
         if (uiState.hasRenderedFirstFrame) latestFirstFrame()
+    }
+    LaunchedEffect(playbackController, movieId, playbackSettings.profileId, uiState.hasRenderedFirstFrame) {
+        if (uiState.hasRenderedFirstFrame) {
+            viewModel.refreshPlaybackHistoryAfterStart(movieId, playbackSettings.profileId)
+        }
     }
     val liveSources by playbackController.sourceOptions.collectAsStateWithLifecycle()
     val activeSource = liveSources.firstOrNull { it.id == uiState.currentSourceId }
@@ -178,7 +223,7 @@ fun PlayerScreen(
     val seekThumbnailsEnabled = playbackSettings.seekThumbnailsEnabled &&
         playbackSettings.profileId > 0 && !isTrailer
     // Seeking and preview generation share one cadence by design.
-    val seekThumbnailIntervalSeconds = playbackSettings.seekTimeIntervalSeconds
+    val seekIntervalSeconds = playbackSettings.seekTimeIntervalSeconds
         .takeIf { it == 10 || it == 20 || it == 30 } ?: 10
     val thumbnailSourceSelection = remember(isTrailer, effectiveVideoUrl, sources) {
         if (isTrailer) null else ThumbnailSourceSelector.select(effectiveVideoUrl, sources)
@@ -187,7 +232,7 @@ fun PlayerScreen(
     val thumbnailCacheContentId = remember(movieId, thumbnailMediaUrl, thumbnailSourceSelection?.source) {
         com.saab.tv.data.cache.ThumbnailTimelinePolicy.cacheId(movieId, thumbnailMediaUrl, thumbnailSourceSelection?.source)
     }
-    var seekThumbnailCacheProgress by remember(thumbnailCacheContentId, seekThumbnailIntervalSeconds) {
+    var seekThumbnailCacheProgress by remember(thumbnailCacheContentId, seekIntervalSeconds) {
         mutableStateOf(SeekThumbnailProgress(0, 0, 0))
     }
     val seekThumbnailProvider: (suspend (Long) -> android.graphics.Bitmap?)? =
@@ -197,7 +242,7 @@ fun PlayerScreen(
                     profileId = playbackSettings.profileId,
                     contentId = thumbnailCacheContentId,
                     positionMs = positionMs,
-                    intervalSeconds = seekThumbnailIntervalSeconds
+                    intervalSeconds = seekIntervalSeconds
                 )
             }
         } else null
@@ -218,7 +263,7 @@ fun PlayerScreen(
     LaunchedEffect(
         thumbnailCacheContentId,
         seekThumbnailsEnabled,
-        seekThumbnailIntervalSeconds,
+        seekIntervalSeconds,
         uiState.durationMs
     ) {
         if (!seekThumbnailsEnabled || uiState.durationMs <= 0L) {
@@ -232,7 +277,7 @@ fun PlayerScreen(
                     profileId = playbackSettings.profileId,
                     contentId = thumbnailCacheContentId,
                     durationMs = uiState.durationMs,
-                    intervalSeconds = seekThumbnailIntervalSeconds
+                    intervalSeconds = seekIntervalSeconds
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -270,7 +315,7 @@ fun PlayerScreen(
         thumbnailCacheContentId,
         thumbnailMediaUrl,
         uiState.durationMs,
-        seekThumbnailIntervalSeconds,
+        seekIntervalSeconds,
         seekThumbnailsEnabled
     ) {
         if (
@@ -282,7 +327,7 @@ fun PlayerScreen(
                 contentId = thumbnailCacheContentId,
                 mediaUrl = thumbnailMediaUrl,
                 durationMs = uiState.durationMs,
-                intervalSeconds = seekThumbnailIntervalSeconds,
+                intervalSeconds = seekIntervalSeconds,
                 priorityPositionMs = uiState.positionMs,
                 diagnosticsSessionId = diagnosticsSessionId
             )
@@ -290,12 +335,13 @@ fun PlayerScreen(
     }
 
     // The decoder lives in :thumbnail_worker at background priority. Once the first
-    // playback frame is visible it remains active across ordinary pause, seek, and
-    // rebuffer events; repeatedly pausing it discarded remote decoder momentum.
+    // playback frame is visible it yields to low buffer, decoder stress and seeks.
+    // ACTION_PAUSE preserves the decoder, so resuming does not reopen the stream.
     LaunchedEffect(thumbnailWorkerRequest) {
         val request = thumbnailWorkerRequest ?: return@LaunchedEffect
         var workerRequested = false
         var lastStartRequestMs = 0L
+        var healthySinceMs: Long? = null
         delay(THUMBNAIL_WORKER_INITIAL_DELAY_MS)
         try {
             while (isActive && seekThumbnailCacheProgress.percent < 100) {
@@ -306,11 +352,29 @@ fun PlayerScreen(
                 } else {
                     PowerManager.THERMAL_STATUS_NONE
                 }
-                val mustPause = !state.errorMessage.isNullOrBlank() ||
-                    thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE
-                val canGenerate = state.hasRenderedFirstFrame && !mustPause
                 val nowMs = android.os.SystemClock.elapsedRealtime()
-                if (canGenerate && (
+                val pausedAndReady = state.isReady && !state.playWhenReady
+                val canGenerate = com.saab.tv.data.cache.ThumbnailWorkPolicy.canRun(
+                    isPlaying = state.isPlaying,
+                    isReady = state.isReady,
+                    hasRenderedFirstFrame = state.hasRenderedFirstFrame,
+                    isBuffering = state.isBuffering,
+                    isSeeking = state.isSeeking,
+                    hasPlaybackError = !state.errorMessage.isNullOrBlank(),
+                    playbackUnderStress = state.playbackUnderStress,
+                    bufferIsUnknown = pausedAndReady || state.bufferedPositionMs <= 0,
+                    bufferedAheadMs = (state.bufferedPositionMs - state.positionMs).coerceAtLeast(0),
+                    minimumBufferedAheadMs = com.saab.tv.data.cache.ThumbnailWorkPolicy.bufferedAheadRequiredMs(seekThumbnailCacheProgress.cachedFrames),
+                    thermalStatus = thermalStatus,
+                    moderateThermalStatus = PowerManager.THERMAL_STATUS_SEVERE,
+                    isPaused = pausedAndReady
+                )
+                if (!canGenerate) healthySinceMs = null
+                else if (healthySinceMs == null) healthySinceMs = nowMs
+                val stablePlayback = healthySinceMs?.let {
+                    nowMs - it >= com.saab.tv.data.cache.ThumbnailWorkPolicy.recoveryDelayMs(seekThumbnailCacheProgress.cachedFrames)
+                } == true
+                if (stablePlayback && (
                         !workerRequested ||
                             nowMs - lastStartRequestMs >= THUMBNAIL_WORKER_RESTART_INTERVAL_MS
                         )
@@ -319,7 +383,7 @@ fun PlayerScreen(
                         request.copy(priorityPositionMs = latestThumbnailPriority)) }
                     workerRequested = true
                     lastStartRequestMs = nowMs
-                } else if (mustPause && workerRequested) {
+                } else if (!canGenerate && workerRequested) {
                     PlaybackDiagnostics.event(
                         context,
                         diagnosticsSessionId,
@@ -503,8 +567,22 @@ fun PlayerScreen(
 
     LaunchedEffect(playbackController, movieId, effectiveVideoUrl, effectiveTrailerAudioUrl, backendType) {
         if (effectiveVideoUrl.isBlank()) return@LaunchedEffect // Wait for torrent stream URL
-        val resumePosition = viewModel.getResumePosition(movieId, playbackSettings.profileId)
+        val savedPosition = viewModel.getResumePosition(movieId, playbackSettings.profileId)
+        val resumePosition = if (isTrailer) {
+            com.saab.tv.ui.trailer.TrailerPreviewPolicy.initialStartPositionMs(savedPosition)
+        } else savedPosition
         thumbnailPriorityMs = resumePosition
+        val portableProfileId = viewModel.portableProfileId(playbackSettings.profileId)
+            ?: "local-profile-${playbackSettings.profileId}"
+        val intent = com.saab.tv.domain.schema.PlaybackIntent.create(
+            profilePortableId = portableProfileId,
+            titleId = currentPlaybackId ?: movieId,
+            playableId = currentPlaybackId ?: movieId,
+            type = mediaType,
+            resumePositionMs = resumePosition,
+            selectedSourceId = initialSourceId,
+            configurationGeneration = playbackSettings.hashCode().toString()
+        )
         playbackController.load(
             PlayerLoadRequest(
                 mediaUrl = effectiveVideoUrl,
@@ -518,7 +596,8 @@ fun PlayerScreen(
                 preferredSubtitleTrackId = preferredSubtitleTrackId,
                 separateAudioUrl = effectiveTrailerAudioUrl,
                 trailerRequestHeaders = activeTrailerVariant?.requestHeaders.orEmpty(),
-                diagnosticsSessionId = diagnosticsSessionId
+                diagnosticsSessionId = diagnosticsSessionId,
+                playbackIntent = intent
             )
         )
         playbackController.setSubtitleVerticalOffset(playbackSettings.subtitleOffset)
@@ -706,7 +785,6 @@ fun PlayerScreen(
             seekTimeIntervalSeconds = playbackSettings.seekTimeIntervalSeconds,
             seekThumbnailProvider = seekThumbnailProvider,
             seekThumbnailCacheKey = thumbnailCacheContentId,
-            seekThumbnailIntervalSeconds = seekThumbnailIntervalSeconds,
             seekThumbnailCachePercent = seekThumbnailCacheProgress.percent.takeIf { seekThumbnailsEnabled },
             seekThumbnailCachedFrames = seekThumbnailCacheProgress.cachedFrames.takeIf { seekThumbnailsEnabled },
             seekThumbnailTotalFrames = seekThumbnailCacheProgress.totalFrames.takeIf { seekThumbnailsEnabled },
@@ -717,7 +795,15 @@ fun PlayerScreen(
             seriesTitle = seriesTitle,
             logoUrl = logoUrl,
             mediaType = mediaType,
+            castMembers = playbackCast,
+            isLoadingCast = playbackCastLoading,
+            onLoadCast = loadPlaybackCast,
             onBack = persistAndBack,
+            preferredAudioLanguages = listOf(
+                playbackSettings.preferredAudioLanguage,
+                playbackSettings.preferredAudioLanguageSecondary,
+                playbackSettings.preferredAudioLanguageTertiary
+            ),
             skipSegmentInfo = skipSegmentInfo,
             nextEpisodeInfo = nextEpisodeInfo,
             onAutoplayNextEpisode = if (onAutoplayNextEpisode != null) transitionToNextEpisode else null,

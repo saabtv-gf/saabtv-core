@@ -3,6 +3,7 @@ package com.saab.tv.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.local.AddonDao
+import com.saab.tv.data.account.UserStateCommandRepository
 import com.saab.tv.data.model.CatalogConfigEntity
 import com.saab.tv.data.profile.ProfileConfigurationManager
 import com.saab.tv.data.model.HubRowEntity
@@ -16,11 +17,17 @@ import com.saab.tv.domain.heroFor
 import com.saab.tv.domain.layoutFor
 import com.saab.tv.domain.withHero
 import com.saab.tv.domain.withLayout
+import com.saab.tv.domain.TmdbHomeRail
+import com.saab.tv.domain.TmdbHomeRails
+import com.saab.tv.ui.home.personalizedRailOrder
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Collections
 import java.util.UUID
@@ -44,6 +51,13 @@ sealed interface EditorListItem {
     ) : EditorListItem {
         override val key: String = "cat:${config.uniqueId}"
     }
+
+    data class TmdbRecommendationItem(
+        val rail: TmdbHomeRail,
+        override val order: Int
+    ) : EditorListItem {
+        override val key: String = "tmdb:${rail.id}"
+    }
 }
 
 sealed interface DialogState {
@@ -51,6 +65,7 @@ sealed interface DialogState {
     data class ManageCategory(val config: CatalogConfigEntity) : DialogState
     data class RenameCategory(val config: CatalogConfigEntity, val currentName: String) : DialogState
     data class LayoutSettings(val config: CatalogConfigEntity) : DialogState
+    data class ManageTmdbRail(val item: EditorListItem.TmdbRecommendationItem) : DialogState
     data class AddToTab(val tab: String) : DialogState
     data object CreateHub : DialogState
     data class ManageHub(val hubItem: EditorListItem.HubRowItem) : DialogState
@@ -61,11 +76,16 @@ sealed interface DialogState {
 @HiltViewModel
 class DashboardViewModel @Inject constructor(
     private val dao: AddonDao,
-    private val profileConfigurationManager: ProfileConfigurationManager
+    private val profileConfigurationManager: ProfileConfigurationManager,
+    private val userStateCommands: UserStateCommandRepository
 ) : ViewModel() {
 
-    private fun persistProfileState() {
-        viewModelScope.launch { profileConfigurationManager.saveActiveRuntimeState() }
+    private suspend fun persistProfileState() {
+        profileConfigurationManager.saveActiveRuntimeState()
+    }
+
+    private suspend fun persistProfile(profile: ProfileEntity) {
+        userStateCommands.saveProfile(profile)
     }
 
     private val _configs = MutableStateFlow<List<CatalogConfigEntity>>(emptyList())
@@ -76,13 +96,25 @@ class DashboardViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            dao.getAllCatalogConfigs().collect { list ->
-                _configs.value = list
+            try {
+                dao.getAllCatalogConfigs().collect { list ->
+                    _configs.value = list
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (currentCoroutineContext().isActive) throw failure
             }
         }
         viewModelScope.launch {
-            dao.getHubRowsWithItems().collect { list ->
-                _hubRows.value = list
+            try {
+                dao.getHubRowsWithItems().collect { list ->
+                    _hubRows.value = list
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (currentCoroutineContext().isActive) throw failure
             }
         }
     }
@@ -121,6 +153,7 @@ class DashboardViewModel @Inject constructor(
                     }
                     dao.updateHubRow(updated)
                 }
+                is EditorListItem.TmdbRecommendationItem -> return@launch
             }
             persistProfileState()
         }
@@ -149,6 +182,7 @@ class DashboardViewModel @Inject constructor(
                     }
                     dao.updateHubRow(updated)
                 }
+                is EditorListItem.TmdbRecommendationItem -> return@launch
             }
             persistProfileState()
         }
@@ -187,6 +221,7 @@ class DashboardViewModel @Inject constructor(
                         }
                         updatedHubs.add(updated)
                     }
+                    is EditorListItem.TmdbRecommendationItem -> Unit
                 }
             }
 
@@ -251,8 +286,9 @@ class DashboardViewModel @Inject constructor(
     }
 
     fun deleteHubRow(hubRowId: String) {
+        val profileOwnerId = _hubRows.value.find { it.hub.id == hubRowId }?.hub?.profileOwnerId ?: return
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            dao.deleteHubRowWithItems(hubRowId)
+            dao.deleteHubRowWithItems(profileOwnerId, hubRowId)
             persistProfileState()
         }
     }
@@ -274,43 +310,51 @@ class DashboardViewModel @Inject constructor(
     }
 
     fun addCategoryToHubRow(hubRowId: String, config: CatalogConfigEntity) {
+        val profileOwnerId = _hubRows.value.find { it.hub.id == hubRowId }?.hub?.profileOwnerId ?: return
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            val maxOrder = dao.getMaxHubItemOrder(hubRowId) ?: -1
+            val maxOrder = dao.getMaxHubItemOrder(profileOwnerId, hubRowId) ?: -1
             val item = HubRowItemEntity(
                 hubRowId = hubRowId,
                 configUniqueId = config.uniqueId,
                 title = config.customTitle ?: if (config.catalogName != null) "${config.catalogName} - ${config.catalogType.replaceFirstChar { it.uppercase() }}" else "${config.addonName} - ${config.catalogId}",
-                itemOrder = maxOrder + 1
+                itemOrder = maxOrder + 1,
+                profileOwnerId = profileOwnerId
             )
-            dao.insertHubRowItem(item)
+            dao.insertHubRowItem(item, profileOwnerId)
             persistProfileState()
         }
     }
 
     fun removeCategoryFromHubRow(hubRowId: String, configUniqueId: String) {
+        val profileOwnerId = _hubRows.value.find { it.hub.id == hubRowId }?.hub?.profileOwnerId ?: return
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            dao.deleteHubRowItem(hubRowId, configUniqueId)
+            dao.deleteHubRowItem(profileOwnerId, hubRowId, configUniqueId)
             persistProfileState()
         }
     }
 
     fun updateHubItemImage(hubRowId: String, configUniqueId: String, imageUrl: String?) {
+        val row = _hubRows.value.find { it.hub.id == hubRowId } ?: return
+        val itemOwnerId = row.items.find { it.configUniqueId == configUniqueId }?.profileOwnerId ?: return
+        val rowOwnerId = row.hub.profileOwnerId
+        if (itemOwnerId != rowOwnerId) return
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            dao.updateHubItemImage(hubRowId, configUniqueId, imageUrl)
+            dao.updateHubItemImage(rowOwnerId, hubRowId, configUniqueId, imageUrl)
             persistProfileState()
         }
     }
 
     fun renameHubRowItem(hubRowId: String, configUniqueId: String, newTitle: String) {
+        val currentItems = _hubRows.value.find { it.hub.id == hubRowId }?.items ?: return
+        val item = currentItems.find { it.configUniqueId == configUniqueId } ?: return
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            val currentItems = _hubRows.value.find { it.hub.id == hubRowId }?.items ?: return@launch
-            val item = currentItems.find { it.configUniqueId == configUniqueId } ?: return@launch
             dao.updateHubRowItem(item.copy(title = newTitle))
             persistProfileState()
         }
     }
 
     fun updateHubRowItemsOrder(hubRowId: String, orderedItems: List<HubRowItemEntity>) {
+        if (_hubRows.value.none { it.hub.id == hubRowId }) return
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             val updatedItems = orderedItems.mapIndexed { index, item ->
                 item.copy(hubRowId = hubRowId, itemOrder = index)
@@ -323,7 +367,7 @@ class DashboardViewModel @Inject constructor(
     fun updateTabLayout(profileId: Int, tab: DashboardTab, layout: String) {
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             val profile = dao.getProfileById(profileId) ?: return@launch
-            dao.insertProfile(profile.withLayout(tab, layout))
+            persistProfile(profile.withLayout(tab, layout))
             persistProfileState()
         }
     }
@@ -331,12 +375,21 @@ class DashboardViewModel @Inject constructor(
     fun updateTabHero(profileId: Int, tab: DashboardTab, config: HeroConfig) {
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             val profile = dao.getProfileById(profileId) ?: return@launch
-            dao.insertProfile(profile.withHero(tab, config))
+            persistProfile(profile.withHero(tab, config))
             persistProfileState()
         }
     }
 
-    fun getEditorItems(selectedTab: String): List<EditorListItem> {
+    fun updateTmdbHomeRails(profileId: Int, rails: List<String>) {
+        val encodedRails = TmdbHomeRails.encode(rails)
+        viewModelScope.launch(Dispatchers.IO + NonCancellable) {
+            val profile = dao.getProfileById(profileId) ?: return@launch
+            persistProfile(profile.copy(homeTmdbRails = encodedRails))
+            persistProfileState()
+        }
+    }
+
+    fun getEditorItems(selectedTab: String, homeTmdbRails: String? = null): List<EditorListItem> {
         val categoryItems = _configs.value
             .filter {
                 when (selectedTab) {
@@ -375,7 +428,16 @@ class DashboardViewModel @Inject constructor(
                 EditorListItem.HubRowItem(it.hub, it.items.sortedBy { i -> i.itemOrder }, order) 
             }
 
-        return (hubItems + categoryItems).sortedBy { it.order }
+        val tmdbItems = if (selectedTab == "home" && homeTmdbRails != null) {
+            val configuredIds = homeTmdbRails
+            TmdbHomeRails.parse(configuredIds)
+                .mapNotNull { id -> TmdbHomeRails.all.find { it.id == id } }
+                .mapIndexed { index, rail ->
+                    EditorListItem.TmdbRecommendationItem(rail, personalizedRailOrder(10 + index))
+                }
+        } else emptyList()
+
+        return (hubItems + categoryItems + tmdbItems).sortedBy { it.order }
     }
 
 }

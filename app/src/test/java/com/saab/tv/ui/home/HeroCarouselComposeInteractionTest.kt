@@ -84,4 +84,32 @@ class HeroCarouselComposeInteractionTest {
         compose.waitUntil(2_000) { focusedIds.lastOrNull() == "second" }
         compose.onNodeWithText("Second Show").assertExists()
     }
+
+    @Test fun heroContentRetargetsToLatestDpadItemAndSettlesWithoutLongTail() {
+        compose.mainClock.autoAdvance = false
+        val focus = FocusRequester()
+        compose.setContent {
+            Material3Theme {
+                MaterialTheme {
+                    HeroCarousel(
+                        items = items,
+                        autoScrollSeconds = 0,
+                        onItemClick = {},
+                        startPadding = 24.dp,
+                        onFocusChange = {},
+                        entryRequester = focus
+                    )
+                }
+            }
+        }
+
+        compose.runOnIdle { focus.requestFocus() }
+        compose.onNodeWithText("First Film").performKeyInput { pressKey(Key.DirectionRight) }
+        compose.onNodeWithText("Second Show").performKeyInput { pressKey(Key.DirectionLeft) }
+        compose.mainClock.advanceTimeBy(300L)
+        compose.waitForIdle()
+
+        compose.onNodeWithText("First Film").assertExists()
+        compose.onNodeWithText("Second Show").assertDoesNotExist()
+    }
 }

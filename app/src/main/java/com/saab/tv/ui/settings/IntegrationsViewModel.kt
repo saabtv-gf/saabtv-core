@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.auth.StremioAuthManager
 import com.saab.tv.data.auth.StremioConnectionState
 import com.saab.tv.data.local.AddonDao
+import com.saab.tv.data.account.UserStateCommandRepository
 import com.saab.tv.data.model.StremioAddonItem
 import com.saab.tv.data.profile.ProfileConfigurationManager
 import com.saab.tv.data.remote.StremioAuthError
@@ -55,7 +56,8 @@ class IntegrationsViewModel @Inject constructor(
     private val tmdbService: TmdbService,
     private val traktAuthManager: TraktAuthManager,
     private val traktSyncManager: TraktSyncManager,
-    private val torBox: com.saab.tv.data.stream.TorBoxAvailabilityService
+    private val torBox: com.saab.tv.data.stream.TorBoxAvailabilityService,
+    private val userStateCommands: UserStateCommandRepository
 ) : ViewModel() {
 
     private var traktAuthJob: Job? = null
@@ -105,33 +107,35 @@ class IntegrationsViewModel @Inject constructor(
         }
         // Load TMDB settings from active profile
         viewModelScope.launch(Dispatchers.IO) {
-            val profileId = profileConfigurationManager.getLastActiveProfileId() ?: 1
-            val profile = dao.getProfileById(profileId)
-            if (profile != null) {
-                _uiState.value = _uiState.value.copy(
-                    tmdbEnabled = profile.tmdbEnabled,
-                    tmdbLanguage = profile.tmdbLanguage
-                )
-            }
+            val profileId = profileConfigurationManager.getLastActiveProfileId() ?: return@launch
+            val profile = dao.getProfileById(profileId) ?: return@launch
+            _uiState.value = _uiState.value.copy(
+                tmdbEnabled = profile.tmdbEnabled,
+                tmdbLanguage = profile.tmdbLanguage
+            )
         }
     }
 
     fun updateTmdbEnabled(enabled: Boolean) {
         _uiState.value = _uiState.value.copy(tmdbEnabled = enabled)
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            val profileId = profileConfigurationManager.getLastActiveProfileId() ?: 1
-            val profile = dao.getProfileById(profileId)
-            if (profile != null) dao.insertProfile(profile.copy(tmdbEnabled = enabled))
+            val profileId = profileConfigurationManager.getLastActiveProfileId() ?: return@launch
+            val profile = dao.getProfileById(profileId) ?: return@launch
+            persistProfile(profile.copy(tmdbEnabled = enabled))
         }
     }
 
     fun updateTmdbLanguage(language: String) {
         _uiState.value = _uiState.value.copy(tmdbLanguage = language)
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
-            val profileId = profileConfigurationManager.getLastActiveProfileId() ?: 1
-            val profile = dao.getProfileById(profileId)
-            if (profile != null) dao.insertProfile(profile.copy(tmdbLanguage = language))
+            val profileId = profileConfigurationManager.getLastActiveProfileId() ?: return@launch
+            val profile = dao.getProfileById(profileId) ?: return@launch
+            persistProfile(profile.copy(tmdbLanguage = language))
         }
+    }
+
+    private suspend fun persistProfile(profile: com.saab.tv.data.model.ProfileEntity) {
+        userStateCommands.saveProfile(profile)
     }
 
     fun saveTmdbApiKey(apiKey: String) {

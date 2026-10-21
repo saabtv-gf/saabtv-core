@@ -3,6 +3,7 @@ package com.saab.tv.ui.settings
 import android.app.Application
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.model.*
+import com.saab.tv.domain.TmdbHomeRails
 import com.saab.tv.testing.*
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
@@ -26,7 +27,7 @@ class DashboardInteractionRegressionTest {
         app = OfflineAppFixture(RuntimeEnvironment.getApplication())
         app.dao.saveCatalogConfigs(listOf(catalog("a", 0), catalog("b", 2)))
         app.dao.insertHubRowWithItems(HubRowEntity("hub", "Hub", "SQUARE", showInHome = true, homeOrder = 1), emptyList())
-        vm = DashboardViewModel(app.dao, app.configuration)
+        vm = DashboardViewModel(app.dao, app.configuration, app.userStateCommands)
         awaitAppState { vm.getEditorItems("home").size == 3 }
     }
     @After fun cleanup() { vm.viewModelScope.cancel(); app.close() }
@@ -89,5 +90,37 @@ class DashboardInteractionRegressionTest {
         awaitAppState { vm.hubRows.value.single().items.single().customImageUrl != null }
         vm.removeCategoryFromHubRow("hub", "a")
         awaitAppState { vm.hubRows.value.single().items.isEmpty() }
+    }
+
+    @Test fun tmdbRecommendationRailsAreHomeCatalogsWithPersistedOrderAndVisibility() {
+        val profile = ProfileEntity(id = 99, name = "TMDB home")
+        runBlocking { app.dao.insertProfile(profile) }
+        val order = listOf(
+            "tmdb-new-for-you",
+            "tmdb-top-suggestions",
+            "tmdb-popular-in-taste"
+        )
+
+        vm.updateTmdbHomeRails(profile.id, order)
+        awaitAppState {
+            runBlocking { app.dao.getProfileById(profile.id)?.homeTmdbRails == TmdbHomeRails.encode(order) }
+        }
+
+        val configuredRails = vm.getEditorItems("home", TmdbHomeRails.encode(order))
+            .filterIsInstance<EditorListItem.TmdbRecommendationItem>()
+        assertEquals(order, configuredRails.map { it.rail.id })
+        assertTrue(vm.getEditorItems("movies", TmdbHomeRails.encode(order))
+            .none { it is EditorListItem.TmdbRecommendationItem })
+
+        val hiddenRails = vm.getEditorItems("home", "tmdb-top-suggestions,unknown-id")
+            .filterIsInstance<EditorListItem.TmdbRecommendationItem>()
+        assertEquals(listOf("tmdb-top-suggestions"), hiddenRails.map { it.rail.id })
+    }
+
+    @Test fun tmdbRailMoveDoesNotInventOrLoseIdsAtListBoundaries() {
+        val ids = TmdbHomeRails.defaultIds
+        assertEquals(ids, TmdbHomeRails.move(ids, ids.first(), -1))
+        assertEquals(ids, TmdbHomeRails.move(ids, "missing", 1))
+        assertEquals(listOf(ids[1], ids[0], ids[2], ids[3]), TmdbHomeRails.move(ids, ids[0], 1))
     }
 }

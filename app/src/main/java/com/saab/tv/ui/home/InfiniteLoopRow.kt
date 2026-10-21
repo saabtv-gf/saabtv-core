@@ -1,10 +1,8 @@
 package com.saab.tv.ui.home
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,10 +17,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -34,32 +33,38 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.schema.canonicalPresentationKey
 import com.saab.tv.ui.components.SaabTvCard
+import com.saab.tv.ui.components.SaabMotion
 import com.saab.tv.ui.components.LocalWatchedIds
 import com.saab.tv.ui.components.LocalTitleCardShape
-import com.saab.tv.ui.components.SaabTvLandscapeCard
-import com.saab.tv.ui.utils.ImagePrefetcher
-import com.saab.tv.ui.theme.LocalRoundCorners
+import com.saab.tv.ui.components.ArtworkPrefetchDispatcher
+import com.saab.tv.ui.components.ArtworkPrefetchEffect
+import com.saab.tv.ui.components.focusFrameSize
+import com.saab.tv.ui.utils.requestFocusSafely
+import com.saab.tv.ui.navigation.isInitialDpadPress
+import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
+import com.saab.tv.ui.navigation.handoffNavigationFocus
+import com.saab.tv.ui.components.FocusPivotSpec
+import com.saab.tv.ui.components.artworkPrefetchItemIndices
+import com.saab.tv.ui.components.firstItemIndexByCanonicalKey
+import com.saab.tv.ui.components.FocusShelfFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -77,8 +82,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
  *
  * CASE B: Grid View ON + Infinite Loop ON
  * - Truncates list to `visibleItemCount` items + ViewMore card
- * - Uses items(count = Int.MAX_VALUE) with modulo for infinite looping
- * - Unique keys: "${movie.id}_$scrollIndex" to prevent duplicate key crashes
+ * - Repeats a bounded section of items with modulo for practical infinite scrolling
+ * - Unique keys include the repeat generation to prevent duplicate-key crashes
  * - One-way loop: LEFT at loop start exits to Navbar
  * - ViewMore card has directional alpha fade
  *
@@ -96,37 +101,19 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 private val ITEM_WIDTH = 120.dp
 private val ITEM_SPACING = 20.dp
 
-private fun FocusRequester.requestFocusSafely() {
-    runCatching { requestFocus() }
-}
-
 sealed class GridRowItem {
     data class MovieItem(val movie: MetaItem) : GridRowItem()
     data object ViewMoreItem : GridRowItem()
 }
 
-class UpKeyDebouncer {
-    var lastTime: Long = 0L
-}
-
-internal data class FocusFrameSize(val width: Dp, val height: Dp)
-
-internal fun focusFrameSize(itemWidth: Dp, isLandscape: Boolean): FocusFrameSize =
-    FocusFrameSize(
-        width = itemWidth,
-        height = itemWidth * if (isLandscape) (9f / 16f) else (3f / 2f)
-    )
-
-private class RowKeyRepeatDebouncer {
-    var lastTime: Long = 0L
-}
-
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun InfiniteLoopRow(
+internal fun InfiniteLoopRow(
     startPadding: Dp,
     isTopNav: Boolean,
     rowIndex: Int,
+    showWatchedBadge: Boolean = rowIndex != -1,
+    focusRowId: String = rowIndex.toString(),
     title: String,
     items: List<MetaItem>,
     onMovieClick: (MetaItem) -> Unit,
@@ -135,7 +122,7 @@ fun InfiniteLoopRow(
     onFocused: (MetaItem?, String) -> Unit,
     entryRequester: FocusRequester,
     drawerRequester: FocusRequester,
-    locallyFocusedItemId: String?,  // Specific item ID to focus in THIS row (e.g. "movie123_g0"), or null if focus is elsewhere
+    locallyFocusedItemId: String?,  // Logical saved address for this row/card, or null if focus is elsewhere
     isGlobalFocusPresent: Boolean, // True if the app has a focused item tracked (lastFocusedKey != null)
     isFirstRow: Boolean,
     isInfiniteLoopEnabled: Boolean = false,
@@ -143,21 +130,24 @@ fun InfiniteLoopRow(
     isInfiniteScrollingEnabled: Boolean = true,
     externalListState: androidx.compose.foundation.lazy.LazyListState? = null,
     rowHeight: Dp = 210.dp,
-    upKeyDebouncer: UpKeyDebouncer,
     repeatGate: DpadRepeatGate,
     pivotFocusRequester: FocusRequester? = null,
     isLandscapeCards: Boolean = false,
     enrichedItems: Map<String, MetaItem> = emptyMap(),
     onItemShown: (MetaItem) -> Unit = {},
-    onWatchedItemShown: (MetaItem) -> Unit = {}
+    onPrepareArtworkItem: (MetaItem) -> Unit = {},
+    onWatchedItemShown: (MetaItem) -> Unit = {},
+    artworkPrefetchDispatcher: ArtworkPrefetchDispatcher? = null,
+    verticalEntryRequester: FocusRequester? = null,
+    upShelfRequester: FocusRequester? = null,
+    downShelfRequester: FocusRequester? = null
 ) {
     val density = LocalDensity.current
     val paddingPx = remember(density, startPadding) { with(density) { startPadding.toPx() } }
-    val configuration = LocalConfiguration.current
     val useLandscapeCards = isLandscapeCards || LocalTitleCardShape.current == "landscape"
     val effectiveItemWidth = if (useLandscapeCards) 190.dp else ITEM_WIDTH
     val effectiveRowHeight = if (useLandscapeCards) 140.dp else rowHeight
-    val screenWidth = configuration.screenWidthDp.dp
+    val itemIndexByCanonicalKey = remember(items) { firstItemIndexByCanonicalKey(items) }
     
     // Detect if this is a restoration (coming back from details screen)
     // We check if we have a local focus target AND a saved scroll position
@@ -169,40 +159,54 @@ fun InfiniteLoopRow(
     // bring-into-view animation owns the single scroll path and keeps the focused
     // card at the same pivot while the shelf glides underneath it.
     var skipInitialPivotScroll by remember(isRestoration) { mutableStateOf(isRestoration) }
-    val pivotSpec = remember(paddingPx) {
+    val pivotSpec = remember(paddingPx, isRestoration) {
         FocusPivotSpec(
             customOffset = paddingPx,
-            skipScrollProvider = { skipInitialPivotScroll },
-            stiffnessProvider = { Spring.StiffnessMediumLow }
+            skipScrollProvider = { skipInitialPivotScroll }
         ) 
     }
 
-    // Calculate end padding to allow last item to align to left (pivot position)
-    // End padding = Screen Width - Start Padding - Item Width
-    val endPadding = remember(screenWidth, startPadding, effectiveItemWidth) {
-        (screenWidth - startPadding - effectiveItemWidth).coerceAtLeast(120.dp)
-    }
+    // Bounded shelves stop at real content; the focus frame follows the selected
+    // card when the list cannot scroll far enough to keep it at the leading pivot.
+    val endPadding = 0.dp
 
     // Use external state if provided, otherwise create local state
     val internalListState = rememberLazyListState()
     val listState = externalListState ?: internalListState
     val context = LocalContext.current
-    val currentOnItemShown by rememberUpdatedState(onItemShown)
+    val artworkDispatcher = remember(context, artworkPrefetchDispatcher) {
+        artworkPrefetchDispatcher ?: ArtworkPrefetchDispatcher.forCoil(context)
+    }
+    var focusedArtworkKey by remember(listState) { mutableStateOf<String?>(null) }
+    val prefetchSnapshots = remember(listState, items, visibleItemCount, isInfiniteLoopEnabled, isInfiniteScrollingEnabled) {
+        snapshotFlow {
+            artworkPrefetchItemIndices(
+                visibleIndices = listState.layoutInfo.visibleItemsInfo.map { it.index },
+                itemCount = items.size,
+                visibleItemCount = visibleItemCount,
+                isInfiniteLoopEnabled = isInfiniteLoopEnabled,
+                isInfiniteScrollingEnabled = isInfiniteScrollingEnabled
+            ) to focusedArtworkKey
+        }.distinctUntilChanged()
+    }
+    ArtworkPrefetchEffect(
+        items = items,
+        enrichedItems = enrichedItems,
+        listState = listState,
+        focusedItemKey = focusedArtworkKey,
+        landscapeCards = useLandscapeCards,
+        dispatcher = artworkDispatcher,
+        requestSnapshots = prefetchSnapshots,
+        posterSize = if (useLandscapeCards) null else DpSize(effectiveItemWidth, effectiveItemWidth * 1.5f),
+        landscapeSize = if (useLandscapeCards) DpSize(effectiveItemWidth, effectiveItemWidth * (9f / 16f)) else null,
+        onPrepareItem = { if (useLandscapeCards) onPrepareArtworkItem(it) }
+    )
     val currentOnWatchedItemShown by rememberUpdatedState(onWatchedItemShown)
-    val artworkUrls = remember(items, enrichedItems, useLandscapeCards) {
-        items.map { item ->
-            val enriched = enrichedItems["${item.type}:${item.id}"]
-            if (useLandscapeCards) enriched?.background ?: item.background else item.poster
-        }
-    }
-    val logoUrls = remember(items, enrichedItems) {
-        items.map { enrichedItems["${it.type}:${it.id}"]?.logo ?: it.logo }
-    }
     val visibleWatchedIds = LocalWatchedIds.current
 
     // Warm visible cards and their immediate neighbors as soon as the row is laid out,
     // not only after the user focuses a card. This prevents artwork/logo swaps on focus.
-    LaunchedEffect(listState, items, enrichedItems, visibleItemCount, isInfiniteLoopEnabled,
+    LaunchedEffect(listState, items, visibleItemCount, isInfiniteLoopEnabled,
         isInfiniteScrollingEnabled, useLandscapeCards, visibleWatchedIds) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index } }
             .distinctUntilChanged()
@@ -213,26 +217,12 @@ fun InfiniteLoopRow(
                         index % loopSectionSize
                     } else index
                 }.distinct()
-                val shownItems = logicalIndices.mapNotNull(items::getOrNull).distinctBy { "${it.type}:${it.id}" }
+                val shownItems = logicalIndices.mapNotNull(items::getOrNull).distinctBy { it.canonicalPresentationKey() }
                 shownItems.forEach(currentOnWatchedItemShown)
-                // Enrich every visible item so landscape logos and watched aliases are ready
-                // before focus lands; portrait rows use the same hook for watched badges.
-                if (useLandscapeCards && shownItems.isNotEmpty()) {
-                    shownItems.forEach(currentOnItemShown)
-                    shownItems.forEach { item ->
-                        val index = items.indexOfFirst { it.type == item.type && it.id == item.id }
-                        if (index >= 0) {
-                            ImagePrefetcher.prefetchLandscape(context, artworkUrls.getOrNull(index))
-                            ImagePrefetcher.prefetchLogo(context, logoUrls.getOrNull(index))
-                        }
-                    }
-                    logicalIndices.firstOrNull { it in items.indices }?.let { index ->
-                        ImagePrefetcher.prefetchAroundLandscape(context, artworkUrls, index, count = 2, logos = logoUrls)
-                    }
-                }
             }
     }
-    var rowHasCardFocus by remember { mutableStateOf(false) }
+    val rowHasCardFocus = remember { mutableStateOf(false) }
+    var focusedItemIndex by remember(listState) { mutableIntStateOf(0) }
     // Calculate the max valid index based on current mode
     val maxValidIndex = when {
         !isInfiniteLoopEnabled -> items.size - 1
@@ -251,12 +241,22 @@ fun InfiniteLoopRow(
     // using SaabTvCard's unconstrained 140x210dp design size made the shared ring
     // spill into adjacent shelves on TV.
     val focusFrame = focusFrameSize(effectiveItemWidth, useLandscapeCards)
-    val focusFrameShape = if (LocalRoundCorners.current) RoundedCornerShape(12.dp) else RectangleShape
-
     Column(
         modifier = Modifier.graphicsLayer { clip = false }
-            .onFocusChanged { if (!it.hasFocus) rowHasCardFocus = false }
+            .onFocusChanged { if (!it.hasFocus) rowHasCardFocus.value = false }
             .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown &&
+                    com.saab.tv.ui.trailer.InlineTrailerAnchor.session == null
+                ) {
+                    val destination = when (event.key) {
+                        Key.DirectionUp -> upShelfRequester
+                        Key.DirectionDown -> downShelfRequester
+                        else -> null
+                    }
+                    if (destination != null) {
+                        return@onPreviewKeyEvent runCatching { destination.requestFocus() }.isSuccess
+                    }
+                }
                 if (event.type == KeyEventType.KeyDown &&
                     (event.key == Key.DirectionLeft || event.key == Key.DirectionRight ||
                         event.key == Key.DirectionUp || event.key == Key.DirectionDown)
@@ -277,37 +277,42 @@ fun InfiniteLoopRow(
         )
 
         // Stable reference to avoid recomposition from lambda re-allocation
-        val context = LocalContext.current
         val wrappedOnFocused: (MetaItem?, String) -> Unit = { focused, key ->
-            rowHasCardFocus = focused != null
-            val focusedIndex = items.indexOfFirst { it.id == focused?.id && it.type == focused?.type }
-            if (focusedIndex >= 0) {
-                for (nearby in (focusedIndex - 1).coerceAtLeast(0)..(focusedIndex + 1).coerceAtMost(items.lastIndex)) {
-                    val nearbyItem = items[nearby]
-                    val enriched = enrichedItems["${nearbyItem.type}:${nearbyItem.id}"]
-                    if (useLandscapeCards) {
-                        ImagePrefetcher.prefetchLandscape(context, enriched?.background ?: nearbyItem.background)
-                        ImagePrefetcher.prefetchLogo(context, enriched?.logo ?: nearbyItem.logo)
-                    } else {
-                        ImagePrefetcher.prefetchBackdrop(context, enriched?.background ?: nearbyItem.background)
-                    }
-                }
+            rowHasCardFocus.value = focused != null
+            focusedArtworkKey = focused?.canonicalPresentationKey()
+            focused?.canonicalPresentationKey()?.let { focusedKey ->
+                itemIndexByCanonicalKey[focusedKey]?.let { focusedItemIndex = it }
             }
             onFocused(focused, key)
         }
         
-        Box(Modifier.fillMaxWidth().height(effectiveRowHeight)) {
+        FocusShelfFrame(
+            state = listState,
+            focused = rowHasCardFocus,
+            width = focusFrame.width,
+            height = focusFrame.height,
+            startPadding = startPadding,
+            focusedItemIndex = focusedItemIndex,
+            tag = "shelf-focus-indicator",
+            repeatedSectionSize = if (isInfiniteLoopEnabled && isInfiniteScrollingEnabled) {
+                items.size.coerceAtMost(visibleItemCount.coerceIn(5, 50)) + 1
+            } else 0,
+            viewportHeight = effectiveRowHeight,
+            indicatorAlignment = Alignment.TopStart,
+            pivotSpec = pivotSpec
+        ) {
         when {
             // CASE A: Grid View OFF - Standard linear list
             // Uses BringIntoViewSpec for automatic pivot-aligned scrolling
             !isInfiniteLoopEnabled -> {
-                CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-                    LinearContent(
+                LinearContent(
                         listState = listState,
                         startPadding = startPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
+                        showWatchedBadge = showWatchedBadge,
+                        focusRowId = focusRowId,
                         items = items,
                         onMovieClick = onMovieClick,
                         onMovieLongClick = onMovieLongClick,
@@ -318,26 +323,27 @@ fun InfiniteLoopRow(
                         isGlobalFocusPresent = isGlobalFocusPresent,
                         isFirstRow = isFirstRow,
                         rowHeight = effectiveRowHeight,
-                        upKeyDebouncer = upKeyDebouncer,
                         repeatGate = repeatGate,
                         pivotFocusRequester = pivotFocusRequester,
                         isLandscapeCards = useLandscapeCards,
                         enrichedItems = enrichedItems,
-                        effectiveItemWidth = effectiveItemWidth
+                        effectiveItemWidth = effectiveItemWidth,
+                        verticalEntryRequester = verticalEntryRequester,
+                        verticalFocusedIndex = focusedItemIndex
                     )
-                }
             }
             // CASE B: Grid View ON + Infinite Loop ON
             // A single BringIntoViewSpec path aligns focus and animates the shelf
             // together, avoiding a competing manual scroll target.
             isInfiniteScrollingEnabled -> {
-                CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-                    InfiniteGridContent(
+                InfiniteGridContent(
                         listState = listState,
                         startPadding = startPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
+                        showWatchedBadge = showWatchedBadge,
+                        focusRowId = focusRowId,
                         items = items,
                         visibleItemCount = visibleItemCount,
                         onMovieClick = onMovieClick,
@@ -354,22 +360,22 @@ fun InfiniteLoopRow(
                         effectiveItemWidth = effectiveItemWidth,
                         isLandscapeCards = useLandscapeCards,
                         enrichedItems = enrichedItems,
-                        upKeyDebouncer = upKeyDebouncer,
                         repeatGate = repeatGate,
-                        pivotFocusRequester = pivotFocusRequester
+                        pivotFocusRequester = pivotFocusRequester,
+                        verticalEntryRequester = verticalEntryRequester
                     )
-                }
             }
             // CASE C: Grid View ON + Infinite Loop OFF
             // Uses BringIntoViewSpec for automatic pivot-aligned scrolling
             else -> {
-                CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec) {
-                    FiniteGridContent(
+                FiniteGridContent(
                         listState = listState,
                         startPadding = startPadding,
                         endPadding = endPadding,
                         isTopNav = isTopNav,
                         rowIndex = rowIndex,
+                        showWatchedBadge = showWatchedBadge,
+                        focusRowId = focusRowId,
                         items = items,
                         visibleItemCount = visibleItemCount,
                         onMovieClick = onMovieClick,
@@ -385,24 +391,13 @@ fun InfiniteLoopRow(
                         effectiveItemWidth = effectiveItemWidth,
                         isLandscapeCards = useLandscapeCards,
                         enrichedItems = enrichedItems,
-                        upKeyDebouncer = upKeyDebouncer,
                         repeatGate = repeatGate,
-                        pivotFocusRequester = pivotFocusRequester
+                        pivotFocusRequester = pivotFocusRequester,
+                        verticalEntryRequester = verticalEntryRequester,
+                        verticalFocusedIndex = focusedItemIndex
                     )
-                }
             }
         }
-            if (rowHasCardFocus) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = startPadding)
-                        .width(focusFrame.width)
-                        .height(focusFrame.height)
-                        .border(2.dp, Color.White, focusFrameShape)
-                        .zIndex(20f)
-                )
-            }
         }
     }
 }
@@ -424,6 +419,8 @@ private fun LinearContent(
     endPadding: Dp,
     isTopNav: Boolean,
     rowIndex: Int,
+    showWatchedBadge: Boolean,
+    focusRowId: String,
     items: List<MetaItem>,
     onMovieClick: (MetaItem) -> Unit,
     onMovieLongClick: (MetaItem, Boolean, androidx.compose.ui.geometry.Rect) -> Unit,
@@ -434,49 +431,36 @@ private fun LinearContent(
     isGlobalFocusPresent: Boolean,
     isFirstRow: Boolean,
     rowHeight: Dp,
-    upKeyDebouncer: UpKeyDebouncer,
     repeatGate: DpadRepeatGate,
     pivotFocusRequester: FocusRequester? = null,
     isLandscapeCards: Boolean = false,
     enrichedItems: Map<String, MetaItem> = emptyMap(),
-    effectiveItemWidth: Dp = ITEM_WIDTH
+    effectiveItemWidth: Dp = ITEM_WIDTH,
+    verticalEntryRequester: FocusRequester? = null,
+    verticalFocusedIndex: Int = 0
 ) {
-    val context = LocalContext.current
-    // Prefetch image URLs list (cached to avoid allocation during scroll)
-    val imageUrls = remember(items, isLandscapeCards, enrichedItems) {
-        if (isLandscapeCards) {
-            items.map { item ->
-                val enriched = enrichedItems["${item.type}:${item.id}"]
-                enriched?.background ?: item.background
-            }
-        } else {
-            items.map { it.poster }
-        }
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
+    val itemLazyKeys = remember(items, focusRowId) {
+        homeRowItemLazyKeys(focusRowId, items.map { "movie:${it.canonicalPresentationKey()}" })
     }
-    val logoUrls = remember(items, enrichedItems) {
-        items.map { enrichedItems["${it.type}:${it.id}"]?.logo ?: it.logo }
-    }
-
-    // Debounce navbar escape: track last LEFT key time to prevent escape during long-press
-    val leftKeyDebouncer = remember { RowKeyRepeatDebouncer() }
-    val navbarEscapeDebounceMs = 300L // Only allow escape if 300ms since last LEFT press
 
     LazyRow(
         state = listState,
         modifier = Modifier
             .height(rowHeight)
+            .focusGroup()
             .graphicsLayer { clip = false },
         contentPadding = PaddingValues(start = startPadding, end = endPadding),
         horizontalArrangement = Arrangement.spacedBy(ITEM_SPACING)
     ) {
         itemsIndexed(
             items = items,
-            key = { index, item -> "${rowIndex}_${item.id}_$index" },
+            key = { index, _ -> itemLazyKeys[index] },
             contentType = { _, _ -> if (isLandscapeCards) "landscape" else "movie" }
         ) { index, item ->
             val isFirstItem = index == 0
             val isLastItem = index == items.lastIndex
-            val uniqueKey = "${rowIndex}_${item.id}_$index"
+            val uniqueKey = homeCardFocusKey(rowIndex, focusRowId, item.homeFocusIdentityKey(), index)
 
             val shouldRequestFocus = when {
                 uniqueKey == locallyFocusedItemId -> true
@@ -502,34 +486,17 @@ private fun LinearContent(
                                     }
                                 }
                                 keyEvent.key == Key.DirectionLeft -> {
-                                    // Always update time on ANY left press for debounce tracking
-                                    val now = System.currentTimeMillis()
-                                    val timeSinceLastLeft = now - leftKeyDebouncer.lastTime
-                                    leftKeyDebouncer.lastTime = now
-
                                     if (isFirstItem) {
-                                        // Only escape to navbar if this is a deliberate press (not rapid long-press repeat)
-                                        if (!isTopNav && timeSinceLastLeft > navbarEscapeDebounceMs) {
-                                            drawerRequester.requestFocusSafely()
-                                        }
-                                        true // Consume at first item to prevent focus escaping
+                                        if (!isTopNav) handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
+                                        else true // Top navigation is entered from above, not from the left.
                                     } else {
                                         false // Let normal navigation happen
                                     }
                                 }
                                 keyEvent.key == Key.DirectionUp -> {
                                     if (isTopNav) {
-                                        // TRACK UP KEY on ALL rows to handle rapid scrolling from bottom
-                                        val now = System.currentTimeMillis()
-                                        val timeSinceLastUp = now - upKeyDebouncer.lastTime
-                                        upKeyDebouncer.lastTime = now
-
                                         if (isFirstRow) {
-                                            // Only escape to navbar if slow press
-                                            if (timeSinceLastUp > 300L) {
-                                                drawerRequester.requestFocusSafely()
-                                            }
-                                            true // Block default
+                                            handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
                                         } else {
                                             false // Allow up nav
                                         }
@@ -541,51 +508,49 @@ private fun LinearContent(
                     }
             ) {
                 val watchedIds = LocalWatchedIds.current
+                val cardItem = enrichedItems[item.canonicalPresentationKey()] ?: item
                 if (isLandscapeCards) {
-                    val enriched = enrichedItems["${item.type}:${item.id}"]
-                    SaabTvLandscapeCard(
-                        previewItem = enriched ?: item,
+                    SaabTvCard(
+                        previewItem = cardItem,
                         title = item.name,
-                        backdropUrl = enriched?.background ?: item.background,
-                        logoUrl = enriched?.logo ?: item.logo,
+                        posterUrl = item.poster,
+                        forceLandscape = true,
                         onClick = { onMovieClick(item) },
                         onLongClick = { bounds -> onMovieLongClick(item, rowIndex == -1, bounds) },
                         progress = item.progress,
-                        isWatched = rowIndex != -1 && item.id in watchedIds,
-                        enableWatchedBadge = rowIndex != -1,
+                        isWatched = showWatchedBadge && item.id in watchedIds,
+                        enableWatchedBadge = showWatchedBadge,
                         showFocusOutline = false,
                         hasNewEpisode = item.hasNewEpisode,
-                        onFocused = {
-                            ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index, logos = logoUrls)
-                            onFocused(item, uniqueKey)
-                        },
+                        landscapeWidth = effectiveItemWidth,
+                        onFocused = { onFocused(item, uniqueKey) },
                         modifier = Modifier.then(
                             if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                             else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                             else Modifier
-                        )
+                        ).then(if (verticalEntryRequester != null && index == verticalFocusedIndex) Modifier.focusRequester(verticalEntryRequester) else Modifier)
                     )
                 } else {
                     SaabTvCard(
-                        previewItem = item,
+                        previewItem = cardItem,
                         title = item.name,
                         posterUrl = item.poster,
+                        normalWidth = effectiveItemWidth,
+                        normalHeight = effectiveItemWidth * 1.5f,
+                        landscapeWidth = effectiveItemWidth,
                         onClick = { onMovieClick(item) },
                         onLongClick = { bounds -> onMovieLongClick(item, rowIndex == -1, bounds) },
                         progress = item.progress,
-                        isWatched = rowIndex != -1 && item.id in watchedIds,
-                        enableWatchedBadge = rowIndex != -1,
+                        isWatched = showWatchedBadge && item.id in watchedIds,
+                        enableWatchedBadge = showWatchedBadge,
                         showFocusOutline = false,
                         hasNewEpisode = item.hasNewEpisode,
-                        onFocused = {
-                            ImagePrefetcher.prefetchAround(context, imageUrls, index)
-                            onFocused(item, uniqueKey)
-                        },
+                        onFocused = { onFocused(item, uniqueKey) },
                         modifier = Modifier.then(
                             if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                             else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                             else Modifier
-                        )
+                        ).then(if (verticalEntryRequester != null && index == verticalFocusedIndex) Modifier.focusRequester(verticalEntryRequester) else Modifier)
                     )
                 }
             }
@@ -598,21 +563,18 @@ private fun LinearContent(
  * CASE B: INFINITE GRID (Grid View ON + Infinite Loop ON)
  * ============================================================================
  * 
- * Netflix-grade truly infinite scrolling implementation:
+ * Bounded repeated scrolling implementation:
  * 
- * KEY INSIGHT: Use a VERY large bounded list (100+ repetitions) starting from
- * the middle. Users will NEVER reach the end in practice, making it feel
- * truly infinite without any visible jumps or recentering.
+ * KEY INSIGHT: A bounded number of repeated sections is enough for TV browsing,
+ * without asking Compose to track millions of virtual item positions.
  * 
- * Optimizations:
- * 1. 100 repetitions = 1500+ items - practically infinite
- * 2. Start at section 50 (middle) - can scroll 50 sections in either direction
- * 3. Stable keys with generation suffix - bounded memory, proper recycling
- * 4. No recentering needed - eliminates all visible jumps
- * 5. Image prefetching for smooth loading
+ * - At most 1,000 repetitions = 51,000 virtual items
+ * - Stable keys with generation suffix
+ * - No recentering needed, so there are no visible jumps
+ * - Image prefetching for smooth loading
  * ============================================================================
  */
-private const val INFINITE_LOOP_GENERATIONS = 100000 // 100,000 repetitions = practically infinite
+internal const val INFINITE_LOOP_GENERATIONS = 1_000
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -622,6 +584,8 @@ private fun InfiniteGridContent(
     endPadding: Dp,
     isTopNav: Boolean,
     rowIndex: Int,
+    showWatchedBadge: Boolean,
+    focusRowId: String,
     items: List<MetaItem>,
     visibleItemCount: Int,
     onMovieClick: (MetaItem) -> Unit,
@@ -638,12 +602,11 @@ private fun InfiniteGridContent(
     effectiveItemWidth: Dp,
     isLandscapeCards: Boolean,
     enrichedItems: Map<String, MetaItem>,
-    upKeyDebouncer: UpKeyDebouncer,
     repeatGate: DpadRepeatGate,
-    pivotFocusRequester: FocusRequester? = null
+    pivotFocusRequester: FocusRequester? = null,
+    verticalEntryRequester: FocusRequester? = null
 ) {
-    val context = LocalContext.current
-
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val truncatedMovies = remember(items, visibleItemCount) { 
         items.take(visibleItemCount.coerceIn(5, 50)) 
     }
@@ -652,43 +615,36 @@ private fun InfiniteGridContent(
     val baseDataList: List<GridRowItem> = remember(truncatedMovies) {
         truncatedMovies.map { GridRowItem.MovieItem(it) } + GridRowItem.ViewMoreItem
     }
+    val itemLazyKeys = remember(baseDataList, focusRowId) {
+        homeRowItemLazyKeys(focusRowId, baseDataList.map { item ->
+            when (item) {
+                is GridRowItem.MovieItem -> "movie:${item.movie.canonicalPresentationKey()}"
+                is GridRowItem.ViewMoreItem -> "action:viewmore"
+            }
+        })
+    }
     val sectionSize = baseDataList.size
+    val cardFocusRequesters = remember(listState, sectionSize) { mutableStateMapOf<Int, FocusRequester>() }
     
     // Calculate total items and start position
     val totalItems = sectionSize * INFINITE_LOOP_GENERATIONS
 
-    // Prefetch image URLs list
-    val imageUrls = remember(truncatedMovies, enrichedItems, isLandscapeCards) {
-        truncatedMovies.map { item ->
-            if (isLandscapeCards) {
-                enrichedItems["${item.type}:${item.id}"]?.background ?: item.background
-            } else item.poster
-        }
-    }
-    val logoUrls = remember(truncatedMovies, enrichedItems) {
-        truncatedMovies.map { enrichedItems["${it.type}:${it.id}"]?.logo ?: it.logo }
-    }
-    
     // Track focused index for ViewMore card's directional alpha
     var currentFocusedIndex by remember(listState) { 
         mutableIntStateOf(listState.firstVisibleItemIndex) 
     }
     
-    // Debounce navbar escape: track last LEFT key time to prevent escape during long-press
-    val leftKeyDebouncer = remember { RowKeyRepeatDebouncer() }
-    val rightKeyDebouncer = remember { RowKeyRepeatDebouncer() }
-    val navbarEscapeDebounceMs = 300L
-
     // Parse last focused key to find the item ID (not scroll index)
-    // Key format: "rowIndex_movieId_scrollIndex" or "rowIndex_viewmore_scrollIndex"
+    // Focus address includes the stable row suffix; loop generation is kept only in the lazy item key.
     val lastFocusedItemId = remember(locallyFocusedItemId) {
-        locallyFocusedItemId?.let { key ->
+        locallyFocusedItemId?.let { rawKey ->
+            val key = focusKeyWithoutRowId(rawKey)
             // It is already filtered to start with "${rowIndex}_" by parent
              val withoutPrefix = key.removePrefix("${rowIndex}_")
              if (withoutPrefix.startsWith("viewmore")) {
                  "viewmore"
              } else {
-                 withoutPrefix.substringBeforeLast("_")
+                 decodeFocusToken(withoutPrefix.substringBeforeLast("_"))
              }
         }
     }
@@ -697,6 +653,7 @@ private fun InfiniteGridContent(
         state = listState,
         modifier = Modifier
             .height(rowHeight)
+            .focusGroup()
             .graphicsLayer { clip = false },
         contentPadding = PaddingValues(start = startPadding, end = endPadding),
         horizontalArrangement = Arrangement.spacedBy(ITEM_SPACING)
@@ -708,11 +665,7 @@ private fun InfiniteGridContent(
             key = { scrollIndex ->
                 val logicalIndex = scrollIndex % sectionSize
                 val generation = scrollIndex / sectionSize
-                val item = baseDataList[logicalIndex]
-                when (item) {
-                    is GridRowItem.MovieItem -> "${rowIndex}_${item.movie.id}_g$generation"
-                    is GridRowItem.ViewMoreItem -> "${rowIndex}_viewmore_g$generation"
-                }
+                "${itemLazyKeys[logicalIndex]}_g$generation"
             },
             contentType = { scrollIndex ->
                 when (baseDataList[scrollIndex % sectionSize]) {
@@ -742,6 +695,15 @@ private fun InfiniteGridContent(
 
             when (item) {
                 is GridRowItem.MovieItem -> {
+                    val cardFocusRequester = remember(scrollIndex) { FocusRequester() }
+                    DisposableEffect(scrollIndex, cardFocusRequester) {
+                        cardFocusRequesters[scrollIndex] = cardFocusRequester
+                        onDispose {
+                            if (cardFocusRequesters[scrollIndex] === cardFocusRequester) {
+                                cardFocusRequesters.remove(scrollIndex)
+                            }
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .width(effectiveItemWidth)
@@ -753,39 +715,20 @@ private fun InfiniteGridContent(
                                 if (keyEvent.type == KeyEventType.KeyDown) {
                                     when {
                                         keyEvent.key == Key.DirectionRight -> {
-                                            // Prime RIGHT debounce while moving through posters so ViewMore can
-                                            // block long-press escape on arrival.
-                                            rightKeyDebouncer.lastTime = System.currentTimeMillis()
                                             false
                                         }
                                         keyEvent.key == Key.DirectionLeft -> {
-                                            // Always update time on ANY left press for debounce tracking
-                                            val now = System.currentTimeMillis()
-                                            val timeSinceLastLeft = now - leftKeyDebouncer.lastTime
-                                            leftKeyDebouncer.lastTime = now
-                                            
                                             if (isLoopStart) {
-                                                // Only escape to navbar if this is a deliberate press (not rapid long-press repeat)
-                                                if (!isTopNav && timeSinceLastLeft > navbarEscapeDebounceMs) {
-                                                    drawerRequester.requestFocusSafely()
-                                                }
-                                                true // Consume at loop start to prevent focus escaping
+                                                if (!isTopNav) handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
+                                                else true // Top navigation is entered from above, not from the left.
                                             } else {
                                                 false // Let normal navigation happen
                                             }
                                         }
                                         keyEvent.key == Key.DirectionUp -> {
                                             if (isTopNav) {
-                                                // TRACK UP KEY on ALL rows
-                                                val now = System.currentTimeMillis()
-                                                val timeSinceLastUp = now - upKeyDebouncer.lastTime
-                                                upKeyDebouncer.lastTime = now
-
                                                 if (isFirstRow) {
-                                                    if (timeSinceLastUp > 300L) {
-                                                        drawerRequester.requestFocusSafely()
-                                                    }
-                                                    true
+                                                    handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
                                                 } else {
                                                     false
                                                 }
@@ -796,54 +739,48 @@ private fun InfiniteGridContent(
                                 } else false
                             }
                     ) {
-                        val uniqueKey = "${rowIndex}_${item.movie.id}_$scrollIndex"
+                        val uniqueKey = homeCardFocusKey(rowIndex, focusRowId, item.movie.homeFocusIdentityKey(), scrollIndex)
                         val watchedIds = LocalWatchedIds.current
-                        val cardItem = enrichedItems["${item.movie.type}:${item.movie.id}"] ?: item.movie
+                        val cardItem = enrichedItems[item.movie.canonicalPresentationKey()] ?: item.movie
                         SaabTvCard(
                             previewItem = cardItem,
                             title = item.movie.name,
                             posterUrl = item.movie.poster,
+                            normalWidth = effectiveItemWidth,
+                            normalHeight = effectiveItemWidth * 1.5f,
                             onClick = { onMovieClick(item.movie) },
                             onLongClick = { bounds -> onMovieLongClick(item.movie, rowIndex == -1, bounds) },
                             progress = item.movie.progress,
-                            isWatched = rowIndex != -1 && item.movie.id in watchedIds,
+                            isWatched = showWatchedBadge && item.movie.id in watchedIds,
+                            enableWatchedBadge = showWatchedBadge,
                             landscapeWidth = effectiveItemWidth,
                             forceLandscape = isLandscapeCards,
                             showFocusOutline = false,
                             onFocused = {
                                 currentFocusedIndex = scrollIndex
-                                val logicalIndex = scrollIndex % sectionSize
-                                if (logicalIndex < imageUrls.size) {
-                                    if (isLandscapeCards) {
-                                        ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, logicalIndex, logos = logoUrls)
-                                    } else {
-                                        ImagePrefetcher.prefetchAround(context, imageUrls, logicalIndex)
-                                    }
-                                }
                                 onFocused(item.movie, uniqueKey)
                             },
                             modifier = Modifier.then(
                                 if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                                 else if (pivotFocusRequester != null && scrollIndex == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                                 else Modifier
-                            )
+                            ).focusRequester(cardFocusRequester)
+                                .then(if (verticalEntryRequester != null && scrollIndex == currentFocusedIndex) Modifier.focusRequester(verticalEntryRequester) else Modifier)
                         )
                     }
                 }
 
                 is GridRowItem.ViewMoreItem -> {
-                    val uniqueKey = "${rowIndex}_viewmore_$scrollIndex"
+                    val uniqueKey = homeCardFocusKey(rowIndex, focusRowId, "viewmore", scrollIndex)
                     
                     InfiniteViewMoreCard(
                         isTopNav = isTopNav,
                         isFirstRow = isFirstRow,
                         drawerRequester = drawerRequester,
-                        upKeyDebouncer = upKeyDebouncer,
-                        rightKeyDebouncer = rightKeyDebouncer,
-                        navbarEscapeDebounceMs = navbarEscapeDebounceMs,
                         repeatGate = repeatGate,
                         scrollIndex = scrollIndex,
                         currentFocusedIndex = currentFocusedIndex,
+                        previousCardFocusRequester = cardFocusRequesters[scrollIndex - 1],
                         onClick = onViewMore,
                         onFocused = {
                             currentFocusedIndex = scrollIndex
@@ -853,6 +790,7 @@ private fun InfiniteGridContent(
                         isLandscape = isLandscapeCards,
                         modifier = Modifier
                             .then(if (shouldRequestFocus) Modifier.focusRequester(entryRequester) else Modifier)
+                            .then(if (verticalEntryRequester != null && scrollIndex == currentFocusedIndex) Modifier.focusRequester(verticalEntryRequester) else Modifier)
                             .then(
                                 if (pivotFocusRequester != null && scrollIndex == listState.firstVisibleItemIndex) {
                                     Modifier.focusRequester(pivotFocusRequester)
@@ -890,6 +828,8 @@ private fun FiniteGridContent(
     endPadding: Dp,
     isTopNav: Boolean,
     rowIndex: Int,
+    showWatchedBadge: Boolean,
+    focusRowId: String,
     items: List<MetaItem>,
     visibleItemCount: Int,
     onMovieClick: (MetaItem) -> Unit,
@@ -905,52 +845,43 @@ private fun FiniteGridContent(
     effectiveItemWidth: Dp,
     isLandscapeCards: Boolean,
     enrichedItems: Map<String, MetaItem>,
-    upKeyDebouncer: UpKeyDebouncer,
     repeatGate: DpadRepeatGate,
-    pivotFocusRequester: FocusRequester? = null
+    pivotFocusRequester: FocusRequester? = null,
+    verticalEntryRequester: FocusRequester? = null,
+    verticalFocusedIndex: Int = 0
 ) {
-    val context = LocalContext.current
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val truncatedMovies = remember(items, visibleItemCount) { 
         items.take(visibleItemCount.coerceIn(5, 50)) 
     }
     
-    // Prefetch image URLs list
-    val imageUrls = remember(truncatedMovies, enrichedItems, isLandscapeCards) {
-        truncatedMovies.map { item ->
-            if (isLandscapeCards) {
-                enrichedItems["${item.type}:${item.id}"]?.background ?: item.background
-            } else item.poster
-        }
-    }
-    val logoUrls = remember(truncatedMovies, enrichedItems) {
-        truncatedMovies.map { enrichedItems["${it.type}:${it.id}"]?.logo ?: it.logo }
-    }
     
-    // Debounce navbar escape: track last LEFT key time to prevent escape during long-press
-    val leftKeyDebouncer = remember { RowKeyRepeatDebouncer() }
-    val navbarEscapeDebounceMs = 300L
-
     // Build finite list: [Movie 0 ... Movie N, ViewMoreItem]
     val dataList: List<GridRowItem> = remember(truncatedMovies) {
         truncatedMovies.map { GridRowItem.MovieItem(it) } + GridRowItem.ViewMoreItem
+    }
+    val cardFocusRequesters = remember(dataList) { List(dataList.size) { FocusRequester() } }
+    val itemLazyKeys = remember(dataList, focusRowId) {
+        homeRowItemLazyKeys(focusRowId, dataList.map { item ->
+            when (item) {
+                is GridRowItem.MovieItem -> "movie:${item.movie.canonicalPresentationKey()}"
+                is GridRowItem.ViewMoreItem -> "action:viewmore"
+            }
+        })
     }
 
     LazyRow(
         state = listState,
         modifier = Modifier
             .height(rowHeight)
+            .focusGroup()
             .graphicsLayer { clip = false },
         contentPadding = PaddingValues(start = startPadding, end = endPadding),
         horizontalArrangement = Arrangement.spacedBy(ITEM_SPACING)
     ) {
         itemsIndexed(
             items = dataList,
-            key = { index, item ->
-                when (item) {
-                    is GridRowItem.MovieItem -> "${rowIndex}_${item.movie.id}_$index"
-                    is GridRowItem.ViewMoreItem -> "${rowIndex}_viewmore"
-                }
-            },
+            key = { index, _ -> itemLazyKeys[index] },
             contentType = { _, item ->
                 when (item) {
                     is GridRowItem.MovieItem -> "movie"
@@ -962,8 +893,8 @@ private fun FiniteGridContent(
             val isLastItem = index == dataList.size - 1
 
             val uniqueKey = when (item) {
-                is GridRowItem.MovieItem -> "${rowIndex}_${item.movie.id}_$index"
-                is GridRowItem.ViewMoreItem -> "${rowIndex}_viewmore_$index"
+                is GridRowItem.MovieItem -> homeCardFocusKey(rowIndex, focusRowId, item.movie.homeFocusIdentityKey(), index)
+                is GridRowItem.ViewMoreItem -> homeCardFocusKey(rowIndex, focusRowId, "viewmore", index)
             }
 
             val shouldRequestFocus = when {
@@ -985,33 +916,17 @@ private fun FiniteGridContent(
                                 if (keyEvent.type == KeyEventType.KeyDown) {
                                     when {
                                         keyEvent.key == Key.DirectionLeft -> {
-                                            // Always update time on ANY left press for debounce tracking
-                                            val now = System.currentTimeMillis()
-                                            val timeSinceLastLeft = now - leftKeyDebouncer.lastTime
-                                            leftKeyDebouncer.lastTime = now
-                                            
                                             if (isFirstItem) {
-                                                // Only escape to navbar if this is a deliberate press (not rapid long-press repeat)
-                                                if (!isTopNav && timeSinceLastLeft > navbarEscapeDebounceMs) {
-                                                    drawerRequester.requestFocusSafely()
-                                                }
-                                                true // Consume at first item to prevent focus escaping
+                                                if (!isTopNav) handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
+                                                else true // Top navigation is entered from above, not from the left.
                                             } else {
                                                 false // Let normal navigation happen
                                             }
                                         }
                                         keyEvent.key == Key.DirectionUp -> {
                                             if (isTopNav) {
-                                                // TRACK UP KEY on ALL rows
-                                                val now = System.currentTimeMillis()
-                                                val timeSinceLastUp = now - upKeyDebouncer.lastTime
-                                                upKeyDebouncer.lastTime = now
-
                                                 if (isFirstRow) {
-                                                    if (timeSinceLastUp > 300L) {
-                                                        drawerRequester.requestFocusSafely()
-                                                    }
-                                                    true
+                                                    handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
                                                 } else {
                                                     false
                                                 }
@@ -1023,31 +938,28 @@ private fun FiniteGridContent(
                             }
                     ) {
                         val watchedIds = LocalWatchedIds.current
-                        val cardItem = enrichedItems["${item.movie.type}:${item.movie.id}"] ?: item.movie
+                        val cardItem = enrichedItems[item.movie.canonicalPresentationKey()] ?: item.movie
                         SaabTvCard(
                             previewItem = cardItem,
                             title = item.movie.name,
                             posterUrl = item.movie.poster,
+                            normalWidth = effectiveItemWidth,
+                            normalHeight = effectiveItemWidth * 1.5f,
                             onClick = { onMovieClick(item.movie) },
                             onLongClick = { bounds -> onMovieLongClick(item.movie, rowIndex == -1, bounds) },
                             progress = item.movie.progress,
-                            isWatched = rowIndex != -1 && item.movie.id in watchedIds,
+                            isWatched = showWatchedBadge && item.movie.id in watchedIds,
+                            enableWatchedBadge = showWatchedBadge,
                             landscapeWidth = effectiveItemWidth,
                             forceLandscape = isLandscapeCards,
                             showFocusOutline = false,
-                            onFocused = {
-                                if (isLandscapeCards) {
-                                    ImagePrefetcher.prefetchAroundLandscape(context, imageUrls, index, logos = logoUrls)
-                                } else {
-                                    ImagePrefetcher.prefetchAround(context, imageUrls, index)
-                                }
-                                onFocused(item.movie, uniqueKey)
-                            },
+                            onFocused = { onFocused(item.movie, uniqueKey) },
                             modifier = Modifier.then(
                                 if (shouldRequestFocus) Modifier.focusRequester(entryRequester)
                                 else if (pivotFocusRequester != null && index == listState.firstVisibleItemIndex) Modifier.focusRequester(pivotFocusRequester)
                                 else Modifier
-                            )
+                            ).focusRequester(cardFocusRequesters[index])
+                                .then(if (verticalEntryRequester != null && index == verticalFocusedIndex) Modifier.focusRequester(verticalEntryRequester) else Modifier)
                         )
                     }
                 }
@@ -1064,17 +976,15 @@ private fun FiniteGridContent(
                                 if (keyEvent.type == KeyEventType.KeyDown) {
                                     when (keyEvent.key) {
                                         Key.DirectionRight -> true // Block RIGHT at ViewMore (end of list)
+                                        Key.DirectionLeft -> {
+                                            cardFocusRequesters.getOrNull(index - 1)?.let { requester ->
+                                                runCatching { requester.requestFocus(); true }.getOrDefault(false)
+                                            } ?: false
+                                        }
                                         Key.DirectionUp -> {
                                             if (isTopNav) {
-                                                val now = System.currentTimeMillis()
-                                                val timeSinceLastUp = now - upKeyDebouncer.lastTime
-                                                upKeyDebouncer.lastTime = now
-
                                                 if (isFirstRow) {
-                                                    if (timeSinceLastUp > 300L) {
-                                                        drawerRequester.requestFocusSafely()
-                                                    }
-                                                    true
+                                                    handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
                                                 } else {
                                                     false
                                                 }
@@ -1116,18 +1026,17 @@ private fun InfiniteViewMoreCard(
     isTopNav: Boolean,
     isFirstRow: Boolean,
     drawerRequester: FocusRequester,
-    upKeyDebouncer: UpKeyDebouncer,
-    rightKeyDebouncer: RowKeyRepeatDebouncer,
-    navbarEscapeDebounceMs: Long,
     repeatGate: DpadRepeatGate,
     scrollIndex: Int,
     currentFocusedIndex: Int,
+    previousCardFocusRequester: FocusRequester?,
     cardWidth: Dp,
     isLandscape: Boolean,
     onClick: () -> Unit,
     onFocused: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     var isFocused by remember { mutableStateOf(false) }
 
     val isToTheLeft = scrollIndex < currentFocusedIndex
@@ -1135,10 +1044,7 @@ private fun InfiniteViewMoreCard(
 
     val animatedAlpha by animateFloatAsState(
         targetValue = targetAlpha,
-        animationSpec = spring(
-            stiffness = Spring.StiffnessMediumLow,
-            dampingRatio = Spring.DampingRatioNoBouncy
-        ),
+        animationSpec = SaabMotion.focusRetargetSpec(),
         label = "viewMoreAlpha"
     )
 
@@ -1155,24 +1061,19 @@ private fun InfiniteViewMoreCard(
                 if (repeatGate.shouldConsume(keyEvent)) return@onPreviewKeyEvent true
                 if (keyEvent.type == KeyEventType.KeyDown) {
                     when (keyEvent.key) {
+                        Key.DirectionLeft -> {
+                            previousCardFocusRequester?.let { requester ->
+                                runCatching { requester.requestFocus(); true }.getOrDefault(false)
+                            } ?: false
+                        }
                         Key.DirectionRight -> {
-                            // Debounce RIGHT long-press repeats so focus does not escape unexpectedly.
-                            val now = System.currentTimeMillis()
-                            val timeSinceLastRight = now - rightKeyDebouncer.lastTime
-                            rightKeyDebouncer.lastTime = now
-                            timeSinceLastRight <= navbarEscapeDebounceMs
+                            // Let a fresh press advance into the loop; only held-key repeats stay at View More.
+                            !keyEvent.isInitialDpadPress()
                         }
                         Key.DirectionUp -> {
                             if (isTopNav) {
-                                val now = System.currentTimeMillis()
-                                val timeSinceLastUp = now - upKeyDebouncer.lastTime
-                                upKeyDebouncer.lastTime = now
-
                                 if (isFirstRow) {
-                                    if (timeSinceLastUp > 300L) {
-                                        drawerRequester.requestFocusSafely()
-                                    }
-                                    true
+                                    handoffNavigationFocus(keyEvent, authorizeNavigationHandoff, drawerRequester)
                                 } else {
                                     false
                                 }

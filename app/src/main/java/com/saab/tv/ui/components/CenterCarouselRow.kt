@@ -1,10 +1,7 @@
 package com.saab.tv.ui.components
 
 import android.annotation.SuppressLint
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -21,23 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlin.math.abs
-
-@OptIn(ExperimentalFoundationApi::class)
-class CenterPivotSpec : BringIntoViewSpec {
-
-    @Deprecated("", level = DeprecationLevel.HIDDEN)
-    override val scrollAnimationSpec = spring<Float>(
-        stiffness = Spring.StiffnessMediumLow,
-        dampingRatio = Spring.DampingRatioNoBouncy
-    )
-
-    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
-        val targetOffset = (containerSize / 2f) - (size / 2f)
-        val scrollDelta = offset - targetOffset
-        return if (abs(scrollDelta) < 1f) 0f else scrollDelta
-    }
-}
 
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalFoundationApi::class)
@@ -53,7 +33,9 @@ fun CenterCarouselRow(
     val screenWidth = configuration.screenWidthDp.dp
     val edgePadding = (screenWidth - itemWidth) / 2
     
-    val centerPivotSpec = remember { CenterPivotSpec() }
+    val centerPivotSpec = remember {
+        FocusPivotSpec(pivotFraction = 0.5f, itemPivotFraction = 0.5f)
+    }
 
     CompositionLocalProvider(LocalBringIntoViewSpec provides centerPivotSpec) {
         LazyRow(

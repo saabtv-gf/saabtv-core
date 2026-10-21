@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.*
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.cache.SeekThumbnailCache
 import com.saab.tv.data.model.ProfileEntity
@@ -14,6 +15,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -36,7 +38,7 @@ class PersonalizationSettingsComposeInteractionTest {
         val context = RuntimeEnvironment.getApplication()
         app = OfflineAppFixture(context)
         app.dao.insertProfile(ProfileEntity(id = 1, name = "Personalized"))
-        vm = SettingsViewModel(app.dao, app.configuration, SeekThumbnailCache(context), context, app.display)
+        vm = SettingsViewModel(app.dao, app.configuration, SeekThumbnailCache(context), context, app.display, app.userStateCommands)
         compose.setContent {
             if (contentVisible.value) {
                 MaterialTheme {
@@ -73,7 +75,20 @@ class PersonalizationSettingsComposeInteractionTest {
         compose.onNodeWithText("Top").performClick()
         compose.waitUntil(5_000) { runBlocking { app.dao.getProfileById(1)?.navPosition == "top" } }
 
-        compose.onNodeWithText("Off").performClick()
+        compose.onNodeWithTag("personalization-splash-option-1")
+            .assertHasClickAction()
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
+        compose.runOnIdle { assertEquals(false, app.configuration.getCachedSplashEnabled(1)) }
         compose.waitUntil(5_000) { runBlocking { app.dao.getProfileById(1)?.splashEnabled == false } }
+    }
+
+    @Test fun personalizationSegmentedControlsKeepTvFocusHeight() {
+        val titleCardOption = compose.onNodeWithTag("personalization-title-card-layout-0").performScrollTo()
+        val boundsHeight = titleCardOption.fetchSemanticsNode().boundsInRoot.height
+        val minimumHeight = with(compose.density) { 48.dp.toPx() }
+
+        assertTrue("TV segmented choices should retain a 48dp focus target, got $boundsHeight", boundsHeight >= minimumHeight)
+        titleCardOption.assertHasClickAction()
+        compose.onNodeWithTag("personalization-title-card-layout-1").performScrollTo().assertHasClickAction()
     }
 }

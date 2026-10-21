@@ -179,7 +179,9 @@ data class TmdbEpisode(
 // ── Recommendations ──
 
 data class TmdbRecommendationsResponse(
-    @SerializedName("results") val results: List<TmdbRecommendationResult>? = null
+    @SerializedName("results") val results: List<TmdbRecommendationResult>? = null,
+    @SerializedName("total_pages") val totalPages: Int? = null,
+    @SerializedName("page") val page: Int? = null
 )
 
 data class TmdbRecommendationResult(

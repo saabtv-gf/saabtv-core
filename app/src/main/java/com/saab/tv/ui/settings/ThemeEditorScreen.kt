@@ -1,7 +1,6 @@
 package com.saab.tv.ui.settings
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,7 +17,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -26,10 +24,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.saab.tv.R
 import com.saab.tv.data.model.ThemeEntity
+import com.saab.tv.ui.components.SaabMotion
+import com.saab.tv.ui.components.SetupButton
 import com.saab.tv.ui.theme.DefaultThemes
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -55,7 +57,6 @@ private fun hslToColor(h: Float, s: Float, l: Float): Color {
         blue = (b + m).coerceIn(0f, 1f)
     )
 }
-
 private fun colorToHsl(color: Color): Triple<Float, Float, Float> {
     val r = color.red
     val g = color.green
@@ -98,10 +99,11 @@ fun ThemeEditorScreen(
     onCancel: () -> Unit
 ) {
     val isEditing = editingTheme != null
+    val defaultThemeName = stringResource(R.string.theme_default_name)
     
     // Initialize with editing theme or defaults
     var themeName by remember { 
-        mutableStateOf(editingTheme?.name ?: "My Theme") 
+        mutableStateOf(editingTheme?.name ?: defaultThemeName)
     }
     
     val initialPrimary = editingTheme?.let { Color(it.primaryColor.toInt()) }
@@ -142,7 +144,7 @@ fun ThemeEditorScreen(
     val cancelButtonFocus = remember { FocusRequester() }
     var isCancelFocused by remember { mutableStateOf(false) }
 
-    androidx.activity.compose.BackHandler {
+    com.saab.tv.ui.navigation.AppBackHandler(priority = com.saab.tv.ui.navigation.AppBackPriority.Modal) {
         if (isCancelFocused) {
             onCancel()
         } else {
@@ -174,7 +176,7 @@ fun ThemeEditorScreen(
                 .padding(end = 24.dp)
         ) {
             Text(
-                text = if (isEditing) "Edit Theme" else "Create Theme",
+                text = stringResource(if (isEditing) R.string.theme_edit_title else R.string.theme_create_title),
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                 color = Color.White,
                 maxLines = 1,
@@ -210,7 +212,7 @@ fun ThemeEditorScreen(
                 .fillMaxHeight()
         ) {
             Text(
-                text = "Colors",
+                text = stringResource(R.string.theme_colors),
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = Color.White,
                 modifier = Modifier.padding(bottom = 16.dp)
@@ -222,7 +224,7 @@ fun ThemeEditorScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 ColorSlotButton(
-                    label = "Primary",
+                    label = stringResource(R.string.theme_primary),
                     color = primaryColor,
                     isSelected = selectedSlot == ColorSlot.PRIMARY,
                     focusRequester = primarySlotFocus,
@@ -231,7 +233,7 @@ fun ThemeEditorScreen(
                     modifier = Modifier.weight(1f).then(upBlockModifier)
                 )
                 ColorSlotButton(
-                    label = "Background",
+                    label = stringResource(R.string.theme_background),
                     color = backgroundColor,
                     isSelected = selectedSlot == ColorSlot.BACKGROUND,
                     focusRequester = backgroundSlotFocus,
@@ -244,14 +246,17 @@ fun ThemeEditorScreen(
             
             // HSL Sliders
             Text(
-                text = "Adjust ${selectedSlot.name.lowercase().replaceFirstChar { it.uppercase() }}",
+                text = stringResource(
+                    R.string.theme_adjust_slot,
+                    stringResource(if (selectedSlot == ColorSlot.PRIMARY) R.string.theme_primary else R.string.theme_background)
+                ),
                 style = MaterialTheme.typography.labelLarge,
                 color = Color.Gray,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
             
             HslSlider(
-                label = "Hue",
+                label = stringResource(R.string.theme_hue),
                 value = hue,
                 maxValue = 360f,
                 onValueChange = { hue = it },
@@ -268,7 +273,7 @@ fun ThemeEditorScreen(
             Spacer(Modifier.height(16.dp))
             
             HslSlider(
-                label = "Saturation",
+                label = stringResource(R.string.theme_saturation),
                 value = saturation,
                 maxValue = 1f,
                 onValueChange = { saturation = it },
@@ -281,7 +286,7 @@ fun ThemeEditorScreen(
             Spacer(Modifier.height(16.dp))
             
             HslSlider(
-                label = "Lightness",
+                label = stringResource(R.string.theme_lightness),
                 value = lightness,
                 maxValue = 1f,
                 onValueChange = { lightness = it },
@@ -300,9 +305,8 @@ fun ThemeEditorScreen(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                EditorButton(
-                    text = "Cancel",
-                    isPrimary = false,
+                SetupButton(
+                    text = stringResource(R.string.common_cancel),
                     onClick = onCancel,
                     modifier = Modifier
                         .weight(1f)
@@ -314,9 +318,8 @@ fun ThemeEditorScreen(
                             } else false
                         }
                 )
-                EditorButton(
-                    text = "Save",
-                    isPrimary = true,
+                SetupButton(
+                    text = stringResource(R.string.common_save),
                     onClick = {
                         onSave(
                             themeName,
@@ -324,6 +327,7 @@ fun ThemeEditorScreen(
                             colorToLong(backgroundColor)
                         )
                     },
+                    primary = true,
                     modifier = Modifier
                         .weight(1f)
                         .focusRequester(saveButtonFocus)
@@ -373,7 +377,7 @@ private fun ThemeNameInput(
         
         if (value.isEmpty()) {
             Text(
-                text = "Theme Name",
+                text = stringResource(R.string.theme_name),
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.Gray
             )
@@ -488,14 +492,13 @@ private fun ColorSlotButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
-    
     val borderColor by animateColorAsState(
         when {
             isFocused -> Color.White
             isSelected -> color
             else -> Color.White.copy(0.3f)
-        }
+        },
+        animationSpec = SaabMotion.focusFeedbackSpec()
     )
     
     val focusModifier = if (focusRequester != null) 
@@ -511,7 +514,6 @@ private fun ColorSlotButton(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .scale(scale)
             .clip(RoundedCornerShape(12.dp))
             .background(if (isSelected) color.copy(0.2f) else Color.White.copy(0.05f))
             .border(2.dp, borderColor, RoundedCornerShape(12.dp))
@@ -638,48 +640,5 @@ private fun HslSlider(
                     .border(2.dp, if (isFocused) Color.Black else Color.Gray, CircleShape)
             )
         }
-    }
-}
-
-@Composable
-private fun EditorButton(
-    text: String,
-    isPrimary: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(if (isFocused) 1.05f else 1f)
-    val accentColor = MaterialTheme.colorScheme.primary
-    
-    val bgColor = Color.White.copy(0.08f)
-    
-    val borderColor = when {
-        isFocused -> accentColor
-        isPrimary -> accentColor.copy(0.75f)
-        else -> Color.White.copy(0.2f)
-    }
-
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = modifier
-            .scale(scale)
-            .height(44.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(bgColor)
-            .border(2.dp, borderColor, RoundedCornerShape(8.dp))
-            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-            .focusable(interactionSource = interactionSource)
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-            color = when {
-                isFocused -> accentColor
-                isPrimary -> accentColor.copy(alpha = 0.95f)
-                else -> Color.White
-            }
-        )
     }
 }

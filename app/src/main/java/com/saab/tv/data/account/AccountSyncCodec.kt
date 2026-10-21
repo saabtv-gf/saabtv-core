@@ -18,7 +18,9 @@ internal object AccountSyncCodec {
         val output = ByteArrayOutputStream()
         GZIPOutputStream(output).use { it.write(bytes) }
         val compressed = output.toByteArray()
-        return if (compressed.size + magic.size < bytes.size) magic + compressed else bytes
+        return try {
+            if (compressed.size + magic.size < bytes.size) magic + compressed else bytes
+        } finally { compressed.fill(0) }
     }
     fun unpack(bytes: ByteArray): ByteArray {
         require(bytes.size <= MAX_PLAIN)

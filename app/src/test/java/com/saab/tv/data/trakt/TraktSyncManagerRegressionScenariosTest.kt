@@ -41,7 +41,8 @@ class TraktSyncManagerRegressionScenariosTest {
             .preferences.edit().putString("access_token_101", "fixture-access-token").commit()
         fixture.traktAuth.refreshConnectionState()
         api = FakeTraktSyncApi()
-        manager = TraktSyncManager(api, fixture.traktAuth, fixture.dao, fixture.app.configuration, fixture.cache)
+        manager = TraktSyncManager(api, fixture.traktAuth, fixture.dao, fixture.app.configuration, fixture.cache,
+            fixture.userStateCommands)
     }
 
     @After fun tearDown() = fixture.close()

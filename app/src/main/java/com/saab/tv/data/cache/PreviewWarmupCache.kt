@@ -37,6 +37,12 @@ internal class PreviewWarmupCache<T>(
         } catch (_: Exception) { discard(key, work); null }
     }
 
+    /** Return a warm value only if it is already complete; never block a foreground request. */
+    suspend fun awaitIfComplete(key: String): T? {
+        val complete = synchronized(this) { prune(); entries[key]?.work?.isCompleted == true }
+        return if (complete) awaitIfPresent(key) else null
+    }
+
     @Synchronized
     fun invalidate(key: String) {
         entries.remove(key)?.work?.cancel()

@@ -13,7 +13,7 @@ import java.io.IOException
 import java.util.UUID
 
 /** Tiny revision probes + immutable encrypted components, committed by one CAS RPC. */
-internal class AccountComponentCloud(private val context: Context, private val auth: AccountAuthManager) {
+internal class AccountComponentCloud(private val context: Context, private val auth: AccountAuthManager) : SyncV3Remote {
     private val root = File(AccountStorage.files(context), "cloud_components").apply { mkdirs() }
     private val manifestFile = AtomicFile(File(root, "manifest.json"))
     private val mutex = Mutex()
@@ -23,10 +23,25 @@ internal class AccountComponentCloud(private val context: Context, private val a
     suspend fun head(): JsonObject? = JsonParser.parseString(auth.dataRequest(
         "saabtv_account_state?select=revision,updated_at&limit=1")).asJsonArray.firstOrNull()?.asJsonObject
 
-    private fun encrypt(bytes: ByteArray, identity: String = userId): String = Base64.encodeToString(
-        AccountSnapshotCrypto.encrypt(AccountSyncCodec.pack(bytes), auth.syncKey, identity), Base64.NO_WRAP)
-    private fun decrypt(ciphertext: String, identity: String = userId): ByteArray = AccountSyncCodec.unpack(
-        AccountSnapshotCrypto.decrypt(Base64.decode(ciphertext, Base64.NO_WRAP), auth.syncKey, identity))
+    private fun encrypt(bytes: ByteArray, identity: String = userId): String {
+        val packed = AccountSyncCodec.pack(bytes)
+        return try {
+            auth.withSyncKey { key ->
+                Base64.encodeToString(AccountSnapshotCrypto.encrypt(packed, key, identity), Base64.NO_WRAP)
+            }
+        } finally { if (packed !== bytes) packed.fill(0) }
+    }
+    private inline fun <T> withDecrypted(
+        ciphertext: String,
+        identity: String = userId,
+        crossinline consume: (ByteArray) -> T
+    ): T = auth.withSyncKey { key ->
+        val packed = AccountSnapshotCrypto.decrypt(Base64.decode(ciphertext, Base64.NO_WRAP), key, identity)
+        val plain = try { AccountSyncCodec.unpack(packed) }
+        catch (failure: Exception) { packed.fill(0); throw failure }
+        if (plain !== packed) packed.fill(0)
+        try { consume(plain) } finally { plain.fill(0) }
+    }
     private fun write(file: AtomicFile, bytes: ByteArray) {
         val stream = file.startWrite()
         try { stream.write(bytes); file.finishWrite(stream) }
@@ -36,8 +51,15 @@ internal class AccountComponentCloud(private val context: Context, private val a
         JsonParser.parseString(manifestFile.openRead().use { it.readBytes().toString(Charsets.UTF_8) }).asJsonObject
     }.getOrNull()
     private fun cache(row: JsonObject) = write(manifestFile, row.toString().toByteArray())
-    private fun decode(row: JsonObject): JsonObject = JsonParser.parseString(decrypt(row.get("ciphertext").asString)
-        .toString(Charsets.UTF_8)).asJsonObject.also { require(it.get("userId").asString == userId) }
+    private fun decode(row: JsonObject): JsonObject = withDecrypted(row.get("ciphertext").asString) { plain ->
+        JsonParser.parseString(plain.toString(Charsets.UTF_8)).asJsonObject.also { payload ->
+        // Historical account snapshots are authenticated with the account key but predate
+        // the component manifest's explicit owner field. Keep them readable during migration.
+        payload.get("userId")?.takeUnless { it.isJsonNull }?.let { require(it.asString == userId) }
+        }
+    }
+
+    private fun format(manifest: JsonObject): Int = manifest.get("format")?.takeUnless { it.isJsonNull }?.asInt ?: 1
 
     private suspend fun row(): JsonObject? {
         val head = head() ?: return null
@@ -63,7 +85,7 @@ internal class AccountComponentCloud(private val context: Context, private val a
                 val item = it.asJsonObject; val id = item.get("object_id").asString
                 require(id in batch)
                 val ciphertext = item.get("ciphertext").asString
-                decrypt(ciphertext, "$userId|component|$id") // Validate authentication before caching.
+                withDecrypted(ciphertext, "$userId|component|$id") { } // Validate before caching.
                 write(objectFile(id), ciphertext.toByteArray()); received.add(id)
             }
             if (received.size != batch.size) throw IOException("Cloud components changed during read. Please retry.")
@@ -72,33 +94,36 @@ internal class AccountComponentCloud(private val context: Context, private val a
         return keys.associateWith { key ->
             val ref = refs.getAsJsonObject(key); val id = ref.get("id").asString
             val file = objectFile(id)
-            val plain = try {
-                decrypt(file.openRead().use { it.readBytes().toString(Charsets.UTF_8) }, "$userId|component|$id")
-                    .also { require(AccountSyncCodec.hash(it) == ref.get("hash").asString) }
+            val json = try {
+                withDecrypted(file.openRead().use { it.readBytes().toString(Charsets.UTF_8) }, "$userId|component|$id") { plain ->
+                    require(AccountSyncCodec.hash(plain) == ref.get("hash").asString)
+                    total += plain.size
+                    require(total <= AccountSyncCodec.MAX_PLAIN) { "Cloud account exceeds size limit." }
+                    JsonParser.parseString(plain.toString(Charsets.UTF_8))
+                }
             } catch (e: Exception) { file.delete(); throw e }
-            total += plain.size
-            require(total <= AccountSyncCodec.MAX_PLAIN) { "Cloud account exceeds size limit." }
-            JsonParser.parseString(plain.toString(Charsets.UTF_8))
+            json
         }
     }
 
     suspend fun fullRemote(): JsonObject? = mutex.withLock {
         val row = row() ?: return@withLock null
         val manifest = decode(row)
-        if (manifest.get("format").asInt != 2) return@withLock row
+        if (format(manifest) != 2) return@withLock row
         val objects = loadObjects(manifest, manifest.getAsJsonObject("objects").keySet())
         val snapshot = AccountPartitions.join(manifest.getAsJsonObject("layout")) { requireNotNull(objects[it]) }
         // Existing restore journaling remains unchanged: locally materialize a legacy-compatible envelope.
         row.deepCopy().apply {
-            addProperty("ciphertext", Base64.encodeToString(AccountSnapshotCrypto.encrypt(snapshot.toString().toByteArray(),
-                auth.syncKey, userId), Base64.NO_WRAP))
+            addProperty("ciphertext", auth.withSyncKey { key ->
+                Base64.encodeToString(AccountSnapshotCrypto.encrypt(snapshot.toString().toByteArray(), key, userId), Base64.NO_WRAP)
+            })
         }
     }
 
     suspend fun history(): Pair<Long, JsonArray> = mutex.withLock {
         val row = row() ?: return@withLock 0L to JsonArray()
         val manifest = decode(row)
-        val rows = if (manifest.get("format").asInt == 2) {
+        val rows = if (format(manifest) == 2) {
             val refs = manifest.getAsJsonObject("layout").getAsJsonObject("tables").getAsJsonArray("watch_history")
             val values = loadObjects(manifest, refs.map { it.asString })
             JsonArray().apply { refs.forEach { add(values.getValue(it.asString)) } }
@@ -110,7 +135,51 @@ internal class AccountComponentCloud(private val context: Context, private val a
         if (version == null) version = try {
             JsonParser.parseString(auth.dataRequest("rpc/saabtv_sync_version", JsonObject())).asInt
         } catch (e: AccountApiException) { if (e.status == 404) 1 else throw e }
-        return version == 2
+        return version!! >= 2
+    }
+
+    private suspend fun supportsSyncV3(): Boolean {
+        supportsComponents()
+        return version!! >= 3
+    }
+
+    /** Returns null until the additive v3 server migration has been installed. */
+    override suspend fun push(operations: List<com.saab.tv.data.model.SyncOutboxEntity>): SyncV3PushResult? = mutex.withLock {
+        val requestUserId = auth.userId ?: return@withLock null
+        if (!supportsSyncV3()) return@withLock null
+        require(operations.size <= SyncV3Protocol.MAX_PUSH_BATCH)
+        require(operations.all { it.accountUserId == requestUserId })
+        val rows = auth.withSyncKey { syncKey ->
+            JsonArray().apply {
+                operations.sortedBy { it.sequence }.forEach {
+                    add(SyncV3Protocol.encodeForPush(it, requestUserId, syncKey))
+                }
+            }
+        }
+        require(rows.toString().toByteArray(Charsets.UTF_8).size <= SyncV3Protocol.MAX_PUSH_BODY_BYTES)
+        if (auth.userId != requestUserId) return@withLock null
+        val response = JsonParser.parseString(auth.dataRequest(
+            "rpc/saabtv_sync_v3_push", JsonObject().apply { add("operations", rows) }
+        )).asJsonObject
+        if (auth.userId != requestUserId) return@withLock null
+        val accepted = response.getAsJsonArray("accepted_operation_ids")?.map { it.asString }?.toSet().orEmpty()
+        require(accepted.all { id -> operations.any { it.operationId == id } })
+        val cursor = response.get("cursor")?.asLong ?: 0L
+        require(cursor >= 0L)
+        SyncV3PushResult(accepted, cursor)
+    }
+
+    override suspend fun pull(afterSequence: Long, limit: Int): SyncV3PullPage? = mutex.withLock {
+        val requestUserId = auth.userId ?: return@withLock null
+        if (!supportsSyncV3()) return@withLock null
+        require(afterSequence >= 0L)
+        val request = JsonObject().apply {
+            addProperty("after_sequence", afterSequence)
+            addProperty("max_results", limit.coerceIn(1, SyncV3Protocol.MAX_BATCH))
+        }
+        if (auth.userId != requestUserId) return@withLock null
+        SyncV3Protocol.parsePullPage(auth.dataRequest("rpc/saabtv_sync_v3_pull", request))
+            .takeIf { auth.userId == requestUserId }
     }
 
     suspend fun save(snapshot: ByteArray, expectedRevision: Long): JsonObject = mutex.withLock {
@@ -118,14 +187,15 @@ internal class AccountComponentCloud(private val context: Context, private val a
             // Pre-migration server: preserve compatibility, but retain metadata-only read savings.
             return@withLock JsonParser.parseString(auth.dataRequest("rpc/saabtv_save_account", JsonObject().apply {
                 addProperty("expected_revision", expectedRevision)
-                addProperty("encrypted_state", Base64.encodeToString(AccountSnapshotCrypto.encrypt(snapshot,
-                    auth.syncKey, userId), Base64.NO_WRAP))
+                addProperty("encrypted_state", auth.withSyncKey { key ->
+                    Base64.encodeToString(AccountSnapshotCrypto.encrypt(snapshot, key, userId), Base64.NO_WRAP)
+                })
             })).asJsonObject
         }
         val baseline = if (expectedRevision > 0) row() else null
         if (baseline != null && baseline.get("revision").asLong != expectedRevision)
             return@withLock JsonObject().apply { addProperty("conflict", true) }
-        val prior = baseline?.let(::decode)?.takeIf { it.get("format").asInt == 2 }?.getAsJsonObject("objects")
+        val prior = baseline?.let(::decode)?.takeIf { format(it) == 2 }?.getAsJsonObject("objects")
         val partitions = AccountPartitions.split(JsonParser.parseString(snapshot.toString(Charsets.UTF_8)).asJsonObject)
         require(partitions.values.size <= 20000)
         val refs = JsonObject(); val changes = JsonArray(); val retained = JsonArray()

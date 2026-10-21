@@ -31,4 +31,69 @@ class EpisodeUtilsTest {
         assertNull(findNextEpisode("tmdb:123", "tmdb:123:1:2", episodes))
         assertTrue(episodeMatchesPlaybackId("tmdb:123", "tmdb:123:1:2", normalized[1]))
     }
+
+    @Test fun playbackIdentityReturnsTheSeriesForEpisodePlaybackAndPreservesMovieIds() {
+        assertEquals(
+            PlaybackContentIdentity("tmdb:123", "series"),
+            playbackContentIdentity("tmdb:123:2:5", "series")
+        )
+        assertEquals(
+            PlaybackContentIdentity("tmdb:123", "series"),
+            playbackContentIdentity("tmdb:123:2:5", "TV")
+        )
+        assertEquals(
+            PlaybackContentIdentity("tmdb:123", "movie"),
+            playbackContentIdentity(" tmdb:123 ", "movie")
+        )
+    }
+
+    @Test fun playbackShellUsesTheChosenCatalogTitleInsteadOfStaleDetailsState() {
+        val movie = playbackShellSelection(
+            contentId = "tmdb:42",
+            contentType = "movie",
+            playbackId = "tmdb:42",
+            playbackType = "movie",
+            playbackTitle = "Related Movie",
+            seriesTitle = "",
+            currentTitle = "Previously Opened Movie",
+            detailPoster = "movie-poster",
+            currentPoster = "stale-poster"
+        )
+        assertEquals(PlaybackContentIdentity("tmdb:42", "movie"), movie.content)
+        assertEquals("Related Movie", movie.contentTitle)
+        assertEquals("Related Movie", movie.playbackTitle)
+        assertEquals("movie-poster", movie.poster)
+
+        val episode = playbackShellSelection(
+            contentId = "tmdb:77",
+            contentType = "series",
+            playbackId = "tmdb:77:2:5",
+            playbackType = "series",
+            playbackTitle = "Episode Five",
+            seriesTitle = "Related Series",
+            currentTitle = "Previously Opened Series",
+            detailPoster = "",
+            currentPoster = "parent-poster"
+        )
+        assertEquals(PlaybackContentIdentity("tmdb:77", "series"), episode.content)
+        assertEquals("Related Series", episode.contentTitle)
+        assertEquals("Episode Five", episode.playbackTitle)
+        assertEquals("parent-poster", episode.poster)
+    }
+
+    @Test fun playbackShellPreservesTheSelectedSeriesIdWhenItEndsInNumericSegments() {
+        val selectedId = "addon:2:5"
+        val selection = playbackShellSelection(
+            contentId = selectedId,
+            contentType = "series",
+            playbackId = selectedId,
+            playbackType = "series",
+            playbackTitle = "Selected Series",
+            seriesTitle = "Selected Series",
+            currentTitle = "Stale Series"
+        )
+
+        assertEquals(PlaybackContentIdentity(selectedId, "series"), selection.content)
+        assertEquals("Selected Series", selection.contentTitle)
+    }
 }

@@ -2,6 +2,9 @@ package com.saab.tv.ui.details
 
 import android.app.Application
 import androidx.lifecycle.viewModelScope
+import com.saab.tv.data.repository.AddonRepository
+import com.saab.tv.data.repository.CanonicalMetadataRepository
+import com.saab.tv.data.stream.TorBoxAvailabilityService
 import com.saab.tv.data.model.*
 import com.saab.tv.data.model.stremio.*
 import com.saab.tv.testing.*
@@ -28,6 +31,65 @@ class DetailsOrchestrationP0Test {
         vm = f.details()
     }
     @After fun cleanup() { vm.viewModelScope.cancel(); f.close() }
+
+    @Test fun playbackEpisodeCoordinatesWorkAcrossSeriesAliasesAndFileSuffixes() {
+        assertEquals(2 to 5, playbackEpisodeCoordinates("tmdb:42:2:5"))
+        assertEquals(2 to 5, playbackEpisodeCoordinates("tt1234567:2:5:0"))
+        assertEquals(1 to 10, playbackEpisodeCoordinates("tt1234567:1:10"))
+        assertNull(playbackEpisodeCoordinates("tt1234567:0:5"))
+        assertNull(playbackEpisodeCoordinates("tt1234567:not-a-season:5"))
+        assertNull(playbackEpisodeCoordinates("tt1234567"))
+    }
+
+    @Test fun movieResumeReadsProgressStoredUnderVerifiedProviderAlias() = runBlocking {
+        val canonical = CanonicalMetadataRepository(f.app.db.canonicalMetadataDao())
+        val tmdb = requireNotNull(com.saab.tv.domain.schema.ContentIdentity.tmdb(
+            com.saab.tv.domain.schema.ContentKind.MOVIE, 42))
+        val imdb = requireNotNull(com.saab.tv.domain.schema.ContentIdentity.imdb(
+            com.saab.tv.domain.schema.ContentKind.MOVIE, "tt0000042"))
+        f.dao.insertHistory(WatchHistoryEntity(
+            profileId = 1, id = "tmdb:42", title = "Saved title", poster = null,
+            position = 240_000, duration = 1_000_000, lastWatched = 10, type = "movie", watched = false
+        ))
+        canonical.linkVerifiedIdentities(tmdb, imdb)
+        f.api.metadata["tt0000042"] = MetaItem("tt0000042", "movie", "Saved title")
+        vm = DetailsViewModel(
+            f.dao, f.sources, f.tracks,
+            AddonRepository(f.api, f.dao, TorBoxAvailabilityService(f.context), canonical, canonical, canonical),
+            f.subtitles, f.app.configuration, f.sorting, f.tmdb, f.tmdbMeta, f.traktSync,
+            f.cache, f.app.display, f.sync, f.userStateCommands
+        )
+
+        vm.loadDetails("movie", "tt0000042", playbackOnly = true)
+        awaitAppState { !vm.state.value.isLoading && vm.state.value.resumeStateReady }
+
+        assertEquals("tmdb:42", vm.state.value.resumePlaybackId)
+        assertFalse(vm.state.value.isMovieWatched)
+    }
+
+    @Test fun changingDetailsTitleCancelsThePreviousMovieStreamPrefetch() = runBlocking {
+        val oldId = "tt-prefetch-old"
+        val newId = "tt-prefetch-new"
+        val oldRequestStarted = CompletableDeferred<Unit>()
+        val oldRequestCancelled = CompletableDeferred<Unit>()
+        f.api.metadata[oldId] = MetaItem(oldId, "movie", "Old title")
+        f.api.metadata[newId] = MetaItem(newId, "movie", "New title")
+        f.api.streamHandlers["https://fixture.invalid/stream/movie/$oldId.json"] = {
+            oldRequestStarted.complete(Unit)
+            try {
+                awaitCancellation()
+            } finally {
+                oldRequestCancelled.complete(Unit)
+            }
+        }
+
+        vm.loadDetails("movie", oldId, playbackOnly = true)
+        awaitAppState { oldRequestStarted.isCompleted }
+
+        vm.loadDetails("movie", newId, playbackOnly = true)
+        awaitAppState { oldRequestCancelled.isCompleted }
+    }
+
     private fun load(type: String = "series", id: String = "tt1") {
         vm.loadDetails(type, id, playbackOnly = true)
         awaitAppState { !vm.state.value.isLoading && vm.state.value.resumeStateReady }
@@ -36,6 +98,29 @@ class DetailsOrchestrationP0Test {
         f.dao.insertHistory(WatchHistoryEntity(profileId = 1, id = id, title = "Episode", poster = null, type = "series",
             position = position, duration = 1_000_000, watched = watched, lastWatched = time))
     }
+    @Test fun detailsStatePublishesTypedTitleAndRetainsProviderEpisodeTrailerPayloadAtActionEdge() {
+        val id = "tt1234567"
+        val providerMeta = MetaItem(
+            id = id,
+            type = "movie",
+            name = "Typed Movie",
+            poster = "https://images.example/poster.jpg",
+            videos = listOf(MetaVideo(id = "bonus", title = "Bonus", season = 0, episode = 0)),
+            trailers = listOf(MetaTrailer(source = "youtube-key", type = "Trailer"))
+        )
+        f.api.metadata[id] = providerMeta
+
+        vm.loadDetails("movie", id, playbackOnly = true)
+        awaitAppState { !vm.state.value.isLoading && vm.state.value.resumeStateReady }
+
+        val content = requireNotNull(vm.state.value.contentProjection)
+        assertEquals("imdb/movie//tt1234567", content.identity.stableKey)
+        assertEquals("Typed Movie", content.title)
+        val actionMeta = requireNotNull(vm.state.value.meta)
+        assertEquals("youtube-key", actionMeta.trailers?.single()?.source)
+        assertEquals("bonus", actionMeta.videos?.single()?.id)
+    }
+
     @Test fun episodeSidebarUsesCanonicalNonContiguousEpisodes() {
         load(); vm.openEpisodes()
         val sidebar = vm.state.value.sidebarState as SidebarState.Episodes
@@ -51,9 +136,10 @@ class DetailsOrchestrationP0Test {
     }
     @Test fun malformedExactEpisodeTargetNeverFallsBackToEpisodeOne() {
         vm.loadStreams("series", "tt1:99:99", "Unavailable Episode", autoSelectSource = true)
-        awaitAppState { !vm.state.value.isLoadingStreams }
+        val exactRequest = "/stream/series/tt1:99:99.json"
+        awaitAppState { f.api.calls.any { it.contains(exactRequest) } && !vm.state.value.isLoadingStreams }
         assertNull(vm.state.value.autoPlayStream)
-        assertTrue(f.api.calls.any { it.contains("/stream/series/tt1:99:99.json") })
+        assertTrue(f.api.calls.any { it.contains(exactRequest) })
         assertFalse(f.api.calls.any { it.contains("/stream/series/tt1:1:1.json") })
     }
     @Test fun latestPlayedEpisodeWinsOverFurthestProgress() {
@@ -91,6 +177,52 @@ class DetailsOrchestrationP0Test {
         awaitAppState { vm.state.value.sidebarState is SidebarState.Sources && !vm.state.value.isLoadingStreams }
         assertNull(vm.state.value.autoPlayStream); assertTrue(vm.state.value.availableStreams.isEmpty())
     }
+    @Test fun sourcePickerEnablesPolicyApprovedFastResultBeforeSlowAddonFinishes() = runBlocking {
+        val fastUrl = "https://fast-addon.invalid"
+        val slowUrl = "https://slow-addon.invalid"
+        val slowGate = CompletableDeferred<Unit>()
+        f.dao.insertAddon(AddonEntity(fastUrl, "fast", "Fast", "1", null, null, supportsStream = true))
+        f.dao.insertAddon(AddonEntity(slowUrl, "slow", "Slow", "1", null, null, supportsStream = true))
+        f.api.streamHandlers["$fastUrl/stream/movie/tt-progress.json"] = {
+            StreamResponse(listOf(Stream(url = "https://media.invalid/fast.mkv", title = "1080p English")))
+        }
+        f.api.streamHandlers["$slowUrl/stream/movie/tt-progress.json"] = {
+            slowGate.await(); StreamResponse(emptyList())
+        }
+
+        vm.loadStreams("movie", "tt-progress", "Progressive", forceSourcePicker = true)
+        awaitAppState { vm.state.value.isLoadingStreams && vm.state.value.canSelectPartialSources }
+        assertEquals("https://media.invalid/fast.mkv", vm.state.value.availableStreams.single().url)
+        assertTrue("The slow provider must not keep an approved manual source behind a barrier",
+            vm.state.value.isLoadingStreams)
+
+        vm.closeSidebar()
+        slowGate.complete(Unit)
+        awaitAppState { vm.state.value.sidebarState is SidebarState.Closed }
+        assertFalse(vm.state.value.canSelectPartialSources)
+    }
+
+    @Test fun progressiveRowsAreFilteredByTheSameProfilePolicyAsFinalSources() = runBlocking {
+        val fastUrl = "https://fast-addon.invalid"
+        val slowUrl = "https://slow-addon.invalid"
+        val slowGate = CompletableDeferred<Unit>()
+        f.dao.updateProfile(f.dao.getProfileById(1)!!.copy(sourceExcludedFormats = "3d"))
+        f.dao.insertAddon(AddonEntity(fastUrl, "fast", "Fast", "1", null, null, supportsStream = true))
+        f.dao.insertAddon(AddonEntity(slowUrl, "slow", "Slow", "1", null, null, supportsStream = true))
+        f.api.streamHandlers["$fastUrl/stream/movie/tt-filtered.json"] = {
+            StreamResponse(listOf(Stream(url = "https://media.invalid/3d.mkv", title = "1080p 3D English")))
+        }
+        f.api.streamHandlers["$slowUrl/stream/movie/tt-filtered.json"] = {
+            slowGate.await(); StreamResponse(emptyList())
+        }
+
+        vm.loadStreams("movie", "tt-filtered", "Filtered", forceSourcePicker = true)
+        awaitAppState { vm.state.value.isLoadingStreams && vm.state.value.availableStreams.isEmpty() }
+        assertFalse("Excluded partial rows must not become actionable", vm.state.value.canSelectPartialSources)
+        vm.closeSidebar()
+        slowGate.complete(Unit)
+        Unit
+    }
     @Test fun pickerAndAutoplayUseSameDescendingScoreOrder() {
         f.api.streams["tt1"] = listOf(Stream(url = "https://fixture.invalid/720", title = "720p English", seeders = 200),
             Stream(url = "https://fixture.invalid/1080", title = "1080p English", seeders = 20))
@@ -107,21 +239,30 @@ class DetailsOrchestrationP0Test {
     }
     @Test fun markingMovieWatchedRemovesWatchlistAndCanBeUndone() = runBlocking {
         f.api.metadata["movie-id"] = MetaItem("movie-id", "movie", "Movie")
-        f.dao.addToWatchlist(WatchlistEntity(profileId = 1, id = "movie-id", type = "movie", title = "Movie", poster = null, addedAt = 1))
+        f.dao.addToWatchlist(WatchlistEntity(profileId = 1, id = "movie-id", type = "movie", title = "Movie", poster = null,
+            addedAt = 1, sourceAddonBaseUrl = "https://v3-cinemeta.strem.io"))
+        assertEquals(1, f.app.configuration.getLastActiveProfileId())
         vm.loadDetails("movie", "movie-id", playbackOnly = true)
         awaitAppState { !vm.state.value.isLoading }
+        assertEquals("movie", vm.state.value.meta?.type)
+        assertEquals("movie-id", vm.state.value.resolvedId)
+        assertFalse(vm.state.value.isMovieWatched)
+        assertTrue(f.dao.isInWatchlist(1, "movie-id"))
 
         vm.toggleMovieWatched()
         awaitAppState {
             vm.state.value.isMovieWatched && runBlocking {
-                f.dao.getHistoryItem("movie-id")?.watched == true && !f.dao.isInWatchlist(1, "movie-id")
+                f.dao.getHistoryItemForProfile(1, "movie-id")?.watched == true &&
+                    !f.dao.isInWatchlist(1, "movie-id")
             }
         }
-        assertTrue(vm.state.value.isMovieWatched)
 
         vm.toggleMovieWatched()
-        awaitAppState { !vm.state.value.isMovieWatched && runBlocking { f.dao.getHistoryItem("movie-id") == null } }
-        assertFalse(vm.state.value.isMovieWatched)
+        awaitAppState {
+            !vm.state.value.isMovieWatched && runBlocking {
+                f.dao.getHistoryItemForProfile(1, "movie-id")?.watched == false
+            }
+        }
     }
 
     @Test fun clearingMovieProgressAlsoClearsRememberedSourceAndTracks() = runBlocking {

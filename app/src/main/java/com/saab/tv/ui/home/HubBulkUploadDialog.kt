@@ -18,6 +18,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -26,6 +27,7 @@ import androidx.compose.ui.window.Dialog
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.saab.tv.data.model.HubRowItemEntity
+import com.saab.tv.R
 import com.saab.tv.domain.HubShape
 import com.saab.tv.remote_input.HubServerManager
 import com.saab.tv.ui.addons.VoidButton
@@ -47,7 +49,7 @@ fun HubBulkUploadDialog(
     onImageDeleted: ((String) -> Unit)? = null // callback(configUniqueId)
 ) {
     var serverUrl by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<Int?>(null) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val focusRequester = remember { FocusRequester() }
     com.saab.tv.remote_input.RemoteDialogLifecycle { HubServerManager.stopServer(); onDismiss() }
@@ -64,7 +66,7 @@ fun HubBulkUploadDialog(
             onImageDeleted = onImageDeleted
         )
         serverUrl = url
-        if (url == null) error = "Secure pairing unavailable. Check your internet connection and try again."
+        if (url == null) error = R.string.remote_paste_unavailable
         
         // Generate QR
         if (url != null) {
@@ -93,7 +95,7 @@ fun HubBulkUploadDialog(
             kotlinx.coroutines.delay(5 * 60_000L)
             HubServerManager.stopServer()
             qrBitmap = null
-            error = "Pairing expired. Close and reopen for a new QR code."
+            error = R.string.remote_paste_expired
         }
     }
 
@@ -123,13 +125,13 @@ fun HubBulkUploadDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Bulk Manage Images",
+                    text = stringResource(R.string.hub_bulk_manage_images),
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = Color.White
                 )
                 
                 Text(
-                    text = "Scan to open the web portal on your phone.",
+                    text = stringResource(R.string.hub_bulk_scan_description),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.Gray,
                     textAlign = TextAlign.Center,
@@ -150,7 +152,7 @@ fun HubBulkUploadDialog(
                     ) {
                         Image(
                             bitmap = currentQrBitmap.asImageBitmap(),
-                            contentDescription = "QR Code",
+                            contentDescription = stringResource(R.string.remote_paste_qr_code),
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -159,7 +161,7 @@ fun HubBulkUploadDialog(
                     
                     if (currentServerUrl != null) {
                         Text(
-                            "Private QR · expires in 5 minutes",
+                            stringResource(R.string.remote_paste_expiration),
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Gray
                         )
@@ -179,13 +181,13 @@ fun HubBulkUploadDialog(
                         modifier = Modifier.size(48.dp)
                     )
                     Spacer(Modifier.height(16.dp))
-                    Text(error ?: "Connecting securely…", color = Color.Gray)
+                    Text(stringResource(error ?: R.string.remote_paste_connecting), color = Color.Gray)
                 }
 
                 Spacer(modifier = Modifier.height(32.dp))
                 
                 Text(
-                    "Press Back to Finish",
+                    stringResource(R.string.hub_bulk_press_back_to_finish),
                     style = MaterialTheme.typography.labelMedium,
                     color = Color.White.copy(alpha = 0.3f)
                 )

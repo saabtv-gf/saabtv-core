@@ -6,6 +6,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.local.AddonDao
 import com.saab.tv.data.model.WatchHistoryEntity
+import com.saab.tv.domain.schema.addonInstallationKey
+import com.saab.tv.domain.schema.canonicalPresentationKey
+import com.saab.tv.domain.schema.metadataSource
+import com.saab.tv.domain.schema.MetadataSource
 import com.saab.tv.data.model.WatchlistEntity
 import com.saab.tv.data.model.SeriesNextUpEntity
 import com.saab.tv.data.cache.SeekThumbnailCache
@@ -22,7 +26,6 @@ import com.saab.tv.data.tmdb.TmdbService
 import com.saab.tv.data.tmdb.mixTmdbMediaTypes
 import com.saab.tv.domain.HomeRow
 import com.saab.tv.domain.HubGroupRow
-import com.saab.tv.ui.utils.ImagePrefetcher
 import com.saab.tv.ui.components.mergeProfileWatchedIds
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
@@ -36,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -45,30 +49,46 @@ import java.util.concurrent.ConcurrentHashMap
 
 import com.saab.tv.domain.HomeRowItem
 import com.saab.tv.domain.CategoryRow
+import com.saab.tv.domain.schema.CatalogCardProjection
+import com.saab.tv.domain.schema.ContentKind
+import com.saab.tv.domain.schema.TitleCardProjection
 import com.saab.tv.data.model.stremio.MetaItem
 import com.saab.tv.domain.DashboardTab
 import com.saab.tv.domain.heroFor
+import com.saab.tv.domain.TmdbHomeRails
 
 internal fun preferExistingArtwork(existing: String?, enriched: String?): String? =
     existing?.takeIf(String::isNotBlank) ?: enriched?.takeIf(String::isNotBlank)
 
+internal fun needsTmdbEnrichment(item: MetaItem, includeLogo: Boolean): Boolean =
+    item.name.isBlank() || (if (includeLogo) {
+        item.background.isNullOrBlank() || item.logo.isNullOrBlank()
+    } else {
+        item.poster.isNullOrBlank()
+    })
+
+internal fun initialDashboardBatchSizeFor(screenName: String, defaultSize: Int): Int =
+    if (screenName == "movies" || screenName == "series") minOf(defaultSize, 3) else defaultSize
+
+private fun preferExistingText(existing: String?, enriched: String?): String? =
+    existing?.takeIf(String::isNotBlank) ?: enriched?.takeIf(String::isNotBlank)
+
+private fun preferExistingGenres(existing: List<String>?, enriched: List<String>?): List<String>? =
+    existing?.takeIf(List<String>::isNotEmpty) ?: enriched?.takeIf(List<String>::isNotEmpty)
+
 internal fun personalizedRailOrder(offset: Int): Int = Int.MAX_VALUE / 2 + offset
 
 internal fun rankWatchHistorySuggestions(
-    recommendationsByHistory: List<List<com.saab.tv.data.tmdb.TmdbMetaPreview>>,
+    recommendationsByHistory: List<List<TitleCardProjection>>,
     limit: Int = 30
-): List<com.saab.tv.data.tmdb.TmdbMetaPreview> {
-    data class Candidate(val item: com.saab.tv.data.tmdb.TmdbMetaPreview, var matchScore: Double)
+): List<TitleCardProjection> {
+    data class Candidate(val item: TitleCardProjection, var matchScore: Double)
 
-    val candidates = linkedMapOf<Pair<String, Int>, Candidate>()
+    val candidates = linkedMapOf<String, Candidate>()
     recommendationsByHistory.forEachIndexed { historyIndex, recommendations ->
         val historyWeight = 1.0 / (historyIndex + 1)
         recommendations.forEachIndexed { recommendationIndex, item ->
-            val type = if (item.type == "tv") "series" else item.type
-            val key = type to item.tmdbId
-            val candidate = candidates.getOrPut(key) {
-                Candidate(if (item.type == type) item else item.copy(type = type), 0.0)
-            }
+            val candidate = candidates.getOrPut(item.presentationKey) { Candidate(item, 0.0) }
             candidate.matchScore += historyWeight / (recommendationIndex + 1)
         }
     }
@@ -76,12 +96,59 @@ internal fun rankWatchHistorySuggestions(
     return candidates.values
         .sortedWith(
             compareByDescending<Candidate> { it.matchScore }
-                .thenByDescending { it.item.popularity ?: 0.0 }
-                .thenByDescending { it.item.rating ?: 0.0 }
+                .thenByDescending { it.item.rating?.value ?: 0.0 }
+                .thenBy { it.item.presentationKey }
         )
         .take(limit.coerceAtLeast(0))
         .map { it.item }
 }
+
+/**
+ * Keeps direct watch-history matches in reciprocal-rank order and appends a small,
+ * taste-filtered cross-type tail when the history recommendations contain only one
+ * media kind. Generic discovery results must never create a Top Suggestions rail by
+ * themselves, and a cross-type result must not jump ahead of a direct history match.
+ */
+internal fun composeTopSuggestions(
+    recommendationsByHistory: List<List<TitleCardProjection>>,
+    crossTypeCandidates: List<TitleCardProjection>,
+    excludedPresentationKeys: Set<String> = emptySet(),
+    limit: Int = 30
+): List<TitleCardProjection> {
+    val safeLimit = limit.coerceAtLeast(0)
+    if (safeLimit == 0) return emptyList()
+
+    val rankedMatches = rankWatchHistorySuggestions(
+        recommendationsByHistory = recommendationsByHistory,
+        limit = Int.MAX_VALUE
+    ).filterNot { it.presentationKey in excludedPresentationKeys }
+    if (rankedMatches.isEmpty()) return emptyList()
+
+    val historyKinds = rankedMatches.mapTo(mutableSetOf()) { it.kind }
+    if (historyKinds.size != 1) return rankedMatches.take(safeLimit)
+
+    val missingKind = when (historyKinds.single()) {
+        ContentKind.MOVIE -> ContentKind.SERIES
+        ContentKind.SERIES -> ContentKind.MOVIE
+        else -> return rankedMatches.take(safeLimit)
+    }
+    val matchedKeys = rankedMatches.mapTo(mutableSetOf()) { it.presentationKey }
+    val crossTypeTail = crossTypeCandidates.asSequence()
+        .filter { it.kind == missingKind }
+        .filterNot { it.presentationKey in excludedPresentationKeys || it.presentationKey in matchedKeys }
+        .distinctBy { it.presentationKey }
+        .toList()
+    if (crossTypeTail.isEmpty()) return rankedMatches.take(safeLimit)
+
+    val directSuggestions = rankedMatches.take(safeLimit)
+    val remainingCapacity = safeLimit - directSuggestions.size
+    if (remainingCapacity <= 0) return directSuggestions
+
+    val tailLimit = minOf(crossTypeTail.size, MAX_TOP_SUGGESTION_CROSS_TYPE_TAIL, remainingCapacity)
+    return directSuggestions + crossTypeTail.take(tailLimit)
+}
+
+private const val MAX_TOP_SUGGESTION_CROSS_TYPE_TAIL = 5
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -95,7 +162,8 @@ class HomeViewModel @Inject constructor(
     private val accountSync: AccountSyncManager,
     private val sourceSelectionStore: SourceSelectionStore,
     private val playbackTrackSelectionStore: PlaybackTrackSelectionStore,
-    private val traktSyncManager: TraktSyncManager
+    private val traktSyncManager: TraktSyncManager,
+    private val userStateCommands: com.saab.tv.data.account.UserStateCommandRepository
 ) : ViewModel() {
 
     private val optimisticWatchedIds = MutableStateFlow<Map<Int, Set<String>>>(emptyMap())
@@ -107,7 +175,7 @@ class HomeViewModel @Inject constructor(
         tmdbProfileCache = profile
     }
     fun watchedIdsForProfile(profileId: Int): kotlinx.coroutines.flow.Flow<Set<String>> = combine(
-        dao.getWatchedIdsForProfile(profileId), optimisticWatchedIds
+        dao.getWatchedBadgeKeysForProfile(profileId), optimisticWatchedIds
     ) { persisted, optimistic -> mergeProfileWatchedIds(profileId, persisted, optimistic) }
         .distinctUntilChanged()
 
@@ -136,7 +204,9 @@ class HomeViewModel @Inject constructor(
         val streamId = if (item.type == "series") {
             val meta = repository.prefetchTrailerMetadata("series", resolvedId, item.addonBaseUrl) ?: return
             val episodes = com.saab.tv.domain.normalizeEpisodeList(meta.videos.orEmpty())
-            val history = accountSync.freshestPlaybackHistory(dao.getSeriesEpisodeHistory("${meta.id}:%"), profileId)
+            val history = accountSync.freshestPlaybackHistory(
+                dao.getSeriesEpisodeHistoryForProfile(profileId, "${meta.id}:%"), profileId
+            )
                 .filter { it.id.startsWith("${meta.id}:") }
             val latest = history.maxByOrNull { it.lastWatched }
             fun watched(episode: com.saab.tv.data.model.stremio.MetaVideo) = history.any {
@@ -155,11 +225,13 @@ class HomeViewModel @Inject constructor(
         if (item.type != "series") repository.prefetchTrailerMetadata(item.type, resolvedId, item.addonBaseUrl)
     }
 
-    fun toggleWatchlist(profileId: Int, item: MetaItem) {
+    fun toggleWatchlist(
+        profileId: Int,
+        item: MetaItem,
+        onLocalMutationCommitted: () -> Unit = {}
+    ): Job =
         viewModelScope.launch(Dispatchers.IO) {
-            if (dao.isInWatchlist(profileId, item.id)) dao.removeFromWatchlist(profileId, item.id)
-            else dao.addToWatchlist(
-                WatchlistEntity(
+            val entry = WatchlistEntity(
                     profileId = profileId,
                     id = item.id,
                     type = item.type,
@@ -167,12 +239,13 @@ class HomeViewModel @Inject constructor(
                     poster = item.poster,
                     addedAt = System.currentTimeMillis(),
                     background = item.background,
-                    logo = item.logo
+                    logo = item.logo,
+                    sourceAddonBaseUrl = item.addonBaseUrl
                 )
-            )
+            userStateCommands.toggleLibrary(profileId, entry, item.addonBaseUrl?.let(::addonInstallationKey))
+            runCatching(onLocalMutationCommitted)
             accountSync.historyChanged(urgent = true)
         }
-    }
 
     suspend fun isTitleWatched(profileId: Int, item: MetaItem): Boolean {
         if (item.id in optimisticWatchedIds.value[profileId].orEmpty()) return true
@@ -182,22 +255,28 @@ class HomeViewModel @Inject constructor(
             .any { it.seriesId == id && it.isComplete }
     }
 
-    fun markTitleWatched(profileId: Int, item: MetaItem) {
+    fun markTitleWatched(
+        profileId: Int,
+        item: MetaItem,
+        onLocalMutationCommitted: () -> Unit = {}
+    ): Job {
         // Emit the card ID before the database write/resolution begins so every
         // visible card can draw its watched badge without waiting for disk/network IO.
         optimisticWatchedIds.update { current ->
             current + (profileId to (current[profileId].orEmpty() + item.id))
         }
-        viewModelScope.launch(Dispatchers.IO) {
+        return viewModelScope.launch(Dispatchers.IO) {
             val id = resolveTitleId(item) ?: item.id
-            if (dao.getHistoryItemForProfile(profileId, id)?.watched == true) return@launch
+            if (dao.getHistoryItemForProfile(profileId, id)?.watched == true) {
+                runCatching(onLocalMutationCommitted)
+                return@launch
+            }
             val now = System.currentTimeMillis()
             if (item.isSeriesTitle()) {
                 val meta = if (item.id == id) item else repository.resolveMetaDetails("series", id, item.addonBaseUrl)
                 val episodes = com.saab.tv.domain.normalizeEpisodeList(meta?.videos.orEmpty())
                 val prior = dao.getSeriesEpisodeHistoryForProfile(profileId, "$id:%")
-                if (episodes.isNotEmpty()) {
-                    val watchedEntries = episodes.map { episode ->
+                val watchedEntries = episodes.map { episode ->
                         val previous = prior.firstOrNull {
                             com.saab.tv.domain.episodeMatchesPlaybackId(id, it.id, episode)
                         }
@@ -213,34 +292,37 @@ class HomeViewModel @Inject constructor(
                                 type = "series",
                                 watched = true
                             )
-                    }
-                    dao.insertHistoryItems(watchedEntries)
                 }
-                dao.insertHistory(
-                    WatchHistoryEntity(profileId, id, item.name, item.poster, item.background, item.logo,
-                        0L, 0L, now, "series", watched = true)
-                )
-                dao.insertSeriesNextUp(
-                    SeriesNextUpEntity(profileId, id, item.name, item.poster, 0, 0, null,
-                        isComplete = true, updatedAt = now)
-                )
+                val aggregate = WatchHistoryEntity(profileId, id, item.name, item.poster, item.background, item.logo,
+                    0L, 0L, now, "series", watched = true)
+                val nextUp = SeriesNextUpEntity(profileId, id, item.name, item.poster, 0, 0, null,
+                    isComplete = true, updatedAt = now)
+                val completeHistory = watchedEntries + aggregate
+                userStateCommands.markWatched(profileId, id, "series", completeHistory, nextUp,
+                    setOf(id, item.id), item.addonBaseUrl?.let(::addonInstallationKey))
                 seekThumbnailCache.clearContentPrefix(profileId, id)
             } else {
                 val previous = dao.getHistoryItemForProfile(profileId, id)
-                dao.insertHistory(previous?.copy(watched = true, lastWatched = now) ?: WatchHistoryEntity(
+                val entry = previous?.copy(watched = true, lastWatched = now) ?: WatchHistoryEntity(
                     profileId = profileId, id = id, title = item.name, poster = item.poster,
                     background = item.background, logo = item.logo, position = 0L, duration = 0L,
                     lastWatched = now, type = "movie", watched = true
-                ))
+                )
+                userStateCommands.markWatched(profileId, id, "movie", listOf(entry),
+                    libraryAliases = setOf(id, item.id),
+                    addonInstallationId = item.addonBaseUrl?.let(::addonInstallationKey))
                 seekThumbnailCache.clearContent(profileId, id)
             }
-            dao.removeFromWatchlist(profileId, id)
-            if (id != item.id) dao.removeFromWatchlist(profileId, item.id)
+            runCatching(onLocalMutationCommitted)
             accountSync.historyChanged(urgent = true)
         }
     }
 
-    fun unmarkTitleWatched(profileId: Int, item: MetaItem) {
+    fun unmarkTitleWatched(
+        profileId: Int,
+        item: MetaItem,
+        onLocalMutationCommitted: () -> Unit = {}
+    ): Job =
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val id = if (item.id.startsWith("tmdb:", ignoreCase = true)) {
@@ -257,19 +339,16 @@ class HomeViewModel @Inject constructor(
                     listOfNotNull(dao.getHistoryItemForProfile(profileId, id)?.takeIf { it.watched })
                 }
 
-                if (item.isSeriesTitle()) {
-                    dao.insertHistoryItems(watchedItems.map { it.copy(watched = false, lastWatched = now) })
-                    dao.getHistoryItemForProfile(profileId, id)?.takeIf { it.watched }?.let {
-                        dao.insertHistory(it.copy(watched = false, lastWatched = now))
-                    }
-                    dao.getSeriesNextUpForProfile(profileId).firstOrNull { it.seriesId == id }?.let {
-                        dao.insertSeriesNextUp(it.copy(isComplete = false, updatedAt = now))
-                    }
-                } else {
-                    watchedItems.firstOrNull()?.let {
-                        dao.insertHistory(it.copy(watched = false, lastWatched = now))
-                    }
-                }
+                val changedHistory = buildList {
+                    addAll(watchedItems.map { it.copy(watched = false, lastWatched = now) })
+                    dao.getHistoryItemForProfile(profileId, id)?.takeIf { it.watched }
+                        ?.let { add(it.copy(watched = false, lastWatched = now)) }
+                }.distinctBy { it.id }
+                val changedNextUp = if (item.isSeriesTitle()) {
+                    dao.getSeriesNextUpForProfile(profileId).firstOrNull { it.seriesId == id }
+                        ?.copy(isComplete = false, updatedAt = now)
+                } else null
+                userStateCommands.unmarkWatched(profileId, id, item.type, changedHistory, changedNextUp)
 
                 // Keep the local unwatch authoritative even if Trakt is offline.
                 watchedItems.filter { it.scrobbled }.forEach { entry ->
@@ -293,6 +372,7 @@ class HomeViewModel @Inject constructor(
                 optimisticWatchedIds.update { current ->
                     current + (profileId to (current[profileId].orEmpty() - id - item.id))
                 }
+                runCatching(onLocalMutationCommitted)
                 accountSync.historyChanged(urgent = true)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -300,13 +380,12 @@ class HomeViewModel @Inject constructor(
                 Log.w("HomeViewModel", "Could not unmark ${item.id}: ${failure.message}")
             }
         }
-    }
 
     /** Resolve watched aliases for visible TMDB recommendations so badges match IMDb-keyed history. */
     fun ensureWatchedAlias(profileId: Int, item: MetaItem) {
         if (!item.id.startsWith("tmdb:", ignoreCase = true)) return
         if (item.id in optimisticWatchedIds.value[profileId].orEmpty()) return
-        val key = "$profileId:${item.type}:${item.id}"
+        val key = "$profileId:${item.canonicalPresentationKey()}"
         if (!watchedAliasChecks.add(key)) return
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -343,19 +422,21 @@ class HomeViewModel @Inject constructor(
     private fun MetaItem.isSeriesTitle(): Boolean =
         type.equals("series", ignoreCase = true) || type.equals("tv", ignoreCase = true)
 
-    fun clearContinueProgress(profileId: Int, item: MetaItem) {
+    fun clearContinueProgress(
+        profileId: Int,
+        item: MetaItem,
+        onLocalMutationCommitted: () -> Unit = {}
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val existing = if (item.type == "series") dao.getSeriesEpisodeHistory("${item.id}:%")
+            val existing = if (item.type == "series") dao.getSeriesEpisodeHistoryForProfile(profileId, "${item.id}:%")
                 else listOfNotNull(dao.getHistoryItemForProfile(profileId, item.id))
+            userStateCommands.clearTitleProgress(profileId, item.id, item.type, existing)
+            runCatching(onLocalMutationCommitted)
             if (item.type == "series") {
-                dao.deleteSeriesHistory("${item.id}:%")
-                dao.deleteHistoryItem(item.id)
-                dao.deleteSeriesNextUp(item.id)
                 sourceSelectionStore.clearSelectionsForPrefix(item.id)
                 playbackTrackSelectionStore.clearSelectionsForPrefix(item.id)
                 seekThumbnailCache.clearContentPrefix(profileId, item.id)
             } else {
-                dao.deleteHistoryItem(item.id)
                 sourceSelectionStore.clearSelection(item.id)
                 playbackTrackSelectionStore.clearSelection(item.id)
                 seekThumbnailCache.clearContent(profileId, item.id)
@@ -398,17 +479,39 @@ class HomeViewModel @Inject constructor(
     }
 
     private var loadJob: Job? = null
+    @Volatile
     private var screenGeneration = 0L
+    private val tmdbEnrichmentLock = Any()
+    private val tmdbEnrichmentJobs = mutableMapOf<String, Job>()
     private val loadMoreJobs = mutableMapOf<String, Job>()
+    private data class TmdbRailPageSource(
+        val language: String,
+        val discoverQueries: List<TmdbNaturalQuery> = emptyList(),
+        val recommendationSeeds: List<Pair<String, String>> = emptyList()
+    )
+    private data class TmdbRailPagination(
+        val source: TmdbRailPageSource,
+        var page: Int,
+        var hasMore: Boolean
+    )
+    private val tmdbRailPagination = mutableMapOf<String, TmdbRailPagination>()
     private var lastFocusedKeyMemory: String? = null
     private val rowScrollPositionsMemory = mutableMapOf<String, Pair<Int, Int>>()
     private var verticalScrollPositionMemory: Pair<Int, Int> = Pair(0, 0)
     private var hadHistoryWhenPositionSaved: Boolean = false
     private var isRestoringPosition: Boolean = false
 
+    private fun advanceScreenGeneration(): Long = synchronized(tmdbEnrichmentLock) {
+        screenGeneration += 1
+        tmdbEnrichmentJobs.values.forEach { it.cancel() }
+        tmdbEnrichmentJobs.clear()
+        screenGeneration
+    }
+
     data class HomeState(
         val mixedRows: List<HomeRowItem> = emptyList(),
-        val rows: List<HomeRow> = emptyList(),
+        /** Canonicalized UI rows; provider page DTOs remain behind the repository adapter. */
+        val rows: List<CategoryRow> = emptyList(),
         val hubRows: List<HubGroupRow> = emptyList(),
         val personalizedRows: List<CategoryRow> = emptyList(),
         val history: List<WatchHistoryEntity> = emptyList(),
@@ -420,13 +523,20 @@ class HomeViewModel @Inject constructor(
         val rowScrollPositions: Map<String, Pair<Int, Int>> = emptyMap(),
         // Vertical list scroll position: Pair(firstVisibleItemIndex, firstVisibleItemScrollOffset)
         val verticalScrollPosition: Pair<Int, Int> = Pair(0, 0),
-        val heroRow: HomeRow? = null,
+        /** Typed card state for the configured hero row; provider HomeRow stays at the repository edge. */
+        val heroRow: CategoryRow? = null,
         val loadedProfileId: Int? = null,
         val watchedIds: Set<String> = emptySet(), // IMDb IDs of watched items (movies + series)
         val enrichedMeta: Map<String, MetaItem> = emptyMap(),
         val tmdbEnabled: Boolean = false,
         val tmdbEnrichedIds: Set<String> = emptySet(),
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        val loadableRowIds: Set<String> = emptySet(),
+        val loadingRowIds: Set<String> = emptySet(),
+        val loadMoreErrorRowIds: Set<String> = emptySet(),
+        val exhaustedRowIds: Set<String> = emptySet(),
+        val loadingHubIds: Set<String> = emptySet(),
+        val hubErrorIds: Set<String> = emptySet()
     )
 
     private val _state = MutableStateFlow(HomeState())
@@ -461,6 +571,7 @@ class HomeViewModel @Inject constructor(
     private val loadingMoreRows = mutableSetOf<String>()
     private val metadataFallbackCache = mutableMapOf<String, MetadataFallback?>()
     private val metadataRequestsInFlight = mutableSetOf<String>()
+    private val tmdbAfterMetadataResolution = mutableMapOf<String, Pair<MetaItem, Long>>()
     private val hubInitialLoadCount = 100
     private val initialDashboardBatchSize = 6
     private val initialDashboardTimeoutMs = 2_500L
@@ -471,8 +582,10 @@ class HomeViewModel @Inject constructor(
     }
     private val pendingRowItems = mutableMapOf<String, MutableList<MetaItem>>()
     private val allFetchedRowIds = mutableMapOf<String, MutableSet<String>>()
+    private val catalogNextSkip = mutableMapOf<String, Int>()
 
     private data class MetadataFallback(
+        val name: String?,
         val poster: String?,
         val background: String?,
         val logo: String?,
@@ -480,7 +593,9 @@ class HomeViewModel @Inject constructor(
         val releaseInfo: String?,
         val imdbRating: String?,
         val runtime: String?,
-        val genres: List<String>?
+        val genres: List<String>?,
+        val source: MetadataSource,
+        val sourceBaseUrl: String?
     )
 
     /**
@@ -493,9 +608,23 @@ class HomeViewModel @Inject constructor(
         if (configId in loadingMoreRows) return // Already loading
 
         // Find the row in the current state
-        val currentRows = _state.value.rows
-        val row = currentRows.find { it.configId == configId } ?: return
-        if (row.catalogUrl.isEmpty() || !row.supportsSkip) return
+        val currentState = _state.value
+        val currentRows = currentState.rows + currentState.personalizedRows
+        val row = currentRows.find { it.id == configId } ?: return
+        if (configId in currentState.exhaustedRowIds) return
+        if (row.catalogUrl.isEmpty()) {
+            val paging = tmdbRailPagination[configId] ?: return
+            if (!paging.hasMore) {
+                _state.update { it.copy(loadableRowIds = it.loadableRowIds - configId, exhaustedRowIds = it.exhaustedRowIds + configId) }
+                return
+            }
+            loadMoreTmdbItems(row, paging)
+            return
+        }
+        if (!row.supportsSkip) {
+            _state.update { it.copy(loadableRowIds = it.loadableRowIds - configId, exhaustedRowIds = it.exhaustedRowIds + configId) }
+            return
+        }
 
         // First: reveal items from the pending buffer (no API call needed)
         val pending = pendingRowItems[configId]
@@ -508,6 +637,12 @@ class HomeViewModel @Inject constructor(
 
         // Pending buffer empty — fetch next page from API
         loadingMoreRows.add(configId)
+        _state.update {
+            it.copy(
+                loadingRowIds = it.loadingRowIds + configId,
+                loadMoreErrorRowIds = it.loadMoreErrorRowIds - configId
+            )
+        }
         val generation = screenGeneration
 
         loadMoreJobs[configId]?.cancel()
@@ -515,20 +650,38 @@ class HomeViewModel @Inject constructor(
             try {
                 // Initialize dedup set from current row items if not yet tracked
                 val fetchedIds = allFetchedRowIds.getOrPut(configId) {
-                    row.items.map { "${it.type}:${it.id}" }.toMutableSet()
+                    row.items.map { it.presentationKey }.toMutableSet()
                 }
 
-                // Skip = total fetched count for this row
-                val nextSkip = fetchedIds.size
-                val newItems = repository.fetchNextCatalogPage(row.catalogUrl, nextSkip)
-                if (generation != screenGeneration) return@launch
-                val latestRow = _state.value.rows.find { it.configId == configId }
-                if (latestRow?.catalogUrl != row.catalogUrl) return@launch
-
-                // Deduplicate against all previously fetched items
-                val newUniqueItems = newItems.filter { item ->
-                    fetchedIds.add("${item.type}:${item.id}")
-                }
+                var nextSkip = catalogNextSkip.getOrPut(configId) { row.items.size }
+                var page: AddonRepository.CatalogPageResult
+                var newUniqueItems = emptyList<MetaItem>()
+                var attempts = 0
+                do {
+                    page = repository.fetchNextCatalogPageWithStatus(row.catalogUrl, nextSkip)
+                    if (generation != screenGeneration) return@launch
+                    val latestRow = _state.value.rows.find { it.id == configId }
+                    if (latestRow?.catalogUrl != row.catalogUrl) return@launch
+                    if (page.failed) {
+                        _state.update { it.copy(loadMoreErrorRowIds = it.loadMoreErrorRowIds + configId) }
+                        return@launch
+                    }
+                    if (page.items.isEmpty()) {
+                        _state.update {
+                            it.copy(
+                                loadableRowIds = it.loadableRowIds - configId,
+                                exhaustedRowIds = it.exhaustedRowIds + configId
+                            )
+                        }
+                        return@launch
+                    }
+                    nextSkip += page.items.size
+                    catalogNextSkip[configId] = nextSkip
+                    newUniqueItems = page.items.filter { item ->
+                        fetchedIds.add(item.canonicalPresentationKey())
+                    }
+                    attempts++
+                } while (newUniqueItems.isEmpty() && attempts < 3)
 
                 if (newUniqueItems.isNotEmpty()) {
                     // Show first batch immediately, buffer the rest
@@ -538,36 +691,135 @@ class HomeViewModel @Inject constructor(
                             .addAll(newUniqueItems.drop(ROW_BATCH_SIZE))
                     }
                     appendItemsToRow(configId, batch)
+                } else {
+                    // Keep an explicit Load More action available if a provider returns
+                    // repeated aliases; the next click advances from the raw page offset.
+                    _state.update { it.copy(loadMoreErrorRowIds = it.loadMoreErrorRowIds - configId) }
                 }
+                _state.update { it.copy(loadMoreErrorRowIds = it.loadMoreErrorRowIds - configId) }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                // Silently fail - user can try scrolling again
+                _state.update { it.copy(loadMoreErrorRowIds = it.loadMoreErrorRowIds + configId) }
             } finally {
                 if (generation == screenGeneration) {
                     loadingMoreRows.remove(configId)
                     loadMoreJobs.remove(configId)
+                    _state.update { it.copy(loadingRowIds = it.loadingRowIds - configId) }
                 }
             }
         }
     }
 
+    private fun loadMoreTmdbItems(row: CategoryRow, paging: TmdbRailPagination) {
+        if (!paging.hasMore) return
+        loadingMoreRows.add(row.id)
+        _state.update {
+            it.copy(
+                loadingRowIds = it.loadingRowIds + row.id,
+                loadMoreErrorRowIds = it.loadMoreErrorRowIds - row.id
+            )
+        }
+        val generation = screenGeneration
+        loadMoreJobs[row.id]?.cancel()
+        loadMoreJobs[row.id] = viewModelScope.launch {
+            try {
+                val current = _state.value
+                val latestRow = (current.rows + current.personalizedRows).firstOrNull { it.id == row.id }
+                if (latestRow == null || latestRow.title != row.title) return@launch
+                val knownKeys = (current.rows + current.personalizedRows)
+                    .flatMap { it.items }
+                    .asSequence()
+                    .map { it.presentationKey }
+                    .toHashSet()
+                var nextPage: com.saab.tv.data.tmdb.TmdbDiscoveryPage
+                var additions = emptyList<MetaItem>()
+                var attempts = 0
+                do {
+                    nextPage = loadTmdbRailPage(paging.source, paging.page + 1)
+                    if (generation != screenGeneration) return@launch
+                    additions = nextPage.items.mapNotNull { projection ->
+                        projection.asMetaItem().takeIf { it.canonicalPresentationKey() !in knownKeys }
+                            ?.also { knownKeys += it.canonicalPresentationKey() }
+                    }
+                    paging.page = nextPage.page
+                    paging.hasMore = nextPage.hasMore
+                    attempts++
+                    // TMDB can return a page made entirely of items already visible in other rails.
+                    // Skip a few such pages in one request so the grid doesn't stall at the same end.
+                } while (additions.isEmpty() && paging.hasMore && attempts < 3)
+
+                if (additions.isNotEmpty()) appendItemsToRow(row.id, additions)
+                _state.update { current ->
+                    current.copy(
+                        loadableRowIds = if (paging.hasMore) current.loadableRowIds + row.id else current.loadableRowIds - row.id,
+                        exhaustedRowIds = if (paging.hasMore) current.exhaustedRowIds - row.id else current.exhaustedRowIds + row.id,
+                        loadMoreErrorRowIds = current.loadMoreErrorRowIds - row.id
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Log.w("HomeViewModel", "TMDB rail page failed for ${row.id}: ${failure.message}")
+                _state.update { it.copy(loadMoreErrorRowIds = it.loadMoreErrorRowIds + row.id) }
+            } finally {
+                if (generation == screenGeneration) {
+                    loadingMoreRows.remove(row.id)
+                    loadMoreJobs.remove(row.id)
+                    _state.update { it.copy(loadingRowIds = it.loadingRowIds - row.id) }
+                }
+            }
+        }
+    }
+
+    private suspend fun loadTmdbRailPage(source: TmdbRailPageSource, page: Int): com.saab.tv.data.tmdb.TmdbDiscoveryPage =
+        kotlinx.coroutines.coroutineScope {
+            val recommendationPages = source.recommendationSeeds.map { (id, type) ->
+                async(Dispatchers.IO) {
+                    tmdbMetadataService.fetchRecommendationsPage(id, type, source.language, page, maxItems = 30)
+                }
+            }.awaitAll()
+            val discoverPages = source.discoverQueries.map { query ->
+                async(Dispatchers.IO) {
+                    tmdbMetadataService.discoverByIntentPage(query, source.language, page, maxItems = 30)
+                }
+            }.awaitAll()
+            val recommendationItems = recommendationPages.map { it.items }
+            val discoveryItems = discoverPages.flatMap { it.items }
+            val candidates = if (source.recommendationSeeds.isNotEmpty()) {
+                composeTopSuggestions(recommendationItems, discoveryItems)
+            } else {
+                mixTmdbMediaTypes(discoveryItems, 30)
+            }
+            com.saab.tv.data.tmdb.TmdbDiscoveryPage(
+                items = candidates.distinctBy { it.presentationKey }.take(30),
+                page = page,
+                hasMore = recommendationPages.any { it.hasMore } || discoverPages.any { it.hasMore }
+            )
+        }
+
     private fun appendItemsToRow(configId: String, newItems: List<MetaItem>) {
         _state.update { current ->
             val updatedRows = current.rows.map { r ->
-                if (r.configId == configId) r.copy(items = r.items + newItems)
+                if (r.id == configId) r.copy(items = r.items + newItems.map(CatalogCardProjection::from))
+                else r
+            }
+            val updatedPersonalizedRows = current.personalizedRows.map { r ->
+                if (r.id == configId) r.copy(items = r.items + newItems.map(CatalogCardProjection::from))
                 else r
             }
 
             val updatedMixed = current.mixedRows.map { item ->
                 if (item is CategoryRow && item.id == configId) {
-                    val updatedRow = updatedRows.find { it.configId == configId }
-                    if (updatedRow != null) CategoryRow.fromHomeRow(updatedRow) else item
+                    updatedRows.find { it.id == configId }
+                        ?: updatedPersonalizedRows.find { it.id == configId }
+                        ?: item
                 } else item
             }
 
             current.copy(
                 rows = updatedRows,
+                personalizedRows = updatedPersonalizedRows,
                 mixedRows = updatedMixed
             )
         }
@@ -578,35 +830,25 @@ class HomeViewModel @Inject constructor(
      * Call this after making changes in the Dashboard Editor.
      */
     fun invalidate() {
-        screenGeneration++
+        advanceScreenGeneration()
         loadMoreJobs.values.forEach { it.cancel() }
         loadMoreJobs.clear()
         loadingMoreRows.clear()
         pendingRowItems.clear()
         allFetchedRowIds.clear()
+        catalogNextSkip.clear()
         _state.value = _state.value.copy(
             loadedScreen = null,
-            loadedProfileId = null
+            loadedProfileId = null,
+            loadableRowIds = emptySet(),
+            loadingRowIds = emptySet(),
+            loadMoreErrorRowIds = emptySet(),
+            exhaustedRowIds = emptySet(),
+            loadingHubIds = emptySet(),
+            hubErrorIds = emptySet()
         )
     }
     
-    /**
-     * Prefetch first visible images from loaded rows.
-     * Called after data loads to ensure images are in cache before scroll starts.
-     */
-    private fun prefetchFirstVisibleImages(rows: List<HomeRow>) {
-        // Warm only the nearest two rows; a 30-poster startup burst competes with
-        // TMDB, video buffers, and the thumbnail worker for memory and bandwidth.
-        val imagesToPrefetch = rows
-            .take(2)
-            .flatMap { row -> row.items.take(6) }
-            .mapNotNull { it.poster }
-        
-        imagesToPrefetch.forEach { url ->
-            ImagePrefetcher.prefetch(context, url)
-        }
-    }
-
     /**
      * Prefetch a small set of likely-visible metadata so cinematic/hero surfaces render smoothly.
      * Keep this intentionally tiny to avoid unnecessary metadata requests.
@@ -617,7 +859,7 @@ class HomeViewModel @Inject constructor(
             addAll(rows.getOrNull(0)?.items?.take(3) ?: emptyList())
             addAll(rows.getOrNull(1)?.items?.take(2) ?: emptyList())
         }
-            .distinctBy { "${it.type}:${it.id}" }
+            .distinctBy { it.canonicalPresentationKey() }
             .take(6)
 
         candidates.forEach { ensureMetadataFallback(it) }
@@ -627,7 +869,9 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun needsMetadataFallback(item: MetaItem): Boolean {
-        return item.poster.isNullOrBlank() ||
+        val lacksCinemetaOrigin = item.id.matches(Regex("tt[0-9]+")) &&
+            item.metadataSource() != MetadataSource.CINEMETA
+        return lacksCinemetaOrigin || item.poster.isNullOrBlank() ||
             item.background.isNullOrBlank() ||
             item.logo.isNullOrBlank() ||
             item.description.isNullOrBlank() ||
@@ -639,12 +883,12 @@ class HomeViewModel @Inject constructor(
 
     fun ensureMetadataFallback(item: MetaItem?) {
         if (item == null || !needsMetadataFallback(item)) return
-        val key = "${item.type}:${item.id}"
+        val key = item.canonicalPresentationKey()
 
         if (metadataFallbackCache.containsKey(key)) {
             val cachedFallback = metadataFallbackCache[key]
             if (cachedFallback != null) {
-                applyMetadataFallbackToState(type = item.type, id = item.id, fallback = cachedFallback, sourceItem = item)
+                applyMetadataFallbackToState(key, cachedFallback, sourceItem = item)
             }
             return
         }
@@ -656,6 +900,7 @@ class HomeViewModel @Inject constructor(
                 val meta = repository.resolveMetaDetails(item.type, item.id)
                     ?: throw Exception("No meta found")
                 val fallback = MetadataFallback(
+                    name = meta.name,
                     poster = meta.poster,
                     background = meta.background,
                     logo = meta.logo,
@@ -663,63 +908,49 @@ class HomeViewModel @Inject constructor(
                     releaseInfo = meta.releaseInfo,
                     imdbRating = meta.imdbRating,
                     runtime = meta.runtime,
-                    genres = meta.genres
+                    genres = meta.genres,
+                    source = meta.metadataSource(),
+                    sourceBaseUrl = meta.addonBaseUrl
                 )
                 metadataFallbackCache[key] = fallback
-                applyMetadataFallbackToState(type = item.type, id = item.id, fallback = fallback, sourceItem = item)
+                applyMetadataFallbackToState(key, fallback, sourceItem = item)
 
-                // Persist resolved images to watch history + series next-up DB
-                launch(Dispatchers.IO) {
-                    // For series, the history stores episode-level IDs (e.g. tt123:1:3)
-                    // but the MetaItem uses the canonical series ID (tt123).
-                    // Look up both the exact ID and all episode entries by prefix.
-                    val historyItems = if (item.type == "series") {
-                        dao.getHistoryItemsByPrefix(item.id)
-                    } else {
-                        listOfNotNull(dao.getHistoryItem(item.id))
-                    }
-                    for (historyItem in historyItems) {
-                        val needsPoster = historyItem.poster.isNullOrBlank() && !fallback.poster.isNullOrBlank()
-                        val needsBackground = historyItem.background.isNullOrBlank() && !fallback.background.isNullOrBlank()
-                        val needsLogo = historyItem.logo.isNullOrBlank() && !fallback.logo.isNullOrBlank()
-                        if (needsPoster || needsBackground || needsLogo) {
-                            dao.updateHistoryImages(
-                                id = historyItem.id,
-                                poster = if (needsPoster) fallback.poster else historyItem.poster,
-                                background = if (needsBackground) fallback.background else historyItem.background,
-                                logo = if (needsLogo) fallback.logo else historyItem.logo
-                            )
-                        }
-                    }
-                    // Also update series next-up poster if missing
-                    if (!fallback.poster.isNullOrBlank()) {
-                        val nextUp = dao.getSeriesNextUp(item.id)
-                        if (nextUp != null && nextUp.poster.isNullOrBlank()) {
-                            dao.upsertSeriesNextUp(nextUp.copy(poster = fallback.poster))
-                        }
-                    }
-                }
+                // Canonical metadata is stored by AddonRepository. Do not copy resolved artwork
+                // back into playback rows: that duplicates catalogue facts in user-state and
+                // creates an unjournaled second artwork source.
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 metadataFallbackCache[key] = null
             } finally {
                 metadataRequestsInFlight.remove(key)
+                val pending = tmdbAfterMetadataResolution.remove(key)
+                if (pending != null && pending.second == screenGeneration) {
+                    startTmdbEnrichment(pending.first)
+                }
             }
         }
     }
 
     private fun applyFallbackToMeta(meta: MetaItem, fallback: MetadataFallback): MetaItem {
-        val patchedPoster = if (meta.poster.isNullOrBlank()) fallback.poster else meta.poster
-        val patchedBackground = if (meta.background.isNullOrBlank()) fallback.background else meta.background
-        val patchedLogo = if (meta.logo.isNullOrBlank()) fallback.logo else meta.logo
-        val patchedDescription = if (meta.description.isNullOrBlank()) fallback.description else meta.description
-        val patchedReleaseInfo = if (meta.releaseInfo.isNullOrBlank()) fallback.releaseInfo else meta.releaseInfo
-        val patchedImdbRating = if (meta.imdbRating.isNullOrBlank()) fallback.imdbRating else meta.imdbRating
-        val patchedRuntime = if (meta.runtime.isNullOrBlank()) fallback.runtime else meta.runtime
-        val patchedGenres = if (meta.genres.isNullOrEmpty()) fallback.genres else meta.genres
+        fun preferFallback(existing: String?, incoming: String?): String? = when {
+            incoming.isNullOrBlank() -> existing
+            existing.isNullOrBlank() || fallback.source == MetadataSource.CINEMETA -> incoming
+            else -> existing
+        }
+        val patchedName = preferFallback(meta.name, fallback.name) ?: meta.name
+        val patchedPoster = preferFallback(meta.poster, fallback.poster)
+        val patchedBackground = preferFallback(meta.background, fallback.background)
+        val patchedLogo = preferFallback(meta.logo, fallback.logo)
+        val patchedDescription = preferFallback(meta.description, fallback.description)
+        val patchedReleaseInfo = preferFallback(meta.releaseInfo, fallback.releaseInfo)
+        val patchedImdbRating = preferFallback(meta.imdbRating, fallback.imdbRating)
+        val patchedRuntime = preferFallback(meta.runtime, fallback.runtime)
+        val patchedGenres = if (fallback.genres.isNullOrEmpty()) meta.genres else
+            if (meta.genres.isNullOrEmpty() || fallback.source == MetadataSource.CINEMETA) fallback.genres else meta.genres
 
         return meta.copy(
+            name = patchedName ?: meta.name,
             poster = patchedPoster,
             background = patchedBackground,
             logo = patchedLogo,
@@ -727,19 +958,19 @@ class HomeViewModel @Inject constructor(
             releaseInfo = patchedReleaseInfo,
             imdbRating = patchedImdbRating,
             runtime = patchedRuntime,
-            genres = patchedGenres
+            genres = patchedGenres,
+            addonBaseUrl = if (fallback.source == MetadataSource.CINEMETA) fallback.sourceBaseUrl else meta.addonBaseUrl
         )
     }
 
     private fun patchMetaListWithFallback(
         items: List<MetaItem>,
-        type: String,
-        id: String,
+        presentationKey: String,
         fallback: MetadataFallback
     ): Pair<List<MetaItem>, Boolean> {
         var changed = false
         val patched = items.map { meta ->
-            if (meta.type == type && meta.id == id) {
+            if (meta.canonicalPresentationKey() == presentationKey) {
                 val merged = applyFallbackToMeta(meta, fallback)
                 if (merged != meta) changed = true
                 merged
@@ -750,15 +981,23 @@ class HomeViewModel @Inject constructor(
         return patched to changed
     }
 
-    private fun applyMetadataFallbackToState(type: String, id: String, fallback: MetadataFallback, sourceItem: MetaItem? = null) {
+    private fun applyMetadataFallbackToState(
+        presentationKey: String,
+        fallback: MetadataFallback,
+        sourceItem: MetaItem? = null
+    ) {
         _state.update { current ->
             var stateChanged = false
 
             val updatedRows = current.rows.map { row ->
-                val (patchedItems, changed) = patchMetaListWithFallback(row.items, type, id, fallback)
+                val (patchedItems, changed) = patchMetaListWithFallback(
+                    row.items.map(CatalogCardProjection::asActionItem),
+                    presentationKey,
+                    fallback
+                )
                 if (changed) {
                     stateChanged = true
-                    row.copy(items = patchedItems)
+                    row.copy(items = patchedItems.map(CatalogCardProjection::from))
                 } else {
                     row
                 }
@@ -766,10 +1005,14 @@ class HomeViewModel @Inject constructor(
 
             val updatedMixedRows = current.mixedRows.map { rowItem ->
                 if (rowItem is CategoryRow) {
-                    val (patchedItems, changed) = patchMetaListWithFallback(rowItem.items, type, id, fallback)
+                    val (patchedItems, changed) = patchMetaListWithFallback(
+                        rowItem.items.map(CatalogCardProjection::asActionItem),
+                        presentationKey,
+                        fallback
+                    )
                     if (changed) {
                         stateChanged = true
-                        rowItem.copy(items = patchedItems)
+                        rowItem.copy(items = patchedItems.map(CatalogCardProjection::from))
                     } else {
                         rowItem
                     }
@@ -779,22 +1022,27 @@ class HomeViewModel @Inject constructor(
             }
 
             val updatedHeroRow = current.heroRow?.let { hero ->
-                val (patchedItems, changed) = patchMetaListWithFallback(hero.items, type, id, fallback)
+                val (patchedItems, changed) = patchMetaListWithFallback(
+                    hero.items.map(CatalogCardProjection::asActionItem),
+                    presentationKey,
+                    fallback
+                )
                 if (changed) {
                     stateChanged = true
-                    hero.copy(items = patchedItems)
+                    hero.copy(items = patchedItems.map(CatalogCardProjection::from))
                 } else {
                     hero
                 }
             }
 
-            val enrichedKey = "$type:$id"
-            val updatedEnrichedMeta = if (sourceItem != null && !current.enrichedMeta.containsKey(enrichedKey)) {
-                val enriched = applyFallbackToMeta(sourceItem, fallback)
-                if (enriched != sourceItem) {
-                    stateChanged = true
-                    current.enrichedMeta + (enrichedKey to enriched)
-                } else current.enrichedMeta
+            val enrichedKey = presentationKey
+            val enrichedBase = current.enrichedMeta[enrichedKey] ?: sourceItem
+            val enrichedCandidate = enrichedBase?.let { applyFallbackToMeta(it, fallback) }
+            val updatedEnrichedMeta = if (enrichedCandidate != null &&
+                (enrichedCandidate != enrichedBase || enrichedKey !in current.enrichedMeta)
+            ) {
+                stateChanged = true
+                current.enrichedMeta + (enrichedKey to enrichedCandidate)
             } else current.enrichedMeta
 
             if (!stateChanged) return@update current
@@ -808,7 +1056,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private val tmdbEnrichmentInFlight = ConcurrentHashMap.newKeySet<String>()
     @Volatile
     private var tmdbProfileCache: com.saab.tv.data.model.ProfileEntity? = null
 
@@ -818,141 +1065,199 @@ class HomeViewModel @Inject constructor(
      */
     fun ensureTmdbEnrichment(item: MetaItem?) {
         if (item == null) return
+        // Resolve Cinemeta first. TMDB is a gap-filler only, never a competing artwork source.
+        ensureMetadataFallback(item)
         val profile = tmdbProfileCache ?: return
         ensureWatchedAlias(profile.id, item)
         if (!profile.tmdbEnabled) return
 
-        val marker = "${item.type}:${item.id}"
+        val marker = item.canonicalPresentationKey()
+        if (marker in metadataRequestsInFlight) {
+            tmdbAfterMetadataResolution[marker] = item to screenGeneration
+            return
+        }
+        startTmdbEnrichment(item)
+    }
+
+    private fun startTmdbEnrichment(item: MetaItem) {
+        val profile = tmdbProfileCache ?: return
+        if (!profile.tmdbEnabled) return
+        val marker = item.canonicalPresentationKey()
         val includeLogo = profile.titleCardShape == "landscape"
-        val logoMarker = "$marker:logo"
-        if (if (includeLogo) logoMarker in _state.value.tmdbEnrichedIds else marker in _state.value.tmdbEnrichedIds) return
-        val key = "tmdb:$marker${if (includeLogo) ":logo" else ""}"
-        if (!tmdbEnrichmentInFlight.add(key)) return
-
+        val artworkMarker = if (includeLogo) "$marker:logo" else "$marker:poster"
+        if (artworkMarker in _state.value.tmdbEnrichedIds) return
+        val resolvedItem = _state.value.enrichedMeta[marker] ?: item
+        if (!needsTmdbEnrichment(resolvedItem, includeLogo)) {
+            markTmdbEnriched(item, includeLogo, screenGeneration)
+            return
+        }
+        val key = "tmdb:$marker${if (includeLogo) ":logo" else ":poster"}"
         val language = profile.tmdbLanguage.ifBlank { null } ?: "en"
+        synchronized(tmdbEnrichmentLock) {
+            if (tmdbEnrichmentJobs.containsKey(key)) return
+            val generation = screenGeneration
+            lateinit var enrichmentJob: Job
+            enrichmentJob = viewModelScope.launch(
+                Dispatchers.IO,
+                start = kotlinx.coroutines.CoroutineStart.LAZY
+            ) {
+                try {
+                    if (generation != screenGeneration) return@launch
+                    val mediaType = tmdbService.normalizeMediaType(resolvedItem.type)
+                    val tmdbId = tmdbService.ensureTmdbId(resolvedItem.id, mediaType)
+                    if (generation != screenGeneration) return@launch
+                    if (tmdbId == null) {
+                        // Can't resolve (e.g. Kitsu IDs) — mark as done so UI doesn't stay hidden
+                        markTmdbEnriched(item, includeLogo, generation)
+                        return@launch
+                    }
+                    val enrichment = tmdbMetadataService.fetchHomeEnrichment(
+                        tmdbId, mediaType, language, includeLogo = includeLogo
+                    )
+                    if (generation != screenGeneration) return@launch
+                    if (enrichment == null) {
+                        markTmdbEnriched(item, includeLogo, generation)
+                        return@launch
+                    }
 
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val mediaType = tmdbService.normalizeMediaType(item.type)
-                val tmdbId = tmdbService.ensureTmdbId(item.id, mediaType)
-                if (tmdbId == null) {
-                    // Can't resolve (e.g. Kitsu IDs) — mark as done so UI doesn't stay hidden
-                    markTmdbEnriched(item.type, item.id, includeLogo)
-                    return@launch
+                    val fallback = MetadataFallback(
+                        name = enrichment.localizedTitle,
+                        poster = enrichment.poster,
+                        background = enrichment.backdrop,
+                        logo = enrichment.logo,
+                        description = enrichment.description,
+                        releaseInfo = enrichment.releaseInfo,
+                        imdbRating = null,
+                        runtime = enrichment.runtimeMinutes?.let { "${it}m" },
+                        genres = enrichment.genres.ifEmpty { null },
+                        source = MetadataSource.TMDB,
+                        sourceBaseUrl = null
+                    )
+
+                    applyTmdbEnrichmentToState(resolvedItem, fallback, includeLogo, generation)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (e: Exception) {
+                    Log.w("HomeViewModel", "TMDB enrichment failed for ${item.id}: ${e.message}")
+                    markTmdbEnriched(item, includeLogo, generation)
+                } finally {
+                    synchronized(tmdbEnrichmentLock) {
+                        if (tmdbEnrichmentJobs[key] === enrichmentJob) tmdbEnrichmentJobs.remove(key)
+                    }
                 }
-                val enrichment = tmdbMetadataService.fetchHomeEnrichment(
-                    tmdbId, mediaType, language, includeLogo = includeLogo
-                )
-                if (enrichment == null) {
-                    markTmdbEnriched(item.type, item.id, includeLogo)
-                    return@launch
-                }
-
-                if (includeLogo) {
-                    ImagePrefetcher.prefetchLandscape(context, enrichment.backdrop ?: item.background)
-                    ImagePrefetcher.prefetchLogo(context, enrichment.logo ?: item.logo)
-                }
-
-                val fallback = MetadataFallback(
-                    poster = null, // Keep addon poster
-                    background = enrichment.backdrop,
-                    logo = enrichment.logo,
-                    description = enrichment.description,
-                    releaseInfo = enrichment.releaseInfo,
-                    imdbRating = null,
-                    runtime = enrichment.runtimeMinutes?.let { "${it}m" },
-                    genres = enrichment.genres.ifEmpty { null }
-                )
-
-                applyTmdbEnrichmentToState(item.type, item.id, fallback, item, includeLogo)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (e: Exception) {
-                Log.w("HomeViewModel", "TMDB enrichment failed for ${item.id}: ${e.message}")
-                markTmdbEnriched(item.type, item.id, includeLogo)
-            } finally {
-                tmdbEnrichmentInFlight.remove(key)
             }
+            tmdbEnrichmentJobs[key] = enrichmentJob
+            enrichmentJob.start()
         }
     }
 
-    private fun markTmdbEnriched(type: String, id: String, includeLogo: Boolean = false) {
-        val marker = "$type:$id"
-        val markers = if (includeLogo) setOf(marker, "$marker:logo") else setOf(marker)
+    private fun markTmdbEnriched(item: MetaItem, includeLogo: Boolean = false, expectedGeneration: Long) {
+        if (expectedGeneration != screenGeneration) return
+        val marker = item.canonicalPresentationKey()
+        val artworkMarker = if (includeLogo) "$marker:logo" else "$marker:poster"
+        val markers = setOf(marker, artworkMarker)
         _state.update {
-            it.copy(tmdbEnrichedIds = it.tmdbEnrichedIds + markers)
+            if (expectedGeneration == screenGeneration) {
+                it.copy(tmdbEnrichedIds = it.tmdbEnrichedIds + markers)
+            } else it
         }
     }
 
     /**
-     * Applies TMDB enrichment to state — overwrites fields (unlike addon fallback which only fills blanks).
-     * This ensures localized content from TMDB takes priority.
+     * Applies TMDB enrichment only to gaps in the card's current canonical metadata.
      */
     private fun applyTmdbEnrichmentToState(
-        type: String,
-        id: String,
-        fallback: MetadataFallback,
         sourceItem: MetaItem,
-        includeLogo: Boolean = false
+        fallback: MetadataFallback,
+        includeLogo: Boolean = false,
+        expectedGeneration: Long
     ) {
-        val marker = "$type:$id"
-        val markers = if (includeLogo) setOf(marker, "$marker:logo") else setOf(marker)
+        if (expectedGeneration != screenGeneration) return
+        val marker = sourceItem.canonicalPresentationKey()
+        val artworkMarker = if (includeLogo) "$marker:logo" else "$marker:poster"
+        val markers = setOf(marker, artworkMarker)
         _state.update { current ->
-            var rowsChanged = false
-
+            if (expectedGeneration != screenGeneration) return@update current
             fun overwriteMeta(meta: MetaItem): MetaItem {
-                if (meta.type != type || meta.id != id) return meta
-                val updated = meta.copy(
+                if (meta.canonicalPresentationKey() != marker) return meta
+                return meta.copy(
+                    name = preferExistingText(meta.name, fallback.name) ?: meta.name,
+                    poster = preferExistingArtwork(meta.poster, fallback.poster),
                     background = preferExistingArtwork(meta.background, fallback.background),
                     logo = preferExistingArtwork(meta.logo, fallback.logo),
-                    description = fallback.description ?: meta.description,
-                    releaseInfo = fallback.releaseInfo ?: meta.releaseInfo,
-                    imdbRating = fallback.imdbRating ?: meta.imdbRating,
-                    runtime = fallback.runtime ?: meta.runtime,
-                    genres = fallback.genres ?: meta.genres
+                    description = preferExistingText(meta.description, fallback.description),
+                    releaseInfo = preferExistingText(meta.releaseInfo, fallback.releaseInfo),
+                    imdbRating = preferExistingText(meta.imdbRating, fallback.imdbRating),
+                    runtime = preferExistingText(meta.runtime, fallback.runtime),
+                    genres = preferExistingGenres(meta.genres, fallback.genres)
                 )
-                if (updated != meta) rowsChanged = true
-                return updated
             }
 
-            val updatedRows = current.rows.map { row ->
-                val patched = row.items.map { overwriteMeta(it) }
-                if (rowsChanged) row.copy(items = patched) else row
+            fun patchCards(cards: List<CatalogCardProjection>): Pair<List<CatalogCardProjection>, Boolean> {
+                var changed = false
+                val patched = cards.map { card ->
+                    val meta = card.asActionItem()
+                    if (meta.canonicalPresentationKey() != marker) return@map card
+                    CatalogCardProjection.from(overwriteMeta(meta)).also { if (it != card) changed = true }
+                }
+                return patched to changed
             }
 
-            val updatedMixedRows = current.mixedRows.map { rowItem ->
+            var rowsChanged = false
+            val mappedRows = current.rows.map { row ->
+                val (patched, changed) = patchCards(row.items)
+                if (changed) {
+                    rowsChanged = true
+                    row.copy(items = patched)
+                } else row
+            }
+            val updatedRows = if (rowsChanged) mappedRows else current.rows
+
+            var mixedRowsChanged = false
+            val mappedMixedRows = current.mixedRows.map { rowItem ->
                 if (rowItem is CategoryRow) {
-                    val patched = rowItem.items.map { overwriteMeta(it) }
-                    if (rowsChanged) rowItem.copy(items = patched) else rowItem
+                    val (patched, changed) = patchCards(rowItem.items)
+                    if (changed) {
+                        mixedRowsChanged = true
+                        rowItem.copy(items = patched)
+                    } else rowItem
                 } else rowItem
             }
+            val updatedMixedRows = if (mixedRowsChanged) mappedMixedRows else current.mixedRows
 
-            val updatedHeroRow = current.heroRow?.let { hero ->
-                val patched = hero.items.map { overwriteMeta(it) }
-                if (rowsChanged) hero.copy(items = patched) else hero
+            var heroChanged = false
+            val mappedHeroRow = current.heroRow?.let { hero ->
+                val (patched, changed) = patchCards(hero.items)
+                if (changed) {
+                    heroChanged = true
+                    hero.copy(items = patched)
+                } else hero
             }
+            val updatedHeroRow = mappedHeroRow.takeIf { heroChanged } ?: current.heroRow
 
             // Always store enriched preview in enrichedMeta so continue watching
             // items (which aren't in category rows) can pick up TMDB metadata.
-            val enrichedKey = "$type:$id"
+            val enrichedKey = marker
             val base = current.enrichedMeta[enrichedKey] ?: sourceItem
             val enriched = base.copy(
+                name = preferExistingText(base.name, fallback.name) ?: base.name,
+                poster = preferExistingArtwork(base.poster, fallback.poster),
                 background = preferExistingArtwork(base.background, fallback.background),
                 logo = preferExistingArtwork(base.logo, fallback.logo),
-                description = fallback.description ?: base.description,
-                releaseInfo = fallback.releaseInfo ?: base.releaseInfo,
-                imdbRating = fallback.imdbRating ?: base.imdbRating,
-                runtime = fallback.runtime ?: base.runtime,
-                genres = fallback.genres ?: base.genres
+                description = preferExistingText(base.description, fallback.description),
+                releaseInfo = preferExistingText(base.releaseInfo, fallback.releaseInfo),
+                imdbRating = preferExistingText(base.imdbRating, fallback.imdbRating),
+                runtime = preferExistingText(base.runtime, fallback.runtime),
+                genres = preferExistingGenres(base.genres, fallback.genres)
             )
             val updatedEnrichedMeta = if (enriched != base || !current.enrichedMeta.containsKey(enrichedKey)) {
                 current.enrichedMeta + (enrichedKey to enriched)
             } else current.enrichedMeta
 
             current.copy(
-                rows = if (rowsChanged) updatedRows else current.rows,
-                mixedRows = if (rowsChanged) updatedMixedRows else current.mixedRows,
-                heroRow = if (rowsChanged) updatedHeroRow else current.heroRow,
+                rows = updatedRows,
+                mixedRows = updatedMixedRows,
+                heroRow = updatedHeroRow,
                 enrichedMeta = updatedEnrichedMeta,
                 tmdbEnrichedIds = current.tmdbEnrichedIds + markers
             )
@@ -969,6 +1274,7 @@ class HomeViewModel @Inject constructor(
         forceReload: Boolean = false
     ) {
         tmdbProfileCache = currentProfile
+        val initialBatchSize = initialDashboardBatchSizeFor(screenName, initialDashboardBatchSize)
         val currentProfileId = currentProfile?.id
         // ... (existing code)
         // Skip reload if this screen is already loaded with data
@@ -983,15 +1289,16 @@ class HomeViewModel @Inject constructor(
         }
 
         loadJob?.cancel()
-        screenGeneration++
-        val generation = screenGeneration
+        val generation = advanceScreenGeneration()
         loadMoreJobs.values.forEach { it.cancel() }
         loadMoreJobs.clear()
         loadingMoreRows.clear()
+        tmdbRailPagination.clear()
         loadJob = viewModelScope.launch {
             // Clear 'rows' immediately so the UI doesn't show "Ghost Data" from the previous tab
             pendingRowItems.clear()
             allFetchedRowIds.clear()
+            catalogNextSkip.clear()
             _state.value = _state.value.copy(
                 isLoading = true,
                 mixedRows = emptyList(),
@@ -1005,9 +1312,14 @@ class HomeViewModel @Inject constructor(
                 enrichedMeta = emptyMap(),
                 tmdbEnrichedIds = emptySet(),
                 tmdbEnabled = screenName != "ott" && currentProfile?.tmdbEnabled == true,
+                loadableRowIds = emptySet(),
+                loadingRowIds = emptySet(),
+                loadMoreErrorRowIds = emptySet(),
+                exhaustedRowIds = emptySet(),
+                loadingHubIds = emptySet(),
+                hubErrorIds = emptySet(),
                 errorMessage = null
             )
-            tmdbEnrichmentInFlight.clear()
             lastFocusedKeyMemory = null
             rowScrollPositionsMemory.clear()
             verticalScrollPositionMemory = Pair(0, 0)
@@ -1017,12 +1329,14 @@ class HomeViewModel @Inject constructor(
             // Load History + Series Next Up only for Home
             if (screenName == "home") {
                 launch {
-                    dao.getWatchHistory().collect { history ->
+                    val historyFlow = currentProfileId?.let(dao::getWatchHistoryForProfile) ?: flowOf(emptyList())
+                    historyFlow.collect { history ->
                         _state.update { it.copy(history = history) }
                     }
                 }
                 launch {
-                    dao.getActiveSeriesNextUp().collect { nextUp ->
+                    val nextUpFlow = currentProfileId?.let(dao::getSeriesNextUpForProfileFlow) ?: flowOf(emptyList())
+                    nextUpFlow.collect { nextUp ->
                         _state.update { it.copy(seriesNextUp = nextUp) }
                     }
                 }
@@ -1032,7 +1346,8 @@ class HomeViewModel @Inject constructor(
 
             // Load watched IDs for all tabs (watched indicator on posters)
             launch {
-                dao.getWatchedIds().collect { ids ->
+                val watchedIdsFlow = currentProfileId?.let(dao::getWatchedIdsForProfile) ?: flowOf(emptyList())
+                watchedIdsFlow.collect { ids ->
                     // Extract canonical series ID from episode IDs (tt123:1:3 → tt123)
                     val canonicalIds = ids.map { id ->
                         val parts = id.split(":")
@@ -1046,13 +1361,12 @@ class HomeViewModel @Inject constructor(
                 if (screenName == "ott") {
                     val ottRows = ottCatalogRepository.getCatalogRows(forceRefresh = forceReload)
                     if (generation != screenGeneration) return@launch
-                    prefetchFirstVisibleImages(ottRows)
                     tmdbProfileCache = null
 
                     _state.update {
                         it.copy(
                             mixedRows = ottRows.map { row -> CategoryRow.fromHomeRow(row) },
-                            rows = ottRows,
+                            rows = ottRows.map(CategoryRow::fromHomeRow),
                             hubRows = emptyList(),
                             heroRow = null,
                             isLoading = false,
@@ -1070,7 +1384,7 @@ class HomeViewModel @Inject constructor(
                     repository.getDashboardRows(
                         screen = screenName,
                         skipConfigs = 0,
-                        maxConfigs = initialDashboardBatchSize,
+                        maxConfigs = initialBatchSize,
                         catalogTimeoutMs = initialDashboardTimeoutMs
                     )
                 }
@@ -1092,9 +1406,6 @@ class HomeViewModel @Inject constructor(
                         )
                 } else null
 
-                // Prefetch first visible images BEFORE updating state.
-                prefetchFirstVisibleImages(initialRows)
-
                 val initialMixedList = (hubRows + initialRows.map { CategoryRow.fromHomeRow(it) })
                     .sortedBy { it.order }
 
@@ -1104,9 +1415,10 @@ class HomeViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         mixedRows = initialMixedList,
-                        rows = initialRows,
+                        rows = initialRows.map(CategoryRow::fromHomeRow),
+                        loadableRowIds = initialRows.filter { it.supportsSkip }.map { it.configId }.toSet(),
                         hubRows = hubRows,
-                        heroRow = heroRow,
+                            heroRow = heroRow?.let(CategoryRow::fromHomeRow),
                         isLoading = false,
                         loadedScreen = screenName,
                         loadedProfileId = currentProfileId,
@@ -1122,6 +1434,9 @@ class HomeViewModel @Inject constructor(
                             if (current.loadedScreen != "home" || current.loadedProfileId != currentProfileId) current
                             else current.copy(
                                 personalizedRows = personalized,
+                                loadableRowIds = current.loadableRowIds + personalized.filter {
+                                    tmdbRailPagination[it.id]?.hasMore == true
+                                }.map { it.id },
                                 mixedRows = (current.mixedRows + personalized).distinctBy { it.id }.sortedBy { it.order }
                             )
                         }
@@ -1135,7 +1450,7 @@ class HomeViewModel @Inject constructor(
                 launch {
                     val remainingRows = repository.getDashboardRows(
                         screen = screenName,
-                        skipConfigs = initialDashboardBatchSize
+                        skipConfigs = initialBatchSize
                     )
                     if (generation != screenGeneration) return@launch
                     if (remainingRows.isEmpty()) return@launch
@@ -1145,22 +1460,23 @@ class HomeViewModel @Inject constructor(
                             return@update currentState
                         }
 
-                        val allRows = (currentState.rows + remainingRows)
-                            .distinctBy { it.configId }
+                        val allRows = (currentState.rows + remainingRows.map(CategoryRow::fromHomeRow))
+                            .distinctBy { it.id }
                             .sortedBy { it.order }
 
                         val resolvedHeroRow = when {
                             currentState.heroRow != null -> currentState.heroRow
-                            heroConfig?.categoryId != null -> allRows.find { it.configId == heroConfig.categoryId }
+                            heroConfig?.categoryId != null -> allRows.find { it.id == heroConfig.categoryId }
                             else -> null
                         }
 
-                        val mixedList = (hubRows + allRows.map { CategoryRow.fromHomeRow(it) } + currentState.personalizedRows)
+                        val mixedList = (hubRows + allRows + currentState.personalizedRows)
                             .distinctBy { it.id }.sortedBy { it.order }
 
                         currentState.copy(
                             mixedRows = mixedList,
                             rows = allRows,
+                            loadableRowIds = currentState.loadableRowIds + remainingRows.filter { it.supportsSkip }.map { it.configId },
                             heroRow = resolvedHeroRow
                         )
                     }
@@ -1172,7 +1488,7 @@ class HomeViewModel @Inject constructor(
                 val message = when {
                     e is OttCatalogException -> e.message
                     screenName == "ott" -> "The OTT catalog is temporarily unavailable. Check your connection and try again."
-                    else -> null
+                    else -> "catalog_load_failed"
                 }
                 _state.update {
                     it.copy(
@@ -1208,47 +1524,65 @@ class HomeViewModel @Inject constructor(
             val interestSeeds = (watchedTitles + watchlist.take(2).map { Triple(it.id, it.type, it.title) })
                 .distinctBy { "${it.second}:${it.first}" }.take(3)
             val language = profile.tmdbLanguage.ifBlank { "en" }
-            val visibleIds = homeRows.flatMap { row -> row.items.map { "${it.type}:${it.id}" } }.toSet()
+            val visibleTmdbRails = TmdbHomeRails.parse(profile.homeTmdbRails)
+            val visibleIds = homeRows.flatMap { row -> row.items.map { it.canonicalPresentationKey() } }.toSet()
             val usedTmdbKeys = mutableSetOf<String>()
             val output = mutableListOf<CategoryRow>()
 
-            fun previewsToItems(previews: List<com.saab.tv.data.tmdb.TmdbMetaPreview>, limit: Int = 30): List<MetaItem> =
+            fun previewsToItems(previews: List<TitleCardProjection>, limit: Int = 30): List<MetaItem> =
                 previews.asSequence().mapNotNull { result ->
-                    val type = if (result.type == "tv") "series" else result.type
-                    val tmdbKey = "$type:tmdb:${result.tmdbId}"
-                    if (tmdbKey in usedTmdbKeys || "$type:tmdb:${result.tmdbId}" in visibleIds) return@mapNotNull null
+                    val item = result.asMetaItem()
+                    val tmdbKey = item.canonicalPresentationKey()
+                    if (tmdbKey in usedTmdbKeys || tmdbKey in visibleIds) return@mapNotNull null
                     usedTmdbKeys += tmdbKey
-                    MetaItem(
-                        id = "tmdb:${result.tmdbId}", type = type, name = result.name, poster = result.poster,
-                        background = result.backdrop, description = result.description,
-                        releaseInfo = result.releaseInfo
-                    )
+                    item
                 }.take(limit).toList()
 
-            fun addRow(id: String, title: String, order: Int, previews: List<com.saab.tv.data.tmdb.TmdbMetaPreview>) {
+            fun addRow(
+                id: String,
+                title: String,
+                order: Int,
+                previews: List<TitleCardProjection>,
+                pageSource: TmdbRailPageSource? = null,
+                firstPage: com.saab.tv.data.tmdb.TmdbDiscoveryPage? = null
+            ) {
+                val railIndex = visibleTmdbRails.indexOf(id)
+                if (railIndex < 0) return
                 val items = previewsToItems(previews)
-                if (items.isNotEmpty()) output += CategoryRow(
-                    id = id,
-                    title = title,
-                    // Keep asynchronous recommendations after existing catalog rows. Inserting
-                    // ahead of the current row changed index-based focus keys and dropped focus.
-                    order = personalizedRailOrder(order),
-                    items = items,
-                    isInfiniteLoopEnabled = true,
-                    visibleItemCount = 15,
-                    isInfiniteScrollingEnabled = false
-                )
+                if (items.isNotEmpty()) {
+                    output += CategoryRow(
+                        id = id,
+                        title = title,
+                        // Keep asynchronous recommendations after existing catalog rows. Inserting
+                        // ahead of the current row changed index-based focus keys and dropped focus.
+                        order = personalizedRailOrder(10 + railIndex),
+                        items = items.map(CatalogCardProjection::from),
+                        isInfiniteLoopEnabled = true,
+                        visibleItemCount = 15,
+                        isInfiniteScrollingEnabled = false
+                    )
+                    if (pageSource != null && firstPage != null) {
+                        tmdbRailPagination[id] = TmdbRailPagination(pageSource, firstPage.page, firstPage.hasMore)
+                    }
+                }
             }
 
             // Aggregate every recent history seed into one rail, ranking titles by
             // overlap and position across each seed's TMDB recommendations.
-            val historyRecommendations = kotlinx.coroutines.coroutineScope {
+            val historyRecommendationPages = kotlinx.coroutines.coroutineScope {
                 watchedTitles.map { (seedId, type, _) -> async(Dispatchers.IO) {
-                    val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async emptyList()
-                    tmdbMetadataService.fetchRecommendations(tmdbId, type, language, maxItems = 20)
+                    val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async null
+                    Triple(
+                        tmdbId,
+                        type,
+                        tmdbMetadataService.fetchRecommendationsPage(tmdbId, type, language, page = 1, maxItems = 20)
+                    )
                 } }.awaitAll()
-            }
-            val historyRankedSuggestions = rankWatchHistorySuggestions(historyRecommendations)
+            }.filterNotNull()
+            val historyRankedSuggestions = rankWatchHistorySuggestions(
+                historyRecommendationPages.map { it.third.items },
+                limit = Int.MAX_VALUE
+            )
 
             // A small, bounded enrichment sample gives genre rails and cross-type
             // suggestions real signals without slowing the initial catalog load.
@@ -1279,58 +1613,89 @@ class HomeViewModel @Inject constructor(
                 .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
 
             if (historyRankedSuggestions.isNotEmpty()) {
-                val historyTypes = historyRankedSuggestions.map { if (it.type == "tv") "series" else it.type }.toSet()
-                val crossTypeSuggestions = listOf("movie", "tv").filterNot { requestedType ->
+                val historyTypes = historyRankedSuggestions.map { it.kind.keyPart }.toSet()
+                val crossTypeQueries = listOf("movie", "tv").filterNot { requestedType ->
                     val normalizedType = if (requestedType == "tv") "series" else requestedType
                     normalizedType in historyTypes
-                }.flatMap { requestedType ->
+                }.map { requestedType ->
                     val isTv = requestedType == "tv"
-                    tmdbMetadataService.discoverByIntent(
-                        TmdbNaturalQuery(
-                            mediaType = requestedType,
-                            genreIds = if (isTv) genreFilterTv else genreFilterMovie,
-                            originalLanguage = favoriteLanguage,
-                            sortBy = "popularity.desc"
-                        ),
-                        language,
-                        10
+                    TmdbNaturalQuery(
+                        mediaType = requestedType,
+                        genreIds = if (isTv) genreFilterTv else genreFilterMovie,
+                        originalLanguage = favoriteLanguage,
+                        sortBy = "popularity.desc"
                     )
+                }.filter { query ->
+                    !query.genreIds.isNullOrBlank() || !query.originalLanguage.isNullOrBlank()
                 }
+                val crossTypePages = kotlinx.coroutines.coroutineScope {
+                    crossTypeQueries.map { query -> async(Dispatchers.IO) {
+                        tmdbMetadataService.discoverByIntentPage(query, language, page = 1, maxItems = 10)
+                    } }.awaitAll()
+                }
+                val alreadyDisplayedKeys = visibleIds + usedTmdbKeys
+                val topSuggestionPage = com.saab.tv.data.tmdb.TmdbDiscoveryPage(
+                    items = composeTopSuggestions(
+                        recommendationsByHistory = historyRecommendationPages.map { it.third.items },
+                        crossTypeCandidates = crossTypePages.flatMap { it.items },
+                        excludedPresentationKeys = alreadyDisplayedKeys,
+                        limit = 30
+                    ),
+                    page = 1,
+                    hasMore = historyRecommendationPages.any { it.third.hasMore } || crossTypePages.any { it.hasMore }
+                )
                 addRow(
                     "tmdb-top-suggestions",
                     "Top Suggestions",
                     10,
-                    mixTmdbMediaTypes(historyRankedSuggestions + crossTypeSuggestions, 30)
+                    topSuggestionPage.items,
+                    TmdbRailPageSource(
+                        language = language,
+                        discoverQueries = crossTypeQueries,
+                        recommendationSeeds = historyRecommendationPages.map { it.first to it.second }
+                    ),
+                    topSuggestionPage
                 )
             }
 
             if (allFavoriteGenres) {
-                val favoriteGenres = tmdbMetadataService.discoverByIntent(
-                    TmdbNaturalQuery(null, genreFilterMovie, null, "vote_average.desc", tvGenreIds = genreFilterTv),
-                    language, 30
+                val query = TmdbNaturalQuery(null, genreFilterMovie, null, "vote_average.desc", tvGenreIds = genreFilterTv)
+                val page = tmdbMetadataService.discoverByIntentPage(
+                    query, language, page = 1, maxItems = 30
                 )
-                addRow("tmdb-favorite-genres", "More in Your Favorite Genres", 13, favoriteGenres)
+                addRow(
+                    "tmdb-favorite-genres", "More in Your Favorite Genres", 13, page.items,
+                    TmdbRailPageSource(language, discoverQueries = listOf(query)), page
+                )
             }
 
             val recentDate = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(
                 java.util.Date(System.currentTimeMillis() - 365L * 24L * 60L * 60L * 1000L)
             )
             val today = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date())
-            val newForYou = tmdbMetadataService.discoverByIntent(
-                TmdbNaturalQuery(
+            val newForYouQuery = TmdbNaturalQuery(
                     null, null, null, "release_date.desc",
                     releaseDateGte = recentDate, releaseDateLte = today
-                ), language, 30
+                )
+            val newForYou = tmdbMetadataService.discoverByIntentPage(
+                newForYouQuery, language, page = 1, maxItems = 30
             )
-            addRow("tmdb-new-for-you", "New for You", 15, newForYou)
+            addRow(
+                "tmdb-new-for-you", "New for You", 15, newForYou.items,
+                TmdbRailPageSource(language, discoverQueries = listOf(newForYouQuery)), newForYou
+            )
 
-            val popularInTaste = tmdbMetadataService.discoverByIntent(
-                TmdbNaturalQuery(
+            val popularInTasteQuery = TmdbNaturalQuery(
                     null, genreFilterMovie, favoriteLanguage ?: profile.tmdbLanguage.takeIf(String::isNotBlank),
                     "popularity.desc", tvGenreIds = genreFilterTv
-                ), language, 30
+                )
+            val popularInTaste = tmdbMetadataService.discoverByIntentPage(
+                popularInTasteQuery, language, page = 1, maxItems = 30
             )
-            addRow("tmdb-popular-in-taste", "Popular in Your Taste", 16, popularInTaste)
+            addRow(
+                "tmdb-popular-in-taste", "Popular in Your Taste", 16, popularInTaste.items,
+                TmdbRailPageSource(language, discoverQueries = listOf(popularInTasteQuery)), popularInTaste
+            )
 
             output
         } catch (cancelled: CancellationException) {
@@ -1349,37 +1714,69 @@ class HomeViewModel @Inject constructor(
         onResult: (String, List<MetaItem>) -> Unit
     ) {
         // 1. Try to find in currently loaded rows (Legacy)
-        val legacyRow = _state.value.rows.find { it.configId == hubItem.categoryId }
+        val legacyRow = _state.value.rows.find { it.id == hubItem.categoryId }
         if (legacyRow != null) {
-            onResult(legacyRow.title, legacyRow.items)
+            _state.update { it.copy(hubErrorIds = it.hubErrorIds - hubItem.categoryId) }
+            onResult(legacyRow.title, legacyRow.items.map(CatalogCardProjection::asActionItem))
             return
         }
 
         // 2. Try to find in mixed rows (New Architecture)
         val mixedRow = _state.value.mixedRows.find { it.id == hubItem.categoryId } as? CategoryRow
         if (mixedRow != null) {
-            onResult(mixedRow.title, mixedRow.items)
+            _state.update { it.copy(hubErrorIds = it.hubErrorIds - hubItem.categoryId) }
+            onResult(mixedRow.title, mixedRow.items.map(CatalogCardProjection::asActionItem))
             return
         }
 
+        if (hubItem.categoryId in _state.value.loadingHubIds) return
+        val generation = screenGeneration
+        _state.update {
+            it.copy(
+                loadingHubIds = it.loadingHubIds + hubItem.categoryId,
+                hubErrorIds = it.hubErrorIds - hubItem.categoryId
+            )
+        }
         // 3. If not found, fetch from repository
         viewModelScope.launch {
             try {
-                val fetchedRow = repository.getCategoryRowPreview(
+                val preview = repository.getCategoryRowPreviewWithStatus(
                     configId = hubItem.categoryId,
                     maxItems = hubInitialLoadCount
                 )
+                if (generation != screenGeneration) return@launch
+                val fetchedRow = preview.row
                 if (fetchedRow != null) {
                     // Cache fetched row so GridView can lazy-load additional pages via loadMoreItems().
                     _state.update { current ->
-                        val updatedRows = current.rows
-                            .filterNot { it.configId == fetchedRow.configId } + fetchedRow
-                        current.copy(rows = updatedRows)
+                        val row = CategoryRow.fromHomeRow(fetchedRow)
+                        val updatedRows = (current.rows.filterNot { it.id == fetchedRow.configId } + row)
+                            .sortedBy { it.order }
+                        val updatedPersonalized = current.personalizedRows.filterNot { it.id == fetchedRow.configId }
+                        val updatedMixed = (current.mixedRows.filterNot { it.id == fetchedRow.configId } + row)
+                            .sortedBy { it.order }
+                        current.copy(
+                            rows = updatedRows,
+                            personalizedRows = updatedPersonalized,
+                            mixedRows = updatedMixed,
+                            loadableRowIds = if (fetchedRow.supportsSkip) current.loadableRowIds + fetchedRow.configId else current.loadableRowIds,
+                            hubErrorIds = current.hubErrorIds - hubItem.categoryId
+                        )
                     }
                     onResult(fetchedRow.title, fetchedRow.items)
+                } else if (preview.failed) {
+                    _state.update { it.copy(hubErrorIds = it.hubErrorIds + hubItem.categoryId) }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
-                // Ignore error
+                if (generation == screenGeneration) {
+                    _state.update { it.copy(hubErrorIds = it.hubErrorIds + hubItem.categoryId) }
+                }
+            } finally {
+                if (generation == screenGeneration) {
+                    _state.update { it.copy(loadingHubIds = it.loadingHubIds - hubItem.categoryId) }
+                }
             }
         }
     }

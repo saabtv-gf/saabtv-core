@@ -4,6 +4,7 @@ import android.content.Context
 import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import com.saab.tv.data.cache.InstallationCacheBudget
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -22,6 +23,10 @@ object ImageLoaderModule {
         @ApplicationContext context: Context,
         okHttpClient: OkHttpClient
     ): ImageLoader {
+        val budget = InstallationCacheBudget.forContext(context)
+        val scope = com.saab.tv.data.account.AccountStorage.scope(context)
+        val cacheRoot = context.cacheDir.resolve("image_cache")
+        InstallationCacheBudget.pruneInactiveScopes(cacheRoot, scope, budget.artworkDiskBytes)
         return ImageLoader.Builder(context)
             // Use shared OkHttpClient with connection pooling
             .okHttpClient(okHttpClient)
@@ -29,15 +34,15 @@ object ImageLoaderModule {
             // ExoPlayer's sample queue, and the thumbnail worker on TV hardware.
             .memoryCache {
                 MemoryCache.Builder(context)
-                    .maxSizePercent(0.15)
+                    .maxSizeBytes(budget.artworkMemoryBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
                     .strongReferencesEnabled(true)
                     .build()
             }
             // Disk cache for offline/fast reload
             .diskCache {
                 DiskCache.Builder()
-                    .directory(context.cacheDir.resolve("image_cache/${com.saab.tv.data.account.AccountStorage.scope(context)}"))
-                    .maxSizeBytes(100L * 1024 * 1024) // 100MB
+                    .directory(cacheRoot.resolve(scope))
+                    .maxSizeBytes(budget.artworkDiskBytes)
                     .build()
             }
             // Enable hardware bitmaps for GPU-accelerated rendering on TV
