@@ -23,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -79,7 +80,7 @@ class FocusUtilsTest {
     }
 
     @Test
-    fun safelyReportsWhenAnAttachedFocusRequestIsDispatched() {
+    fun safelyReportsWhenAnAttachedFocusRequestIsRejected() {
         val blocked = FocusRequester()
         compose.setContent {
             Box(
@@ -91,7 +92,7 @@ class FocusUtilsTest {
             )
         }
 
-        compose.runOnIdle { assertTrue(blocked.requestFocusSafely()) }
+        compose.runOnIdle { assertFalse(blocked.requestFocusSafely()) }
         compose.onNodeWithTag("blocked-target").assertIsNotFocused()
     }
 

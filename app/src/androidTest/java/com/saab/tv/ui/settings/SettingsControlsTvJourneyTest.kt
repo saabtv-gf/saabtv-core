@@ -57,10 +57,15 @@ class SettingsControlsTvJourneyTest {
         val vertical = compose.onNodeWithText("Portrait")
         val square = compose.onNodeWithText("Square")
         horizontal.performSemanticsAction(SemanticsActions.RequestFocus)
+        horizontal.assertIsFocused()
         horizontal.performKeyInput { pressKey(Key.DirectionRight) }
-        vertical.assertIsFocused()
+        compose.waitUntil(5_000) {
+            runCatching { vertical.assertIsFocused(); true }.getOrDefault(false)
+        }
         vertical.performKeyInput { pressKey(Key.DirectionRight) }
-        square.assertIsFocused()
+        compose.waitUntil(5_000) {
+            runCatching { square.assertIsFocused(); true }.getOrDefault(false)
+        }
         square.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertEquals(HubShape.SQUARE, selectedShape.value) }
 
@@ -96,7 +101,9 @@ class SettingsControlsTvJourneyTest {
         addCategory.performKeyInput { pressKey(Key.Back) }
 
         val cancel = compose.onNodeWithText("Cancel")
-        cancel.assertIsFocused()
+        compose.waitUntil(5_000) {
+            runCatching { cancel.assertIsFocused(); true }.getOrDefault(false)
+        }
         cancel.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertTrue(cancelled) }
     }

@@ -509,7 +509,7 @@ fun TopNavItem(
     val backgroundColor = MaterialTheme.colorScheme.background
 
     Box(
-        modifier = modifier
+        modifier = Modifier
             .width(layoutWidth)
             .height(56.dp),
         contentAlignment = Alignment.CenterStart // Align to start so expansion goes right
@@ -528,7 +528,7 @@ fun TopNavItem(
         // LAYER 2: Accent-colored Surface on top
         Surface(
             onClick = onNavigate,
-            modifier = Modifier
+            modifier = modifier
                 .width(bubbleWidth)
                 .height(bubbleHeight)
                 .onFocusChanged { isFocused = it.isFocused },
@@ -623,13 +623,13 @@ fun TopNavProfileAvatar(
     )
     
     Box(
-        modifier = modifier
+        modifier = Modifier
             .height(50.dp)
             .fillMaxWidth()
     ) {
         Surface(
             onClick = onNavigate,
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
                 .onFocusChanged { isFocused = it.isFocused },
             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),

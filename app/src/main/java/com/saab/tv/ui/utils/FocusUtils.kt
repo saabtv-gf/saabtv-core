@@ -6,10 +6,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.runtime.withFrameNanos
 
-/** Dispatch a focus request; false means its requester is detached or otherwise throws. */
+/** Dispatch a focus request and report whether Compose accepted it. */
 fun FocusRequester.requestFocusSafely(): Boolean = runCatching {
     requestFocus()
-    true
 }.getOrDefault(false)
 
 /** Retry focus only while Compose is attaching the destination, not on wall-clock sleeps. */

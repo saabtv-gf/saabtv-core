@@ -50,15 +50,26 @@ class DiagnosticsFocusTvJourneyTest {
                     compose.onAllNodesWithTag("diagnostic-event-0").fetchSemanticsNodes().isNotEmpty()
                 }
                 val firstLog = compose.onNodeWithTag("diagnostic-event-0")
-                firstLog.assertIsFocused()
+                compose.waitUntil(5_000) {
+                    runCatching { firstLog.assertIsFocused(); true }.getOrDefault(false)
+                }
                 compose.onNodeWithTag("app-diagnostics-list").performScrollToIndex(1)
                 firstLog.performKeyInput { pressKey(Key.DirectionUp) }
-                compose.onNodeWithText("Refresh").assertIsFocused()
+                compose.waitUntil(5_000) {
+                    runCatching { compose.onNodeWithText("Refresh").assertIsFocused(); true }
+                        .getOrDefault(false)
+                }
                 compose.onNodeWithText("Refresh").assertIsDisplayed()
                 compose.onNodeWithText("Refresh").performKeyInput { pressKey(Key.DirectionRight) }
-                compose.onNodeWithText("Export Report").assertIsFocused()
+                compose.waitUntil(5_000) {
+                    runCatching { compose.onNodeWithText("Export Report").assertIsFocused(); true }
+                        .getOrDefault(false)
+                }
                 compose.onNodeWithText("Export Report").performKeyInput { pressKey(Key.DirectionRight) }
-                compose.onNodeWithText("Clear Logs").assertIsFocused()
+                compose.waitUntil(5_000) {
+                    runCatching { compose.onNodeWithText("Clear Logs").assertIsFocused(); true }
+                        .getOrDefault(false)
+                }
             }
         } finally { directory.deleteRecursively() }
     }

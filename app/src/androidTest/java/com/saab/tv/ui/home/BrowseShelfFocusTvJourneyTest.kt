@@ -198,8 +198,10 @@ class BrowseShelfFocusTvJourneyTest {
         // root and assert the focused logical target instead of requiring uniqueness.
         compose.onAllNodes(lastTitleMatcher)[0].performSemanticsAction(SemanticsActions.RequestFocus)
         compose.onRoot().performKeyInput { pressKey(Key.DirectionRight) }
-        val viewMore = compose.onNode(hasClickAction() and hasText("View More"))
-        viewMore.assertIsFocused()
+        // The repeated infinite shelf can expose duplicate semantics nodes for
+        // the same logical View More card. Assert the focused logical target,
+        // not uniqueness of its rendered copies.
+        assertAnyMatchingNodeFocused(hasClickAction() and hasText("View More"))
 
         compose.onRoot().performKeyInput { pressKey(Key.DirectionLeft) }
         assertAnyMatchingNodeFocused(lastTitleMatcher)

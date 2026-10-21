@@ -81,17 +81,17 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { contentRequester.requestFocus() }
+        requestNodeFocus("Browse content")
     }
 
     @Test fun directionalEntryAndSelectionReturnToContent() {
         render()
         compose.onNodeWithText("Browse content").performKeyInput { pressKey(Key.DirectionLeft) }
-        compose.onNodeWithText("Home").assertIsFocused()
+        assertNodeFocused("Home")
         compose.onNodeWithText("Home").performKeyInput { pressKey(Key.DirectionDown) }
         compose.onNodeWithText("Movies").performKeyInput { pressKey(Key.DirectionCenter) }
 
-        compose.onNodeWithText("Browse content").assertIsFocused()
+        assertNodeFocused("Browse content")
         compose.runOnIdle { assertEquals(listOf(NavDestination.Movies), selected) }
     }
 
@@ -122,10 +122,10 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { contentRequester.requestFocus() }
+        requestNodeFocus("Browse every route")
 
         compose.onNodeWithText("Browse every route").performKeyInput { pressKey(Key.DirectionLeft) }
-        compose.onNodeWithText("Home").assertIsFocused()
+        assertNodeFocused("Home")
         compose.onNodeWithText("Home").performKeyInput { pressKey(Key.DirectionUp) }
         compose.onNodeWithText("Search").performKeyInput { pressKey(Key.DirectionUp) }
 
@@ -142,7 +142,7 @@ class NavigationShellFocusTvJourneyTest {
         )
         DrawerFocusPolicy.order.forEachIndexed { index, destination ->
             val item = compose.onNodeWithText(label.getValue(destination))
-            item.assertIsFocused()
+            assertNodeFocused(label.getValue(destination))
             item.performKeyInput { pressKey(Key.DirectionCenter) }
             compose.runOnIdle {
                 assertEquals(
@@ -395,8 +395,7 @@ class NavigationShellFocusTvJourneyTest {
     @Test fun automaticFocusWithoutDirectionalEntryIsReturnedToContent() {
         render()
         compose.runOnIdle { requesters.getValue(NavDestination.Settings).requestFocus() }
-        compose.waitForIdle()
-        compose.onNodeWithText("Browse content").assertIsFocused()
+        assertNodeFocused("Browse content")
         compose.runOnIdle {
             assertTrue("focus recovery must not navigate", selected.isEmpty())
             assertTrue("focus recovery should return to content", contentReturns > 0)
@@ -425,12 +424,12 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { contentRequester.requestFocus() }
+        requestNodeFocus("Complete action")
 
         compose.onNodeWithText("Complete action").performKeyInput { pressKey(Key.DirectionCenter) }
         compose.waitForIdle()
 
-        compose.onNodeWithText("Complete action").assertIsFocused()
+        assertNodeFocused("Complete action")
         compose.onNodeWithText("Home").assertIsNotFocused()
         compose.runOnIdle {
             assertEquals("the action should run exactly once", 1, actionCalls)
@@ -464,13 +463,13 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { contentRequester.requestFocus() }
+        requestNodeFocus("Handled direction")
 
         compose.onNodeWithText("Handled direction").performKeyInput { pressKey(Key.DirectionUp) }
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
         compose.waitForIdle()
 
-        compose.onNodeWithText("Handled direction").assertIsFocused()
+        assertNodeFocused("Handled direction")
         compose.onNodeWithText("Home").assertIsNotFocused()
         compose.runOnIdle { assertTrue("handled input cannot navigate", selected.isEmpty()) }
     }
@@ -492,11 +491,11 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { contentRequester.requestFocus() }
+        requestNodeFocus("Browse content")
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
         compose.waitForIdle()
 
-        compose.onNodeWithText("Browse content").assertIsFocused()
+        assertNodeFocused("Browse content")
         compose.onNodeWithText("Home").assertIsNotFocused()
     }
 
@@ -517,11 +516,11 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { contentRequester.requestFocus() }
+        requestNodeFocus("Browse content")
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
         compose.waitForIdle()
 
-        compose.onNodeWithText("Browse content").assertIsFocused()
+        assertNodeFocused("Browse content")
         compose.onNodeWithContentDescription("Home").assertIsNotFocused()
     }
 
@@ -555,9 +554,9 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { content.requestFocus() }
+        requestNodeFocus("Content")
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionLeft) }
-        compose.onNodeWithText("Home").assertIsFocused()
+        assertNodeFocused("Home")
 
         dispatchHeldKey(requireNotNull(rootView), AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
 
@@ -595,9 +594,9 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { content.requestFocus() }
+        requestNodeFocus("Content")
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionUp) }
-        compose.onNodeWithContentDescription("Home").assertIsFocused()
+        assertNodeFocused("Home")
 
         dispatchHeldKey(requireNotNull(rootView), AndroidKeyEvent.KEYCODE_DPAD_DOWN)
 
@@ -627,12 +626,12 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        compose.runOnIdle { content.requestFocus() }
+        requestNodeFocus("Browse content")
 
         compose.runOnIdle { topNavigationRequesters.getValue(NavDestination.Profile).requestFocus() }
         compose.waitForIdle()
 
-        compose.onNodeWithText("Browse content").assertIsFocused()
+        assertNodeFocused("Browse content")
         compose.onNodeWithText("Profile").assertIsNotFocused()
         compose.runOnIdle {
             assertEquals("rejected automatic focus must not navigate", 0, navigations)
@@ -652,6 +651,17 @@ class NavigationShellFocusTvJourneyTest {
             view.dispatchKeyEvent(AndroidKeyEvent(
                 downTime, downTime + 130, AndroidKeyEvent.ACTION_UP, keyCode, 0
             ))
+        }
+    }
+
+    private fun requestNodeFocus(label: String) {
+        compose.onNodeWithText(label).performSemanticsAction(SemanticsActions.RequestFocus)
+        assertNodeFocused(label)
+    }
+
+    private fun assertNodeFocused(label: String) {
+        compose.waitUntil(5_000) {
+            runCatching { compose.onNodeWithText(label).assertIsFocused(); true }.getOrDefault(false)
         }
     }
 }
