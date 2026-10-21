@@ -193,14 +193,16 @@ class BrowseShelfFocusTvJourneyTest {
             }
         }
 
-        val lastTitle = compose.onNode(hasClickAction() and hasContentDescription("View More title 4"))
-        lastTitle.performSemanticsAction(SemanticsActions.RequestFocus)
-        lastTitle.performKeyInput { pressKey(Key.DirectionRight) }
+        val lastTitleMatcher = hasClickAction() and hasContentDescription("View More title 4")
+        // Infinite rows expose loop copies with the same semantics; drive from the
+        // root and assert the focused logical target instead of requiring uniqueness.
+        compose.onAllNodes(lastTitleMatcher)[0].performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.onRoot().performKeyInput { pressKey(Key.DirectionRight) }
         val viewMore = compose.onNode(hasClickAction() and hasText("View More"))
         viewMore.assertIsFocused()
 
-        viewMore.performKeyInput { pressKey(Key.DirectionLeft) }
-        lastTitle.assertIsFocused()
+        compose.onRoot().performKeyInput { pressKey(Key.DirectionLeft) }
+        assertAnyMatchingNodeFocused(lastTitleMatcher)
     }
 
     private fun assertAnyMatchingNodeFocused(matcher: SemanticsMatcher) {

@@ -24,8 +24,17 @@ class NavigationFocusEntryPolicyTest {
         var time = 100L
         val policy = NavigationFocusEntryPolicy { time }
         policy.input(true)
-        time = 351L
+        time = 3_101L
         assertFalse(policy.enter())
+    }
+
+    @Test fun delayedButStillPendingFocusHandoffCanEnterNavigation() {
+        var time = 100L
+        val policy = NavigationFocusEntryPolicy { time }
+        policy.input(requestsNavigation = true)
+        time = 2_900L
+
+        assertTrue(policy.enter())
     }
 
     @Test fun repeatedEntryKeyDoesNotExtendTheHandoffWindow() {
@@ -34,7 +43,7 @@ class NavigationFocusEntryPolicyTest {
         policy.input(requestsNavigation = true)
         time = 300L
         policy.input(requestsNavigation = true, freshPress = false)
-        time = 351L
+        time = 3_101L
 
         assertFalse(policy.enter())
     }
@@ -83,7 +92,7 @@ class NavigationFocusEntryPolicyTest {
         var time = 100L
         val policy = NavigationFocusEntryPolicy { time }
         policy.input(requestsNavigation = true)
-        time = 351L
+        time = 3_101L
 
         assertFalse(policy.enter())
         assertTrue(policy.shouldReturnToContent())

@@ -2,6 +2,10 @@ package com.saab.tv.ui.navigation
 
 /** Automatic Android focus restoration is not an instruction to open navigation. */
 internal class NavigationFocusEntryPolicy(private val now: () -> Long) {
+    // A focus handoff can be delayed by TV layout/animation work, particularly on
+    // slower devices. Keep the grant bounded, but long enough for the destination
+    // to receive focus after the key event has been handled.
+    private companion object { const val FOCUS_HANDOFF_TIMEOUT_MS = 3_000L }
     private var allowedUntil = -1L
     var insideNavigation = false
         private set
@@ -9,7 +13,7 @@ internal class NavigationFocusEntryPolicy(private val now: () -> Long) {
         if (insideNavigation) return
         when {
             !requestsNavigation -> allowedUntil = -1L
-            freshPress -> allowedUntil = now() + 250
+            freshPress -> allowedUntil = now() + FOCUS_HANDOFF_TIMEOUT_MS
             // A held repeat cannot authorize or extend entry, but must not revoke
             // the handoff window opened by the original press before focus arrives.
         }
