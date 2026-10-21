@@ -36,6 +36,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -69,10 +70,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
+fun PlaybackDiagnosticsSettings(
+    onGoBack: () -> Unit,
+    refreshFocusRequester: FocusRequester? = null
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val firstButtonRequester = remember { FocusRequester() }
+    val firstButtonRequester = refreshFocusRequester ?: remember { FocusRequester() }
     val exportRequester = remember { FocusRequester() }
     val clearRequester = remember { FocusRequester() }
     val basicRequester = remember { FocusRequester() }
@@ -85,6 +89,7 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
     var reportLoadFailed by remember { mutableStateOf(false) }
     var actionBusy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
+    var refreshFocused by remember { mutableStateOf(false) }
     var diagnosticsEnabled by remember {
         mutableStateOf(PlaybackDiagnostics.isEnabled(context))
     }
@@ -116,7 +121,8 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             try {
                 listState.scrollToItem(index)
                 requester.requestFocusWhenAttached(hasFocus = {
-                    listState.layoutInfo.visibleItemsInfo.any { it.index == index }
+                    listState.layoutInfo.visibleItemsInfo.any { it.index == index } &&
+                        (index != 0 || refreshFocused)
                 })
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
@@ -202,7 +208,10 @@ fun PlaybackDiagnosticsSettings(onGoBack: () -> Unit) {
             DiagnosticsButton(
                 label = stringResource(R.string.common_refresh),
                 enabled = !actionBusy,
-                modifier = Modifier.focusRequester(firstButtonRequester).focusProperties { up = detailedRequester; right = exportRequester },
+                modifier = Modifier
+                    .focusRequester(firstButtonRequester)
+                    .onFocusChanged { refreshFocused = it.isFocused }
+                    .focusProperties { up = detailedRequester; right = exportRequester },
                 onLeft = onGoBack,
                 onDown = focusFirstEvent
             ) {

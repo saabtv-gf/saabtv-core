@@ -1,6 +1,7 @@
 package com.saab.tv.ui.settings
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
@@ -30,6 +31,7 @@ class SettingsControlsTvJourneyTest {
 
     @Test fun hubEditorKeepsFooterActionsVisibleAndDpadSelectable() {
         val selectedShape = mutableStateOf(HubShape.HORIZONTAL)
+        val landscapeRequester = FocusRequester()
         var saved = false
 
         compose.setContent {
@@ -44,7 +46,8 @@ class SettingsControlsTvJourneyTest {
                     onAddCategory = {},
                     onManageCategories = {},
                     onCancel = {},
-                    onSave = { saved = true }
+                    onSave = { saved = true },
+                    shapeFocusRequester = landscapeRequester
                 )
             }
         }
@@ -56,7 +59,10 @@ class SettingsControlsTvJourneyTest {
         horizontal.performScrollTo()
         val vertical = compose.onNodeWithText("Portrait")
         val square = compose.onNodeWithText("Square")
-        horizontal.performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.runOnIdle { landscapeRequester.requestFocus() }
+        compose.waitUntil(5_000) {
+            runCatching { horizontal.assertIsFocused(); true }.getOrDefault(false)
+        }
         horizontal.assertIsFocused()
         horizontal.performKeyInput { pressKey(Key.DirectionRight) }
         compose.waitUntil(5_000) {
@@ -76,6 +82,7 @@ class SettingsControlsTvJourneyTest {
     }
 
     @Test fun backFromDialogBodyMovesFocusToCancelBeforeInvokingIt() {
+        val addCategoryRequester = FocusRequester()
         var cancelled = false
         compose.setContent {
             com.saab.tv.ui.navigation.BackNavigationHost(onUnhandledBack = {}) {
@@ -90,14 +97,18 @@ class SettingsControlsTvJourneyTest {
                         onAddCategory = {},
                         onManageCategories = {},
                         onCancel = { cancelled = true },
-                        onSave = {}
+                        onSave = {},
+                        addCategoryFocusRequester = addCategoryRequester
                     )
                 }
             }
         }
 
         val addCategory = compose.onNodeWithText("Add Category")
-        addCategory.performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.runOnIdle { addCategoryRequester.requestFocus() }
+        compose.waitUntil(5_000) {
+            runCatching { addCategory.assertIsFocused(); true }.getOrDefault(false)
+        }
         addCategory.performKeyInput { pressKey(Key.Back) }
 
         val cancel = compose.onNodeWithText("Cancel")

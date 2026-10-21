@@ -81,7 +81,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", contentRequester)
     }
 
     @Test fun directionalEntryAndSelectionReturnToContent() {
@@ -122,7 +122,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse every route")
+        requestNodeFocus("Browse every route", contentRequester)
 
         compose.onNodeWithText("Browse every route").performKeyInput { pressKey(Key.DirectionLeft) }
         assertNodeFocused("Home")
@@ -424,7 +424,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Complete action")
+        requestNodeFocus("Complete action", contentRequester)
 
         compose.onNodeWithText("Complete action").performKeyInput { pressKey(Key.DirectionCenter) }
         compose.waitForIdle()
@@ -463,7 +463,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Handled direction")
+        requestNodeFocus("Handled direction", contentRequester)
 
         compose.onNodeWithText("Handled direction").performKeyInput { pressKey(Key.DirectionUp) }
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
@@ -491,7 +491,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", contentRequester)
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
         compose.waitForIdle()
 
@@ -516,7 +516,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", contentRequester)
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
         compose.waitForIdle()
 
@@ -554,7 +554,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content")
+        requestNodeFocus("Content", content)
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionLeft) }
         assertNodeFocused("Home")
 
@@ -594,7 +594,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content")
+        requestNodeFocus("Content", content)
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionUp) }
         assertNodeFocused("Home")
 
@@ -626,7 +626,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", contentRequester)
 
         compose.runOnIdle { topNavigationRequesters.getValue(NavDestination.Profile).requestFocus() }
         compose.waitForIdle()
@@ -654,8 +654,8 @@ class NavigationShellFocusTvJourneyTest {
         }
     }
 
-    private fun requestNodeFocus(label: String) {
-        compose.onNodeWithText(label).performSemanticsAction(SemanticsActions.RequestFocus)
+    private fun requestNodeFocus(label: String, requester: FocusRequester) {
+        compose.runOnIdle { requester.requestFocus() }
         assertNodeFocused(label)
     }
 

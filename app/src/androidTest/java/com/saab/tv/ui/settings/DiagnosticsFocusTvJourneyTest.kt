@@ -3,10 +3,10 @@ package com.saab.tv.ui.settings
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -36,13 +36,23 @@ class DiagnosticsFocusTvJourneyTest {
             eventLog.parentFile?.mkdirs()
             eventLog.writeText("${System.currentTimeMillis()}\tFATAL\tApplication\tUncaught Exception\tfixture crash\n")
             assertTrue(AppDiagnostics.report(context).events.any { it.event == "Uncaught Exception" })
+            val refreshRequester = FocusRequester()
             compose.setContent {
                 CompositionLocalProvider(LocalContext provides context) {
-                    MaterialTheme { PlaybackDiagnosticsSettings {} }
+                    MaterialTheme {
+                        PlaybackDiagnosticsSettings(
+                            onGoBack = {},
+                            refreshFocusRequester = refreshRequester
+                        )
+                    }
                 }
             }
             repeat(3) {
-                compose.onNodeWithText("Refresh").performSemanticsAction(SemanticsActions.RequestFocus)
+                compose.runOnIdle { refreshRequester.requestFocus() }
+                compose.waitUntil(5_000) {
+                    runCatching { compose.onNodeWithText("Refresh").assertIsFocused(); true }
+                        .getOrDefault(false)
+                }
                 compose.onNodeWithText("Refresh").performKeyInput { pressKey(Key.DirectionDown) }
                 // The diagnostics events are below the tall, lazy header and are
                 // not composed until the button's Down handler scrolls to them.
