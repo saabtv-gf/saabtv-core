@@ -490,6 +490,12 @@ class WatchlistScreenComposeJourneyTest {
                 type = "movie"
             )
         )
+        // Load the seeded Room projection before composing the journey. The
+        // screen also does this from LaunchedEffect, but waiting on that
+        // lifecycle/Room startup made the first card intermittently miss the
+        // test's visibility window under the full suite.
+        viewModel.setProfileId(81)
+        viewModel.refreshLibrary()
         var rootView: View? = null
         val entry = FocusRequester()
         val drawer = FocusRequester()
