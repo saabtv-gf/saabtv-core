@@ -554,7 +554,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content")
+        requestNodeFocus("Content", content)
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionLeft) }
         assertNodeFocused("Home")
 
@@ -594,7 +594,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content")
+        requestNodeFocus("Content", content)
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionUp) }
         assertNodeFocused("Home")
 
@@ -626,7 +626,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", content)
 
         compose.runOnIdle { topNavigationRequesters.getValue(NavDestination.Profile).requestFocus() }
         compose.waitForIdle()
@@ -654,13 +654,15 @@ class NavigationShellFocusTvJourneyTest {
         }
     }
 
-    private fun requestNodeFocus(label: String) {
-        // Establish the initial focus through semantics so Compose Test
-        // coordinates it with the hosted Android window before D-pad input.
-        compose.onNodeWithText(label)
-            .assertExists()
-            .performSemanticsAction(SemanticsActions.RequestFocus)
-        assertNodeFocused(label)
+    private fun requestNodeFocus(label: String, requester: FocusRequester = contentRequester) {
+        val node = compose.onNodeWithText(label).assertIsDisplayed()
+        // A single semantics request can run before the Android test window has
+        // completed its first focus/layout pass. Retry the attached requester
+        // while waiting so the journey starts from a real focused node.
+        compose.waitUntil(5_000) {
+            runCatching { compose.runOnIdle { requester.requestFocus() } }
+            runCatching { node.assertIsFocused(); true }.getOrDefault(false)
+        }
     }
 
     private fun assertNodeFocused(label: String) {

@@ -7,7 +7,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -50,9 +49,8 @@ class DiagnosticsFocusTvJourneyTest {
             }
             repeat(3) {
                 compose.onNodeWithText("Refresh").assertIsDisplayed()
-                compose.onNodeWithText("Refresh")
-                    .performSemanticsAction(SemanticsActions.RequestFocus)
                 compose.waitUntil(5_000) {
+                    runCatching { compose.runOnIdle { refreshFocusRequester.requestFocus() } }
                     runCatching { compose.onNodeWithText("Refresh").assertIsFocused(); true }
                         .getOrDefault(false)
                 }

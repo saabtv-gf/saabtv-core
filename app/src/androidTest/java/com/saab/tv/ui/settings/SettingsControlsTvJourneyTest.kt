@@ -11,9 +11,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.saab.tv.domain.HubShape
 import com.saab.tv.testfixture.ComposeTestActivity
@@ -63,11 +61,7 @@ class SettingsControlsTvJourneyTest {
         horizontal.performScrollTo()
         val vertical = compose.onNodeWithText("Portrait")
         val square = compose.onNodeWithText("Square")
-        horizontal.performSemanticsAction(SemanticsActions.RequestFocus)
-        compose.waitUntil(5_000) {
-            runCatching { horizontal.assertIsFocused(); true }.getOrDefault(false)
-        }
-        horizontal.assertIsFocused()
+        requestNodeFocus("Landscape", shapeRequester)
         horizontal.performKeyInput { pressKey(Key.DirectionRight) }
         compose.waitUntil(5_000) {
             runCatching { vertical.assertIsFocused(); true }.getOrDefault(false)
@@ -81,7 +75,7 @@ class SettingsControlsTvJourneyTest {
 
         val save = compose.onNodeWithText("Save")
         save.assertIsDisplayed()
-        save.performSemanticsAction(SemanticsActions.RequestFocus)
+        requestNodeFocus("Save", saveRequester)
         save.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertTrue(saved) }
     }
@@ -110,10 +104,7 @@ class SettingsControlsTvJourneyTest {
         }
 
         val addCategory = compose.onNodeWithText("Add Category")
-        addCategory.performSemanticsAction(SemanticsActions.RequestFocus)
-        compose.waitUntil(5_000) {
-            runCatching { addCategory.assertIsFocused(); true }.getOrDefault(false)
-        }
+        requestNodeFocus("Add Category", addCategoryRequester)
         addCategory.performKeyInput { pressKey(Key.Back) }
 
         val cancel = compose.onNodeWithText("Cancel")
@@ -122,5 +113,13 @@ class SettingsControlsTvJourneyTest {
         }
         cancel.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertTrue(cancelled) }
+    }
+
+    private fun requestNodeFocus(label: String, requester: FocusRequester) {
+        val node = compose.onNodeWithText(label).assertIsDisplayed()
+        compose.waitUntil(5_000) {
+            runCatching { compose.runOnIdle { requester.requestFocus() } }
+            runCatching { node.assertIsFocused(); true }.getOrDefault(false)
+        }
     }
 }
