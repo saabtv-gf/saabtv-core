@@ -554,7 +554,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content", content)
+        requestNodeFocus("Content")
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionLeft) }
         assertNodeFocused("Home")
 
@@ -594,7 +594,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content", content)
+        requestNodeFocus("Content")
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionUp) }
         assertNodeFocused("Home")
 
@@ -654,12 +654,12 @@ class NavigationShellFocusTvJourneyTest {
         }
     }
 
-    private fun requestNodeFocus(label: String, requester: FocusRequester = contentRequester) {
-        // Request focus through the requester attached to this target. The
-        // semantics action can return false for these TV button nodes even
-        // though they are attached and focusable on the emulator.
-        compose.onNodeWithText(label).assertExists()
-        compose.runOnIdle { requester.requestFocus() }
+    private fun requestNodeFocus(label: String) {
+        // Establish the initial focus through semantics so Compose Test
+        // coordinates it with the hosted Android window before D-pad input.
+        compose.onNodeWithText(label)
+            .assertExists()
+            .performSemanticsAction(SemanticsActions.RequestFocus)
         assertNodeFocused(label)
     }
 

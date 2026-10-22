@@ -11,7 +11,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.saab.tv.domain.HubShape
 import com.saab.tv.testfixture.ComposeTestActivity
@@ -61,7 +63,7 @@ class SettingsControlsTvJourneyTest {
         horizontal.performScrollTo()
         val vertical = compose.onNodeWithText("Portrait")
         val square = compose.onNodeWithText("Square")
-        compose.runOnIdle { shapeRequester.requestFocus() }
+        horizontal.performSemanticsAction(SemanticsActions.RequestFocus)
         compose.waitUntil(5_000) {
             runCatching { horizontal.assertIsFocused(); true }.getOrDefault(false)
         }
@@ -79,7 +81,7 @@ class SettingsControlsTvJourneyTest {
 
         val save = compose.onNodeWithText("Save")
         save.assertIsDisplayed()
-        compose.runOnIdle { saveRequester.requestFocus() }
+        save.performSemanticsAction(SemanticsActions.RequestFocus)
         save.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertTrue(saved) }
     }
@@ -108,7 +110,7 @@ class SettingsControlsTvJourneyTest {
         }
 
         val addCategory = compose.onNodeWithText("Add Category")
-        compose.runOnIdle { addCategoryRequester.requestFocus() }
+        addCategory.performSemanticsAction(SemanticsActions.RequestFocus)
         compose.waitUntil(5_000) {
             runCatching { addCategory.assertIsFocused(); true }.getOrDefault(false)
         }
