@@ -215,7 +215,12 @@ class DashboardEditorComposeInteractionTest {
         compose.onNodeWithText("Landscape").assertExists()
         compose.onNodeWithText("Save").performClick()
 
-        awaitAppState { vm.hubRows.value.any { it.hub.title == "Weekend Picks" } }
+        awaitAppState {
+            vm.hubRows.value.any { row ->
+                row.hub.title == "Weekend Picks" &&
+                    row.items.any { it.configUniqueId == config.uniqueId }
+            }
+        }
         val savedHub = vm.hubRows.value.first { it.hub.title == "Weekend Picks" }
         assertEquals("HORIZONTAL", savedHub.hub.shape)
         assertEquals(listOf(config.uniqueId), savedHub.items.map { it.configUniqueId })
