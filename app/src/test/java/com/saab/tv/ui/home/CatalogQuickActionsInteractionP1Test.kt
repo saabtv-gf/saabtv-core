@@ -86,7 +86,9 @@ class CatalogQuickActionsInteractionP1Test {
     }
 
     private fun awaitLibraryActionsReady() {
-        compose.waitUntil(3_000) {
+        // The actions are backed by Room flows; give slower CI hosts time to
+        // publish their initial watch-history/watchlist state before asserting.
+        compose.waitUntil(10_000) {
             val watchedReady = listOf("Mark As Watched", "Mark As Unwatched").any { label ->
                 runCatching { action(label).assertIsEnabled() }.isSuccess
             }

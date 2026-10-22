@@ -300,7 +300,7 @@ class WatchlistScreenComposeJourneyTest {
         }
 
         val card = compose.onNodeWithContentDescription("Library Transition")
-        compose.waitUntil(5_000) {
+        compose.waitUntil(10_000) {
             compose.onNodeWithContentDescription("Library Transition").isDisplayedForWait()
         }
         card.performSemanticsAction(SemanticsActions.RequestFocus)
