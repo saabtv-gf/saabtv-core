@@ -90,9 +90,9 @@ jobs:
           SAABTV_RELEASE_KEY_ALIAS: ${{ secrets.SAABTV_RELEASE_KEY_ALIAS }}
           SAABTV_RELEASE_KEY_PASSWORD: ${{ secrets.SAABTV_RELEASE_KEY_PASSWORD }}
         with:
-          # The macOS Intel runner clamps the emulator to one vCPU. Use a small
-          # AOSP image with the TV hardware profile so system services do not
-          # starve instrumentation during startup.
+          # The TV profile's config.ini can still boot with one guest CPU on the
+          # macOS runner; force the same four cores in both the AVD and launch
+          # options so instrumentation startup is not killed by an ANR.
           # Android 14's userdebug BatteryStatsHistory can crash system_server
           # when its debug trace property write fails. Android 15 handles that
           # failure without killing the emulator's system process.
@@ -100,9 +100,9 @@ jobs:
           target: default
           arch: x86_64
           profile: tv_1080p
-          cores: 2
+          cores: 4
           ram-size: 3072M
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none -cores 4
           disable-animations: true
           emulator-boot-timeout: 900
           # The runner executes script lines in separate shells; delegate to a
