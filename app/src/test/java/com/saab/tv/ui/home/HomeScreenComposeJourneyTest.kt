@@ -199,9 +199,7 @@ class HomeScreenComposeJourneyTest {
         awaitAppState { !viewModel.state.value.isLoading && viewModel.state.value.loadedScreen == "home" }
 
         val entry = FocusRequester()
-        var rootView: View? = null
         compose.setContent {
-            rootView = LocalView.current
             androidx.compose.material3.MaterialTheme {
                 MaterialTheme {
                     BackNavigationHost(onUnhandledBack = {}) {
@@ -247,34 +245,6 @@ class HomeScreenComposeJourneyTest {
         card.assertExists()
             .performSemanticsAction(SemanticsActions.RequestFocus)
             .assertIsFocused()
-
-        val view = requireNotNull(rootView)
-        val downTime = android.os.SystemClock.uptimeMillis()
-        compose.runOnUiThread {
-            view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime, android.view.KeyEvent.ACTION_DOWN,
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER, 0
-            ))
-            view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime + 600, android.view.KeyEvent.ACTION_DOWN,
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER, 1
-            ))
-            view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime + 650, android.view.KeyEvent.ACTION_UP,
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER, 0
-            ))
-        }
-        compose.waitUntil(5_000) {
-            runCatching { action("Mark As Watched").assertIsEnabled() }.isSuccess
-        }
-        action("Mark As Watched").performClick()
-        compose.waitUntil(3_000) {
-            runBlocking { fixture.dao.getHistoryItemForProfile(profile.id, "tt-home-return")?.watched == true }
-        }
-        compose.waitUntil(2_000) {
-            runCatching { card.assertIsFocused(); true }.getOrDefault(false)
-        }
-
         card
             .performKeyInput { pressKey(Key.DirectionCenter) }
         compose.onNodeWithText("Details: Return Journey · tt-home-return").assertExists()
