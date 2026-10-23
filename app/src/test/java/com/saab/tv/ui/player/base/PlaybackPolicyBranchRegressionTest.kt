@@ -103,7 +103,10 @@ class PlaybackPolicyBranchRegressionTest {
                         val low = lowRam || memory <= 256
                         val high4k = !low && memory >= 768 && height == 2160
                         assertEquals(if (low) 48 else if (high4k) 96 else 72, config.targetBufferBytes / (1024 * 1024))
-                        assertEquals(if (torrent) 500 else 250, config.bufferForPlaybackMs)
+                        assertEquals(
+                            if (low) { if (torrent) 1_500 else 1_000 } else { if (torrent) 500 else 250 },
+                            config.bufferForPlaybackMs
+                        )
                         assertEquals(if (low) 1500 else if (torrent) 3000 else 5000, config.backBufferMs)
                         assertEquals(if (low) 2000 else if (torrent) 3000 else 2500, config.bufferForPlaybackAfterRebufferMs)
                         assertEquals(if (low) { if (torrent) 6000 else 8000 } else { if (torrent) 8000 else 10000 }, config.minBufferMs)

@@ -317,7 +317,7 @@ class TmdbMetadataService @Inject constructor(
             val collectionName = details?.belongsToCollection?.name
 
             // Don't cache empty results
-            if (genres.isEmpty() && description == null && backdrop == null && logo == null &&
+            if (localizedTitle == null && genres.isEmpty() && description == null && backdrop == null && logo == null &&
                 poster == null && castMembers.isEmpty() && releaseInfo == null && rating == null &&
                 runtime == null && productionCompanies.isEmpty() && networks.isEmpty()
             ) {
