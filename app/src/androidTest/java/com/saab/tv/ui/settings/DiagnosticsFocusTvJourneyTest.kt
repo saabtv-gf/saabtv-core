@@ -7,7 +7,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -50,12 +49,9 @@ class DiagnosticsFocusTvJourneyTest {
             }
             repeat(3) {
                 val refresh = compose.onNodeWithText("Refresh").assertIsDisplayed()
+                compose.runOnIdle { refreshFocusRequester.requestFocus() }
                 compose.waitUntil(5_000) {
-                    runCatching {
-                        refresh.performSemanticsAction(SemanticsActions.RequestFocus)
-                        refresh.assertIsFocused()
-                        true
-                    }.getOrDefault(false)
+                    runCatching { refresh.assertIsFocused(); true }.getOrDefault(false)
                 }
                 compose.onNodeWithText("Refresh").performKeyInput { pressKey(Key.DirectionDown) }
                 // The diagnostics events are below the tall, lazy header and are

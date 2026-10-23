@@ -82,7 +82,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", contentRequester)
     }
 
     @Test fun directionalEntryAndSelectionReturnToContent() {
@@ -123,7 +123,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse every route")
+        requestNodeFocus("Browse every route", contentRequester)
 
         compose.onNodeWithText("Browse every route").performKeyInput { pressKey(Key.DirectionLeft) }
         assertNodeFocused("Home")
@@ -425,7 +425,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Complete action")
+        requestNodeFocus("Complete action", contentRequester)
 
         compose.onNodeWithText("Complete action").performKeyInput { pressKey(Key.DirectionCenter) }
         compose.waitForIdle()
@@ -464,7 +464,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Handled direction")
+        requestNodeFocus("Handled direction", contentRequester)
 
         compose.onNodeWithText("Handled direction").performKeyInput { pressKey(Key.DirectionUp) }
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
@@ -492,7 +492,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", contentRequester)
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
         compose.waitForIdle()
 
@@ -517,7 +517,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", contentRequester)
         compose.runOnIdle { requesters.getValue(NavDestination.Home).requestFocus() }
         compose.waitForIdle()
 
@@ -555,7 +555,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content")
+        requestNodeFocus("Content", content)
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionLeft) }
         assertNodeFocused("Home")
 
@@ -595,7 +595,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Content")
+        requestNodeFocus("Content", content)
         compose.onNodeWithText("Content").performKeyInput { pressKey(Key.DirectionUp) }
         assertNodeFocused("Home")
 
@@ -627,7 +627,7 @@ class NavigationShellFocusTvJourneyTest {
                 }
             }
         }
-        requestNodeFocus("Browse content")
+        requestNodeFocus("Browse content", content)
 
         compose.runOnIdle { topNavigationRequesters.getValue(NavDestination.Profile).requestFocus() }
         compose.waitForIdle()
@@ -655,17 +655,14 @@ class NavigationShellFocusTvJourneyTest {
         }
     }
 
-    private fun requestNodeFocus(label: String) {
+    private fun requestNodeFocus(label: String, requester: FocusRequester) {
         val node = compose.onNodeWithText(label).assertIsDisplayed()
-        // Request focus through the node's semantics action, as the remote's
-        // focus system sees it. Direct FocusRequester calls from the test
-        // thread can be rejected while the Android test window is attaching.
+        // A Material button's semantics RequestFocus action is not reliable on
+        // the Android TV device runner. Request focus through its attached
+        // requester on the UI thread, then verify D-pad behavior semantically.
+        compose.runOnIdle { requester.requestFocus() }
         compose.waitUntil(5_000) {
-            runCatching {
-                node.performSemanticsAction(SemanticsActions.RequestFocus)
-                node.assertIsFocused()
-                true
-            }.getOrDefault(false)
+            runCatching { node.assertIsFocused(); true }.getOrDefault(false)
         }
     }
 

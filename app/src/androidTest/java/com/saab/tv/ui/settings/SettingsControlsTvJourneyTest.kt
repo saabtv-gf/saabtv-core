@@ -10,10 +10,8 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.pressKey
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.saab.tv.domain.HubShape
 import com.saab.tv.testfixture.ComposeTestActivity
@@ -63,7 +61,7 @@ class SettingsControlsTvJourneyTest {
         horizontal.performScrollTo()
         val vertical = compose.onNodeWithText("Portrait")
         val square = compose.onNodeWithText("Square")
-        requestNodeFocus("Landscape")
+        requestNodeFocus("Landscape", shapeRequester)
         horizontal.performKeyInput { pressKey(Key.DirectionRight) }
         compose.waitUntil(5_000) {
             runCatching { vertical.assertIsFocused(); true }.getOrDefault(false)
@@ -77,7 +75,7 @@ class SettingsControlsTvJourneyTest {
 
         val save = compose.onNodeWithText("Save")
         save.assertIsDisplayed()
-        requestNodeFocus("Save")
+        requestNodeFocus("Save", saveRequester)
         save.performKeyInput { pressKey(Key.DirectionCenter) }
         compose.runOnIdle { assertTrue(saved) }
     }
@@ -107,7 +105,7 @@ class SettingsControlsTvJourneyTest {
 
         val addCategory = compose.onNodeWithText("Add Category")
         addCategory.performScrollTo().assertIsDisplayed()
-        requestNodeFocus("Add Category")
+        requestNodeFocus("Add Category", addCategoryRequester)
         addCategory.performKeyInput { pressKey(Key.Back) }
 
         val cancel = compose.onNodeWithText("Cancel")
@@ -118,14 +116,11 @@ class SettingsControlsTvJourneyTest {
         compose.runOnIdle { assertTrue(cancelled) }
     }
 
-    private fun requestNodeFocus(label: String) {
+    private fun requestNodeFocus(label: String, requester: FocusRequester) {
         val node = compose.onNodeWithText(label).assertIsDisplayed()
+        compose.runOnIdle { requester.requestFocus() }
         compose.waitUntil(5_000) {
-            runCatching {
-                node.performSemanticsAction(SemanticsActions.RequestFocus)
-                node.assertIsFocused()
-                true
-            }.getOrDefault(false)
+            runCatching { node.assertIsFocused(); true }.getOrDefault(false)
         }
     }
 }
