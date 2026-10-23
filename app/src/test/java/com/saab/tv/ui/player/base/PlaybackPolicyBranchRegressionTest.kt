@@ -109,8 +109,8 @@ class PlaybackPolicyBranchRegressionTest {
                         )
                         assertEquals(if (low) 1500 else if (torrent) 3000 else 5000, config.backBufferMs)
                         assertEquals(if (low) 7_000 else if (torrent) 3_000 else 2_500, config.bufferForPlaybackAfterRebufferMs)
-                        assertEquals(if (low) { if (torrent) 6000 else 8000 } else { if (torrent) 8000 else 10000 }, config.minBufferMs)
-                        assertEquals(if (low) { if (torrent) 20000 else 24000 } else if (high4k) 42000 else if (torrent) 30000 else 35000, config.maxBufferMs)
+                        assertEquals(if (low) { if (torrent) 12_000 else 16_000 } else { if (torrent) 8_000 else 10_000 }, config.minBufferMs)
+                        assertEquals(if (low) { if (torrent) 35_000 else 45_000 } else if (high4k) 42_000 else if (torrent) 30_000 else 35_000, config.maxBufferMs)
                     }
                 }
             }
