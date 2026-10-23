@@ -157,6 +157,10 @@ and player lifecycle paths.
 
 ## Commands
 
+`unitRegressionCoverage` executes the JVM suite and merges any Android instrumentation
+coverage already present, but it does not schedule or start a device. Emulator tests run
+only through the explicit device-test workflow path.
+
 ```sh
 ./gradlew :app:unitRegressionCoverage :app:verifyCorePolicyRegressionCoverage
 ./gradlew :app:verify90PercentUnitLineCoverage

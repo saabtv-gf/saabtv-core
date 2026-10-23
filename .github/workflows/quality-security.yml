@@ -25,6 +25,8 @@ jobs:
           node-version: "24"
       - name: Test phone companion pages
         run: node --test web/remote/test/*.test.mjs
+      - name: Verify release build excludes device tests
+        run: bash .github/scripts/verify-release-no-device-tests.sh
       - name: Unit Tests And Release Lint
         run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:lintRelease
       - name: Retain Unit And Lint Reports

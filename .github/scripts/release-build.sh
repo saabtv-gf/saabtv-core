@@ -2,6 +2,7 @@
 set -euo pipefail
 
 mkdir -p app/build/ci-diagnostics
+bash .github/scripts/verify-release-no-device-tests.sh
 ./gradlew --no-daemon \
   :app:unitRegressionCoverage \
   :app:verifyCorePolicyRegressionCoverage \

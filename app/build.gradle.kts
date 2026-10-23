@@ -74,7 +74,9 @@ val regressionExecution = files(
 )
 
 tasks.register<JacocoReport>("unitRegressionCoverage") {
-    dependsOn("testDebugUnitTest", "createDebugAndroidTestCoverageReport")
+    // Release verification must stay device-free. If instrumentation was run separately,
+    // its existing .ec data is still merged below without scheduling an emulator task.
+    dependsOn("testDebugUnitTest")
     classDirectories.setFrom(regressionClasses)
     sourceDirectories.setFrom(files("src/main/java", "src/main/kotlin"))
     executionData.setFrom(regressionExecution)
@@ -345,8 +347,8 @@ android {
         applicationId = "com.saab.tv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 146
-        versionName = "0.1.142-beta"
+        versionCode = 147
+        versionName = "0.1.143-beta"
 
         // GitHub repository for auto-update system
         buildConfigField("String", "GITHUB_OWNER", "\"saabtv-gf\"")
