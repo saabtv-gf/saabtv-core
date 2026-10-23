@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.model.ThemeEntity
 import com.saab.tv.testing.OfflineAppFixture
+import com.saab.tv.testing.awaitAppState
 import com.saab.tv.ui.theme.DefaultThemes
 import com.saab.tv.ui.theme.ThemeManager
 import kotlinx.coroutines.cancel
@@ -42,9 +43,12 @@ class ThemeScreenComposeJourneyTest {
         app = OfflineAppFixture(context)
         profile = ProfileEntity(id = 72, name = "Themes", themeId = "void")
         app.dao.insertProfile(profile)
-        DefaultThemes.ALL.forEach { app.dao.insertTheme(it) }
         themeManager = ThemeManager(app.dao, app.userStateCommands)
-        themeManager.setCurrentProfile(profile.id, profile.themeId)
+        // ThemeManager seeds its built-ins asynchronously. Let the Room work finish before
+        // the Compose rule starts so teardown cannot close the in-memory DB mid-query.
+        awaitAppState {
+            runBlocking { DefaultThemes.ALL.all { app.dao.getThemeById(it.id) != null } }
+        }
     }
 
     @After fun tearDown() {
