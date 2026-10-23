@@ -37,6 +37,7 @@ import com.saab.tv.ui.navigation.toCatalogDetailsSelection
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -181,13 +182,17 @@ class HomeScreenComposeJourneyTest {
         markWatched.performSemanticsAction(SemanticsActions.RequestFocus)
         markWatched.assertIsFocused()
 
-        viewModel.markTitleWatched(profile.id, item)
+        val watchedMutation = viewModel.markTitleWatched(profile.id, item)
 
         compose.waitUntil(3_000) {
             runCatching {
                 action("Mark As Unwatched").assertIsFocused()
                 true
             }.getOrDefault(false)
+        }
+        runBlocking {
+            withTimeout(5_000) { watchedMutation.join() }
+            assertTrue(fixture.dao.getHistoryItemForProfile(profile.id, item.id)?.watched == true)
         }
     }
 
