@@ -34,7 +34,8 @@ import com.saab.tv.ui.navigation.NavDestination
 import com.saab.tv.ui.navigation.NavDrawer
 import com.saab.tv.ui.navigation.NavigationFocusHandoffHost
 import com.saab.tv.ui.navigation.toCatalogDetailsSelection
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -76,8 +77,8 @@ class HomeScreenComposeJourneyTest {
         viewModel = fixture.home()
     }
 
-    @After fun tearDown() {
-        viewModel.viewModelScope.cancel()
+    @After fun tearDown() = runBlocking {
+        viewModel.viewModelScope.coroutineContext[Job]?.cancelAndJoin()
         fixture.close()
     }
 
