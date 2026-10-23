@@ -48,11 +48,13 @@ class DiagnosticsFocusTvJourneyTest {
                 }
             }
             repeat(3) {
-                compose.onNodeWithText("Refresh").assertIsDisplayed()
+                val refresh = compose.onNodeWithText("Refresh").assertIsDisplayed()
                 compose.waitUntil(5_000) {
-                    runCatching { compose.runOnIdle { refreshFocusRequester.requestFocus() } }
-                    runCatching { compose.onNodeWithText("Refresh").assertIsFocused(); true }
-                        .getOrDefault(false)
+                    runCatching {
+                        refresh.performSemanticsAction(SemanticsActions.RequestFocus)
+                        refresh.assertIsFocused()
+                        true
+                    }.getOrDefault(false)
                 }
                 compose.onNodeWithText("Refresh").performKeyInput { pressKey(Key.DirectionDown) }
                 // The diagnostics events are below the tall, lazy header and are

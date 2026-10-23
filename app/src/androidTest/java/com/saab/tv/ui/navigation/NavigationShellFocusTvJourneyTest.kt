@@ -655,14 +655,17 @@ class NavigationShellFocusTvJourneyTest {
         }
     }
 
-    private fun requestNodeFocus(label: String, requester: FocusRequester = contentRequester) {
+    private fun requestNodeFocus(label: String) {
         val node = compose.onNodeWithText(label).assertIsDisplayed()
-        // A single semantics request can run before the Android test window has
-        // completed its first focus/layout pass. Retry the attached requester
-        // while waiting so the journey starts from a real focused node.
+        // Request focus through the node's semantics action, as the remote's
+        // focus system sees it. Direct FocusRequester calls from the test
+        // thread can be rejected while the Android test window is attaching.
         compose.waitUntil(5_000) {
-            runCatching { compose.runOnIdle { requester.requestFocus() } }
-            runCatching { node.assertIsFocused(); true }.getOrDefault(false)
+            runCatching {
+                node.performSemanticsAction(SemanticsActions.RequestFocus)
+                node.assertIsFocused()
+                true
+            }.getOrDefault(false)
         }
     }
 
