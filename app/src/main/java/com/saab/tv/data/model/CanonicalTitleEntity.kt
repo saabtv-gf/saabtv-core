@@ -71,7 +71,14 @@ data class CanonicalTitleEntity(
     /** Bounded canonical person-credit projection; image bytes remain in Coil's cache. */
     val creditsJson: String? = null,
     val creditsSource: String? = null,
-    val creditsObservedAtMillis: Long = 0
+    val creditsObservedAtMillis: Long = 0,
+    /** Full movie release windows, fetched with the TMDB details response. */
+    val digitalReleaseDate: String? = null,
+    val digitalReleaseRegion: String? = null,
+    val physicalReleaseDate: String? = null,
+    val physicalReleaseRegion: String? = null,
+    val releaseAvailabilitySource: String? = null,
+    val releaseAvailabilityObservedAtMillis: Long = 0
 )
 
 /** Provider aliases are cache metadata, not account data and never enter cloud snapshots. */

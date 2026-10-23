@@ -676,6 +676,8 @@
     <string name="studio_rail_recent">ಇತ್ತೀಚಿನ</string>
     <string name="details_more_episodes">ಇನ್ನಷ್ಟು ಸಂಚಿಕೆಗಳು</string>
     <string name="details_more_like_this">ಇದೇ ರೀತಿಯ ಇನ್ನಷ್ಟು</string>
+    <string name="details_digital_release">ಡಿಜಿಟಲ್ / OTT</string>
+    <string name="details_dvd_release">DVD / ಭೌತಿಕ ಬಿಡುಗಡೆ</string>
     <string name="details_load_error_title">ಶೀರ್ಷಿಕೆಯ ವಿವರಗಳು ಲಭ್ಯವಿಲ್ಲ</string>
     <string name="details_load_error_message">ಈ ಶೀರ್ಷಿಕೆಯನ್ನು ಲೋಡ್ ಮಾಡಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ. ನಿಮ್ಮ ಸಂಪರ್ಕವನ್ನು ಪರಿಶೀಲಿಸಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.</string>
     <string name="details_cast_and_crew">ನಟರು ಮತ್ತು ಸಿಬ್ಬಂದಿ</string>

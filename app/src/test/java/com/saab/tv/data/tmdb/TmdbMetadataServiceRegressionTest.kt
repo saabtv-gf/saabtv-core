@@ -53,8 +53,16 @@ class TmdbMetadataServiceRegressionTest {
                 TmdbImage("/english.png", "en", null), TmdbImage("/localized.png", "hi", "IN")
             )),
             "getMovieReleaseDates" to TmdbMovieReleaseDatesResponse(listOf(
-                TmdbMovieReleaseDateCountry("US", listOf(TmdbMovieReleaseDateItem("PG-13"))),
-                TmdbMovieReleaseDateCountry("IN", listOf(TmdbMovieReleaseDateItem("U/A 16+")))
+                TmdbMovieReleaseDateCountry("US", listOf(
+                    TmdbMovieReleaseDateItem(certification = "PG-13"),
+                    TmdbMovieReleaseDateItem(releaseDate = "2024-05-02T00:00:00.000Z", type = 4),
+                    TmdbMovieReleaseDateItem(releaseDate = "2024-06-01T00:00:00.000Z", type = 5)
+                )),
+                TmdbMovieReleaseDateCountry("IN", listOf(
+                    TmdbMovieReleaseDateItem(certification = "U/A 16+"),
+                    TmdbMovieReleaseDateItem(releaseDate = "2024-05-10T00:00:00.000Z", type = 4),
+                    TmdbMovieReleaseDateItem(releaseDate = "2024-05-20T00:00:00.000Z", type = 5)
+                ))
             ))
         ))
 
@@ -65,6 +73,10 @@ class TmdbMetadataServiceRegressionTest {
         assertEquals(listOf(1, 2), result.genreIds)
         assertEquals("U/A 16+", result.ageRating)
         assertEquals("IN", result.ageRatingRegion)
+        assertEquals("2024-05-10", result.digitalReleaseDate)
+        assertEquals("IN", result.digitalReleaseRegion)
+        assertEquals("2024-05-20", result.physicalReleaseDate)
+        assertEquals("IN", result.physicalReleaseRegion)
         assertEquals("https://image.tmdb.org/t/p/w500/localized.png", result.logo)
         assertEquals("https://image.tmdb.org/t/p/w500/poster.jpg", result.poster)
         assertEquals("https://image.tmdb.org/t/p/w1280/backdrop.jpg", result.backdrop)
@@ -125,6 +137,39 @@ class TmdbMetadataServiceRegressionTest {
         assertTrue("fresh durable detail hit must not make network requests", restartedStub.calls.isEmpty())
     }
 
+    @Test fun fullDetailsRefetchOlderCacheRowsWithoutReleaseAvailabilityMarker() = runBlocking {
+        val identity = requireNotNull(ContentIdentity.tmdb(ContentKind.MOVIE, 92))
+        val now = System.currentTimeMillis()
+        val store = object : CanonicalTitleStore {
+            var row: CanonicalTitleEntity? = CanonicalTitleEntity(
+                identityKey = identity.stableKey,
+                locale = "en",
+                kind = "movie",
+                lastFetchedAtMillis = now,
+                creditsJson = "[]",
+                creditsSource = "TMDB",
+                creditsObservedAtMillis = now
+            )
+            override suspend fun getTitle(identity: ContentIdentity, locale: String) = row
+            override suspend fun putTitle(title: CanonicalTitleEntity) { row = title }
+        }
+        val stub = ApiStub(mapOf(
+            "getMovieDetails" to TmdbDetailsResponse(92, title = "Updated detail"),
+            "getMovieCredits" to TmdbCreditsResponse(),
+            "getMovieImages" to TmdbImagesResponse(),
+            "getMovieReleaseDates" to TmdbMovieReleaseDatesResponse(emptyList())
+        ))
+
+        val result = TmdbMetadataService(
+            stub.api,
+            TmdbService(RuntimeEnvironment.getApplication(), stub.api),
+            store
+        ).fetchEnrichment("92", "movie")
+
+        assertEquals("Updated detail", result?.localizedTitle)
+        assertTrue("pre-release-metadata cache rows must be refreshed after upgrade", stub.calls.isNotEmpty())
+    }
+
     @Test fun movieWithoutDirectorFallsBackToWriterCredits() = runBlocking {
         val stub = ApiStub(mapOf(
             "getMovieDetails" to TmdbDetailsResponse(10, title = "Film", overview = "Overview"),
@@ -139,6 +184,28 @@ class TmdbMetadataServiceRegressionTest {
 
         assertTrue(result.directorMembers.isEmpty())
         assertEquals("Screenwriter", result.writerMembers.single().name)
+    }
+
+    @Test fun movieReleaseWindowSelectionIgnoresInvalidDatesAndDoesNotInventMissingReleaseTypes() = runBlocking {
+        val stub = ApiStub(mapOf(
+            "getMovieDetails" to TmdbDetailsResponse(11, title = "Film"),
+            "getMovieCredits" to TmdbCreditsResponse(),
+            "getMovieImages" to TmdbImagesResponse(),
+            "getMovieReleaseDates" to TmdbMovieReleaseDatesResponse(listOf(
+                TmdbMovieReleaseDateCountry("IN", listOf(
+                    TmdbMovieReleaseDateItem(releaseDate = "", type = 4),
+                    TmdbMovieReleaseDateItem(releaseDate = "2024-02-30T00:00:00.000Z", type = 4),
+                    TmdbMovieReleaseDateItem(releaseDate = "2024-05-10T00:00:00.000Z", type = 3)
+                ))
+            ))
+        ))
+
+        val result = service(stub).fetchEnrichment("11", "movie", "hi-IN")!!
+
+        assertNull(result.digitalReleaseDate)
+        assertNull(result.digitalReleaseRegion)
+        assertNull(result.physicalReleaseDate)
+        assertNull(result.physicalReleaseRegion)
     }
 
     @Test fun homeCardEnrichmentUsesOneEndpointAndCachesTheLightweightResult() = runBlocking {

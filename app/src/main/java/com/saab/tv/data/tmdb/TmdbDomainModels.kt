@@ -27,7 +27,11 @@ data class TmdbEnrichment(
     val countries: List<String>?,
     val language: String?,
     val collectionId: Int?,
-    val collectionName: String?
+    val collectionName: String?,
+    val digitalReleaseDate: String? = null,
+    val digitalReleaseRegion: String? = null,
+    val physicalReleaseDate: String? = null,
+    val physicalReleaseRegion: String? = null
 )
 
 /**

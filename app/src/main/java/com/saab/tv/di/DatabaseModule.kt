@@ -287,6 +287,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_63_64)
             .addMigrations(MIGRATION_64_65)
             .addMigrations(MIGRATION_65_66)
+            .addMigrations(MIGRATION_66_67)
             .build()
     }
 
@@ -646,6 +647,18 @@ internal val MIGRATION_65_66 = object : Migration(65, 66) {
             "ALTER TABLE profiles ADD COLUMN homeTmdbRails TEXT NOT NULL " +
                 "DEFAULT 'tmdb-top-suggestions,tmdb-favorite-genres,tmdb-new-for-you,tmdb-popular-in-taste'"
         )
+    }
+}
+
+/** Cache digital/physical release windows alongside full TMDB details. */
+internal val MIGRATION_66_67 = object : Migration(66, 67) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE canonical_titles ADD COLUMN digitalReleaseDate TEXT")
+        db.execSQL("ALTER TABLE canonical_titles ADD COLUMN digitalReleaseRegion TEXT")
+        db.execSQL("ALTER TABLE canonical_titles ADD COLUMN physicalReleaseDate TEXT")
+        db.execSQL("ALTER TABLE canonical_titles ADD COLUMN physicalReleaseRegion TEXT")
+        db.execSQL("ALTER TABLE canonical_titles ADD COLUMN releaseAvailabilitySource TEXT")
+        db.execSQL("ALTER TABLE canonical_titles ADD COLUMN releaseAvailabilityObservedAtMillis INTEGER NOT NULL DEFAULT 0")
     }
 }
 

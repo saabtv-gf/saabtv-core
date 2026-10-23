@@ -52,7 +52,9 @@ class CanonicalHomeMetadataTest {
             castMembers = listOf(TmdbCastInfo("Actor", "Lead", "https://art/actor", 9)),
             directorMembers = listOf(TmdbCastInfo("Director", "Director", null, 10)),
             writerMembers = listOf(TmdbCastInfo("Writer", "Writer", null, 11)),
-            ageRating = "U/A 16+", ageRatingRegion = "IN"
+            ageRating = "U/A 16+", ageRatingRegion = "IN",
+            digitalReleaseDate = "2025-03-01", digitalReleaseRegion = "IN",
+            physicalReleaseDate = "2025-04-01", physicalReleaseRegion = "GB"
         )
 
         val row = CanonicalHomeMetadata.encode(identity, "en-IN", details, 5_000, true, includeDetails = true)
@@ -63,6 +65,10 @@ class CanonicalHomeMetadataTest {
         assertEquals(5_000L, row.creditsObservedAtMillis)
         assertEquals("U/A 16+", cached.ageRating)
         assertEquals("IN", cached.ageRatingRegion)
+        assertEquals("2025-03-01", cached.digitalReleaseDate)
+        assertEquals("IN", cached.digitalReleaseRegion)
+        assertEquals("2025-04-01", cached.physicalReleaseDate)
+        assertEquals("GB", cached.physicalReleaseRegion)
         assertEquals(details.castMembers, cached.castMembers)
         assertEquals(details.directorMembers, cached.directorMembers)
         assertEquals(details.writerMembers, cached.writerMembers)
@@ -75,6 +81,8 @@ class CanonicalHomeMetadataTest {
         assertNull(row.creditsSource)
         assertEquals(0L, row.creditsObservedAtMillis)
         assertNull(CanonicalHomeMetadata.decode(row).ageRating)
+        assertNull(CanonicalHomeMetadata.decode(row).digitalReleaseDate)
+        assertNull(CanonicalHomeMetadata.decode(row).physicalReleaseDate)
     }
 
     @Test fun fullDetailsRejectCreditsThatExceedTheDurableCacheBound() {
@@ -94,7 +102,11 @@ class CanonicalHomeMetadataTest {
             projection().copy(
                 releaseInfo = "2024",
                 ageRating = "U/A 13+",
-                ageRatingRegion = "IN"
+                ageRatingRegion = "IN",
+                digitalReleaseDate = "2024-02-01",
+                digitalReleaseRegion = "IN",
+                physicalReleaseDate = "2024-03-01",
+                physicalReleaseRegion = "IN"
             ),
             5_000,
             false,
@@ -114,7 +126,12 @@ class CanonicalHomeMetadataTest {
             ageRating = "U/A 13+",
             ageRatingRegion = "IN",
             ageRatingSource = "TMDB",
-            ageRatingObservedAtMillis = 0
+            ageRatingObservedAtMillis = 0,
+            digitalReleaseDate = "2024-02-01",
+            digitalReleaseRegion = "IN",
+            physicalReleaseDate = "2024-03-01",
+            physicalReleaseRegion = "IN",
+            releaseAvailabilitySource = "CINEMETA"
         ))
         assertTrue(foreignOrStale.genres.isEmpty())
         assertTrue(foreignOrStale.genreIds.isEmpty())
@@ -123,6 +140,10 @@ class CanonicalHomeMetadataTest {
         assertNull(foreignOrStale.countries)
         assertNull(foreignOrStale.ageRating)
         assertNull(foreignOrStale.ageRatingRegion)
+        assertNull(foreignOrStale.digitalReleaseDate)
+        assertNull(foreignOrStale.digitalReleaseRegion)
+        assertNull(foreignOrStale.physicalReleaseDate)
+        assertNull(foreignOrStale.physicalReleaseRegion)
     }
 
     @Test fun detailsWithoutRatingDoesNotClaimAnAgeRatingAndMissingCreditPayloadIsRejected() {

@@ -19,6 +19,7 @@ import com.saab.tv.di.MIGRATION_61_62
 import com.saab.tv.di.MIGRATION_62_63
 import com.saab.tv.di.MIGRATION_63_64
 import com.saab.tv.di.MIGRATION_64_65
+import com.saab.tv.di.MIGRATION_66_67
 import com.saab.tv.domain.schema.CanonicalEntityKey
 import org.junit.Rule
 import org.junit.Test
@@ -121,6 +122,28 @@ class DatabaseMigrationTest {
                 check(cursor.getLong(6) == 0L)
                 check(cursor.getLong(7) == 123L)
             }
+        }
+    }
+
+    @Test
+    fun migrate66To67AddsDigitalAndPhysicalReleaseMetadataColumns() {
+        val database = helper.createDatabase(TEST_DATABASE, 66)
+        try {
+            MIGRATION_66_67.migrate(database)
+
+            database.query(
+                "SELECT digitalReleaseDate, digitalReleaseRegion, physicalReleaseDate, " +
+                    "physicalReleaseRegion, releaseAvailabilitySource, " +
+                    "releaseAvailabilityObservedAtMillis FROM canonical_titles LIMIT 0"
+            ).use { cursor ->
+                check(cursor.columnNames.contentEquals(arrayOf(
+                    "digitalReleaseDate", "digitalReleaseRegion", "physicalReleaseDate",
+                    "physicalReleaseRegion", "releaseAvailabilitySource",
+                    "releaseAvailabilityObservedAtMillis"
+                )))
+            }
+        } finally {
+            database.close()
         }
     }
 

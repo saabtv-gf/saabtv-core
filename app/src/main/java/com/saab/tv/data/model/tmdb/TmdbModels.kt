@@ -148,7 +148,10 @@ data class TmdbMovieReleaseDateCountry(
 )
 
 data class TmdbMovieReleaseDateItem(
-    @SerializedName("certification") val certification: String? = null
+    @SerializedName("certification") val certification: String? = null,
+    @SerializedName("release_date") val releaseDate: String? = null,
+    /** TMDB release type: 4 = digital, 5 = physical. */
+    @SerializedName("type") val type: Int? = null
 )
 
 data class TmdbTvContentRatingsResponse(

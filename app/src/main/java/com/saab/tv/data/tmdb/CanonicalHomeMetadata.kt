@@ -78,7 +78,13 @@ internal object CanonicalHomeMetadata {
             ageRatingObservedAtMillis = nowMillis.takeIf { includeDetails && value.ageRating != null } ?: 0L,
             creditsJson = if (includeDetails) encodeCredits(value) else null,
             creditsSource = "TMDB".takeIf { includeDetails },
-            creditsObservedAtMillis = nowMillis.takeIf { includeDetails } ?: 0L
+            creditsObservedAtMillis = nowMillis.takeIf { includeDetails } ?: 0L,
+            digitalReleaseDate = value.digitalReleaseDate.takeIf { includeDetails },
+            digitalReleaseRegion = value.digitalReleaseRegion.takeIf { includeDetails },
+            physicalReleaseDate = value.physicalReleaseDate.takeIf { includeDetails },
+            physicalReleaseRegion = value.physicalReleaseRegion.takeIf { includeDetails },
+            releaseAvailabilitySource = "TMDB".takeIf { includeDetails },
+            releaseAvailabilityObservedAtMillis = nowMillis.takeIf { includeDetails } ?: 0L
         )
 
     fun decode(row: CanonicalTitleEntity): TmdbEnrichment = TmdbEnrichment(
@@ -104,6 +110,18 @@ internal object CanonicalHomeMetadata {
         language = row.originalLanguage.takeIf { row.originalLanguageSource == "TMDB" },
         collectionId = row.collectionId.takeIf { row.collectionSource == "TMDB" },
         collectionName = row.collectionName.takeIf { row.collectionSource == "TMDB" },
+        digitalReleaseDate = row.digitalReleaseDate.takeIf {
+            row.releaseAvailabilitySource == "TMDB" && row.releaseAvailabilityObservedAtMillis > 0L
+        },
+        digitalReleaseRegion = row.digitalReleaseRegion.takeIf {
+            row.releaseAvailabilitySource == "TMDB" && row.releaseAvailabilityObservedAtMillis > 0L
+        },
+        physicalReleaseDate = row.physicalReleaseDate.takeIf {
+            row.releaseAvailabilitySource == "TMDB" && row.releaseAvailabilityObservedAtMillis > 0L
+        },
+        physicalReleaseRegion = row.physicalReleaseRegion.takeIf {
+            row.releaseAvailabilitySource == "TMDB" && row.releaseAvailabilityObservedAtMillis > 0L
+        },
         ageRating = row.ageRating.takeIf { row.ageRatingSource == "TMDB" && row.ageRatingObservedAtMillis > 0L },
         ageRatingRegion = row.ageRatingRegion.takeIf { row.ageRatingSource == "TMDB" && row.ageRatingObservedAtMillis > 0L },
         directorMembers = decodeCredits(row, "director"),

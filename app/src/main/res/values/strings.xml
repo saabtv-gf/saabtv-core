@@ -683,6 +683,8 @@
     <string name="studio_rail_recent">Recent</string>
     <string name="details_more_episodes">More Episodes</string>
     <string name="details_more_like_this">More Like This</string>
+    <string name="details_digital_release">Digital / OTT</string>
+    <string name="details_dvd_release">DVD / Physical</string>
     <string name="details_cast_and_crew">Cast &amp; Crew</string>
     <string name="details_crew">Crew</string>
     <string name="details_cast">Cast</string>

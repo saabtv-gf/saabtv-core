@@ -59,7 +59,17 @@ internal object CanonicalTitleMergePolicy {
             source = { it.collectionSource }, observedAt = { it.collectionObservedAtMillis })
         val details = selectValue(rows, nowMillis,
             value = { row -> row.creditsObservedAtMillis.takeIf { it > 0L }?.let {
-                DetailFacts(row.ageRating, row.ageRatingRegion, row.creditsJson)
+                DetailFacts(
+                    ageRating = row.ageRating,
+                    ageRatingRegion = row.ageRatingRegion,
+                    creditsJson = row.creditsJson,
+                    digitalReleaseDate = row.digitalReleaseDate,
+                    digitalReleaseRegion = row.digitalReleaseRegion,
+                    physicalReleaseDate = row.physicalReleaseDate,
+                    physicalReleaseRegion = row.physicalReleaseRegion,
+                    releaseAvailabilitySource = row.releaseAvailabilitySource,
+                    releaseAvailabilityObservedAtMillis = row.releaseAvailabilityObservedAtMillis
+                )
             } },
             source = { it.creditsSource }, observedAt = { it.creditsObservedAtMillis })
         return base.copy(
@@ -106,7 +116,13 @@ internal object CanonicalTitleMergePolicy {
             ageRatingObservedAtMillis = details?.observedAtMillis?.takeIf { details.value.ageRating != null } ?: 0,
             creditsJson = details?.value?.creditsJson,
             creditsSource = details?.source?.name,
-            creditsObservedAtMillis = details?.observedAtMillis ?: 0
+            creditsObservedAtMillis = details?.observedAtMillis ?: 0,
+            digitalReleaseDate = details?.value?.digitalReleaseDate,
+            digitalReleaseRegion = details?.value?.digitalReleaseRegion,
+            physicalReleaseDate = details?.value?.physicalReleaseDate,
+            physicalReleaseRegion = details?.value?.physicalReleaseRegion,
+            releaseAvailabilitySource = details?.value?.releaseAvailabilitySource,
+            releaseAvailabilityObservedAtMillis = details?.value?.releaseAvailabilityObservedAtMillis ?: 0
         )
     }
 
@@ -159,4 +175,14 @@ internal object CanonicalTitleMergePolicy {
 }
 
 private data class RatingFacts(val value: Double, val source: String, val scale: String)
-private data class DetailFacts(val ageRating: String?, val ageRatingRegion: String?, val creditsJson: String?)
+private data class DetailFacts(
+    val ageRating: String?,
+    val ageRatingRegion: String?,
+    val creditsJson: String?,
+    val digitalReleaseDate: String?,
+    val digitalReleaseRegion: String?,
+    val physicalReleaseDate: String?,
+    val physicalReleaseRegion: String?,
+    val releaseAvailabilitySource: String?,
+    val releaseAvailabilityObservedAtMillis: Long
+)

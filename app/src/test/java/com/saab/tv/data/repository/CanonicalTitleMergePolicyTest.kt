@@ -142,7 +142,10 @@ class CanonicalTitleMergePolicyTest {
             ageRating = "U/A 16+", ageRatingRegion = "IN", ageRatingSource = "TMDB",
             ageRatingObservedAtMillis = 10,
             creditsJson = "[{\"role\":\"cast\",\"name\":\"Actor\"}]",
-            creditsSource = "TMDB", creditsObservedAtMillis = 10
+            creditsSource = "TMDB", creditsObservedAtMillis = 10,
+            digitalReleaseDate = "2025-03-01", digitalReleaseRegion = "IN",
+            physicalReleaseDate = "2025-04-01", physicalReleaseRegion = "IN",
+            releaseAvailabilitySource = "TMDB", releaseAvailabilityObservedAtMillis = 10
         )
         val lightweight = row("home", 20).copy(title = "Fresh title", titleSource = "TMDB", titleObservedAtMillis = 20)
 
@@ -154,6 +157,12 @@ class CanonicalTitleMergePolicyTest {
         assertEquals(10L, merged.ageRatingObservedAtMillis)
         assertEquals(full.creditsJson, merged.creditsJson)
         assertEquals(10L, merged.creditsObservedAtMillis)
+        assertEquals("2025-03-01", merged.digitalReleaseDate)
+        assertEquals("IN", merged.digitalReleaseRegion)
+        assertEquals("2025-04-01", merged.physicalReleaseDate)
+        assertEquals("IN", merged.physicalReleaseRegion)
+        assertEquals("TMDB", merged.releaseAvailabilitySource)
+        assertEquals(10L, merged.releaseAvailabilityObservedAtMillis)
         assertEquals("Fresh title", merged.title)
     }
 

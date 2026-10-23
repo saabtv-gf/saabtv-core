@@ -20,6 +20,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -165,6 +166,7 @@ class TmdbMetadataService @Inject constructor(
         try {
             val cached = titleStore.getFreshTitle(identity, normalizedLanguage, DETAILS_METADATA_MAX_AGE_MILLIS)
             if (cached?.creditsSource == "TMDB" && cached.creditsObservedAtMillis > 0L &&
+                cached.releaseAvailabilitySource == "TMDB" && cached.releaseAvailabilityObservedAtMillis > 0L &&
                 System.currentTimeMillis() - cached.creditsObservedAtMillis in 0..DETAILS_METADATA_MAX_AGE_MILLIS
             ) {
                 return@withContext CanonicalHomeMetadata.decode(cached).also {
@@ -187,7 +189,7 @@ class TmdbMetadataService @Inject constructor(
                 append(",en,null")
             }
 
-            val (details, credits, images, ageRating) = coroutineScope {
+            val (details, credits, images, releaseMetadata) = coroutineScope {
                 val detailsDeferred = async {
                     when (tmdbType) {
                         "tv" -> tmdbApi.getTvDetails(numericId, apiKey, normalizedLanguage)
@@ -206,15 +208,19 @@ class TmdbMetadataService @Inject constructor(
                         else -> tmdbApi.getMovieImages(numericId, apiKey, includeImageLanguage)
                     }.body()
                 }
-                val ageRatingDeferred = async {
+                val releaseMetadataDeferred = async {
                     when (tmdbType) {
                         "tv" -> {
                             val ratings = tmdbApi.getTvContentRatings(numericId, apiKey).body()?.results.orEmpty()
-                            selectTvAgeRating(ratings, normalizedLanguage)
+                            MovieReleaseMetadata(ageRating = selectTvAgeRating(ratings, normalizedLanguage))
                         }
                         else -> {
                             val releases = tmdbApi.getMovieReleaseDates(numericId, apiKey).body()?.results.orEmpty()
-                            selectMovieAgeRating(releases, normalizedLanguage)
+                            MovieReleaseMetadata(
+                                ageRating = selectMovieAgeRating(releases, normalizedLanguage),
+                                digitalRelease = selectMovieReleaseDate(releases, normalizedLanguage, RELEASE_TYPE_DIGITAL),
+                                physicalRelease = selectMovieReleaseDate(releases, normalizedLanguage, RELEASE_TYPE_PHYSICAL)
+                            )
                         }
                     }
                 }
@@ -222,7 +228,7 @@ class TmdbMetadataService @Inject constructor(
                     detailsDeferred.await(),
                     creditsDeferred.await(),
                     imagesDeferred.await(),
-                    ageRatingDeferred.await()
+                    releaseMetadataDeferred.await()
                 )
             }
             if (details?.id != numericId) return@withContext null
@@ -334,13 +340,17 @@ class TmdbMetadataService @Inject constructor(
                 runtimeMinutes = runtime,
                 productionCompanies = productionCompanies,
                 networks = networks,
-                ageRating = ageRating?.value,
-                ageRatingRegion = ageRating?.region,
+                ageRating = releaseMetadata.ageRating?.value,
+                ageRatingRegion = releaseMetadata.ageRating?.region,
                 status = status,
                 countries = countries,
                 language = originalLanguage,
                 collectionId = collectionId,
-                collectionName = collectionName
+                collectionName = collectionName,
+                digitalReleaseDate = releaseMetadata.digitalRelease?.date,
+                digitalReleaseRegion = releaseMetadata.digitalRelease?.region,
+                physicalReleaseDate = releaseMetadata.physicalRelease?.date,
+                physicalReleaseRegion = releaseMetadata.physicalRelease?.region
             )
             enrichmentCache.put(cacheKey, enrichment)
             try {
@@ -1246,6 +1256,30 @@ class TmdbMetadataService @Inject constructor(
         }.firstOrNull()
     }
 
+    private fun selectMovieReleaseDate(
+        countries: List<TmdbMovieReleaseDateCountry>,
+        normalizedLanguage: String,
+        releaseType: Int
+    ): SelectedReleaseDate? {
+        fun dateFor(country: TmdbMovieReleaseDateCountry): String? = country.releaseDates.orEmpty()
+            .asSequence()
+            .filter { it.type == releaseType }
+            .mapNotNull { item -> item.releaseDate?.take(10)?.let(::parseReleaseDate) }
+            .minOrNull()
+
+        val byRegion = countries.associateBy { it.iso31661?.uppercase(Locale.US) }
+        preferredRegions(normalizedLanguage).forEach { region ->
+            val country = byRegion[region] ?: return@forEach
+            dateFor(country)?.let { return SelectedReleaseDate(it, region) }
+        }
+        return countries.firstNotNullOfOrNull { country ->
+            dateFor(country)?.let { SelectedReleaseDate(it, country.iso31661?.uppercase(Locale.US)) }
+        }
+    }
+
+    private fun parseReleaseDate(value: String): String? =
+        runCatching { LocalDate.parse(value).toString() }.getOrNull()
+
     private fun selectTvAgeRating(ratings: List<TmdbTvContentRatingItem>, normalizedLanguage: String): AgeRatingSelection? {
         val preferred = preferredRegions(normalizedLanguage)
         val byRegion = ratings.associateBy { it.iso31661?.uppercase(Locale.US) }
@@ -1264,8 +1298,16 @@ class TmdbMetadataService @Inject constructor(
         private const val HOME_METADATA_MAX_AGE_MILLIS = 7L * 24 * 60 * 60 * 1_000
         private const val DETAILS_METADATA_MAX_AGE_MILLIS = 7L * 24 * 60 * 60 * 1_000
         private val DEFAULT_LANGUAGE_REGIONS = mapOf("pt" to "PT", "es" to "ES")
+        private const val RELEASE_TYPE_DIGITAL = 4
+        private const val RELEASE_TYPE_PHYSICAL = 5
     }
 }
 
 private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 private data class AgeRatingSelection(val value: String, val region: String?)
+private data class SelectedReleaseDate(val date: String, val region: String?)
+private data class MovieReleaseMetadata(
+    val ageRating: AgeRatingSelection?,
+    val digitalRelease: SelectedReleaseDate? = null,
+    val physicalRelease: SelectedReleaseDate? = null
+)

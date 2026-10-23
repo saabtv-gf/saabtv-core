@@ -658,6 +658,17 @@ fun DetailsScreen(
                 val runtimeMin = enrichment?.runtimeMinutes
                     ?: currentContent?.runtimeEstimateMillis?.div(60_000L)?.toInt()
                     ?: currentMovie.runtime?.filter { it.isDigit() }?.toIntOrNull()
+                val releaseLocale = LocalConfiguration.current.locales[0]
+                val digitalReleaseLabel = stringResource(R.string.details_digital_release)
+                val physicalReleaseLabel = stringResource(R.string.details_dvd_release)
+                val digitalReleaseText = enrichment?.digitalReleaseDate?.let { date ->
+                    val region = enrichment.digitalReleaseRegion?.takeIf(String::isNotBlank)
+                    listOfNotNull(digitalReleaseLabel, formatTmdbReleaseDate(date, releaseLocale), region).joinToString(" · ")
+                }
+                val physicalReleaseText = enrichment?.physicalReleaseDate?.let { date ->
+                    val region = enrichment.physicalReleaseRegion?.takeIf(String::isNotBlank)
+                    listOfNotNull(physicalReleaseLabel, formatTmdbReleaseDate(date, releaseLocale), region).joinToString(" · ")
+                }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -714,6 +725,22 @@ fun DetailsScreen(
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                             color = textColor.copy(alpha = 0.95f)
                         )
+                    }
+                }
+
+                if (digitalReleaseText != null || physicalReleaseText != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        listOfNotNull(digitalReleaseText, physicalReleaseText).forEach { releaseText ->
+                            Text(
+                                text = releaseText,
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                color = textColor.copy(alpha = 0.95f),
+                                modifier = Modifier
+                                    .border(1.dp, textColor.copy(alpha = 0.38f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 9.dp, vertical = 5.dp)
+                            )
+                        }
                     }
                 }
 
@@ -1717,6 +1744,13 @@ private fun extractPrimaryYear(releaseInfo: String?): String {
     if (releaseInfo.isNullOrBlank()) return "----"
     return Regex("\\d{4}").find(releaseInfo)?.value ?: releaseInfo.take(4)
 }
+
+internal fun formatTmdbReleaseDate(date: String, locale: java.util.Locale): String = runCatching {
+    java.time.LocalDate.parse(date).format(
+        java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM)
+            .withLocale(locale)
+    )
+}.getOrDefault(date)
 
 private fun findFirstEpisode(videos: List<MetaVideo>?): MetaVideo? {
     if (videos.isNullOrEmpty()) return null

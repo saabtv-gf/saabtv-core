@@ -676,6 +676,8 @@
     <string name="studio_rail_recent">സമീപകാലം</string>
     <string name="details_more_episodes">കൂടുതൽ എപ്പിസോഡുകൾ</string>
     <string name="details_more_like_this">ഇതുപോലുള്ള കൂടുതൽ</string>
+    <string name="details_digital_release">ഡിജിറ്റൽ / OTT</string>
+    <string name="details_dvd_release">DVD / ഫിസിക്കൽ റിലീസ്</string>
     <string name="details_load_error_title">ശീർഷകത്തിന്റെ വിശദാംശങ്ങൾ ലഭ്യമല്ല</string>
     <string name="details_load_error_message">ഈ ശീർഷകം ലോഡ് ചെയ്യാനായില്ല. കണക്ഷൻ പരിശോധിച്ച് വീണ്ടും ശ്രമിക്കുക.</string>
     <string name="details_cast_and_crew">അഭിനേതാക്കളും അണിയറപ്രവർത്തകരും</string>

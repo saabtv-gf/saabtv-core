@@ -39,7 +39,7 @@ import com.saab.tv.data.model.SyncClientStateEntity
         SyncEntityRevisionEntity::class,
         SyncClientStateEntity::class
     ],
-    version = 66
+    version = 67
 )
 abstract class SaabTvDatabase : RoomDatabase() {
     abstract fun addonDao(): AddonDao
