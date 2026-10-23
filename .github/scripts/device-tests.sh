@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p app/build/ci-diagnostics
+adb shell am force-stop com.android.vending || true
+adb shell pm disable-user --user 0 com.android.vending || true
+adb logcat -c || true
+
+if ./gradlew --no-daemon \
+  :app:connectedDebugAndroidTest \
+  -PsaabEmulatorTest=true \
+  -Dorg.gradle.jvmargs=-Xmx4g; then
+  device_test_count="$(
+    {
+      find app/build/outputs/androidTest-results/connected/debug \
+        -type f -name '*.xml' -exec awk '
+          match($0, /tests="[0-9]+"/) {
+            total += substr($0, RSTART + 7, RLENGTH - 8)
+          }
+          END { print total + 0 }
+        ' {} + 2>/dev/null || true
+    } | awk '{ total += $1 } END { print total + 0 }'
+  )"
+  if [ "$device_test_count" -eq 0 ]; then
+    echo "Connected Android tests reported zero executed tests."
+    adb logcat -d -b all -v threadtime > app/build/ci-diagnostics/emulator-logcat.txt 2>&1 || true
+    adb shell dumpsys meminfo > app/build/ci-diagnostics/emulator-meminfo.txt 2>&1 || true
+    exit 1
+  fi
+  echo "Connected Android tests executed: $device_test_count"
+else
+  test_status=$?
+  adb logcat -d -b all -v threadtime > app/build/ci-diagnostics/emulator-logcat.txt 2>&1 || true
+  adb shell dumpsys meminfo > app/build/ci-diagnostics/emulator-meminfo.txt 2>&1 || true
+  exit "$test_status"
+fi

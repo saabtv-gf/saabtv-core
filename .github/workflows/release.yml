@@ -4,20 +4,25 @@ on:
   push:
     tags:
       - "v*"
-  # Run the exact release validation on a branch before creating an immutable
-  # release tag. Manual runs validate/build but never publish a GitHub release.
+  # Manual runs can explicitly opt into the slower Android TV emulator suite.
+  # Tag-triggered release builds never start a device or emulator test job.
   workflow_dispatch:
+    inputs:
+      run_device_tests:
+        description: Run Android TV emulator tests (not required for release builds)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     if: github.repository == 'saabtv-gf/saabtv-core'
-    # Standard Linux hosted runners do not expose KVM, so x86_64 emulation
-    # falls back to software translation and becomes unstable during boot.
-    # Intel macOS runners provide Hypervisor.framework acceleration instead.
-    runs-on: macos-15-intel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -83,31 +88,12 @@ jobs:
           fi
 
       - name: Test And Build Signed 32-Bit APK
-        uses: reactivecircus/android-emulator-runner@v2
         env:
           SAABTV_RELEASE_STORE_FILE: ${{ runner.temp }}/saabtv-release.jks
           SAABTV_RELEASE_STORE_PASSWORD: ${{ secrets.SAABTV_RELEASE_STORE_PASSWORD }}
           SAABTV_RELEASE_KEY_ALIAS: ${{ secrets.SAABTV_RELEASE_KEY_ALIAS }}
           SAABTV_RELEASE_KEY_PASSWORD: ${{ secrets.SAABTV_RELEASE_KEY_PASSWORD }}
-        with:
-          # The TV profile's config.ini can still boot with one guest CPU on the
-          # macOS runner; force the same four cores in both the AVD and launch
-          # options so instrumentation startup is not killed by an ANR.
-          # Android 14's userdebug BatteryStatsHistory can crash system_server
-          # when its debug trace property write fails. Android 15 handles that
-          # failure without killing the emulator's system process.
-          api-level: 35
-          target: default
-          arch: x86_64
-          profile: tv_1080p
-          cores: 4
-          ram-size: 3072M
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none -cores 4
-          disable-animations: true
-          emulator-boot-timeout: 900
-          # The runner executes script lines in separate shells; delegate to a
-          # checked-in script so failure handling and shell state stay intact.
-          script: bash .github/scripts/release-build.sh
+        run: bash .github/scripts/release-build.sh
 
       - name: Retain Regression Reports
         if: always()
@@ -117,8 +103,6 @@ jobs:
           path: |
             app/build/reports/tests/testDebugUnitTest/
             app/build/reports/jacoco/unitRegressionCoverage/
-            app/build/reports/androidTests/connected/debug/
-            app/build/outputs/androidTest-results/connected/debug/
             app/build/reports/lint-results-release.*
             app/build/ci-diagnostics/
           if-no-files-found: warn
@@ -169,3 +153,50 @@ jobs:
             --title "Saab TV $VERSION" \
             --generate-notes \
             --notes "$(cat release-notes.md)"
+
+  device-tests:
+    if: github.repository == 'saabtv-gf/saabtv-core' && github.event_name == 'workflow_dispatch' && inputs.run_device_tests
+    runs-on: macos-15-intel
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set Up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Set Up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Android TV Emulator Tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: tv_1080p
+          cores: 4
+          ram-size: 3072M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-metrics -noaudio -no-boot-anim -camera-back none -cores 4
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: bash .github/scripts/device-tests.sh
+
+      - name: Retain Emulator Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-tv-emulator-test-reports
+          path: |
+            app/build/reports/androidTests/connected/debug/
+            app/build/outputs/androidTest-results/connected/debug/
+            app/build/ci-diagnostics/
+          if-no-files-found: warn
