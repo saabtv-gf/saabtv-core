@@ -21,6 +21,7 @@ jobs:
   release:
     if: github.repository == 'saabtv-gf/saabtv-core'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: write
 

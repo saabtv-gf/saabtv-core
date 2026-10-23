@@ -1,3 +1,4 @@
+import java.time.Duration
 import java.util.Properties
 import org.gradle.testing.jacoco.tasks.JacocoReport
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
@@ -20,6 +21,11 @@ jacoco { toolVersion = "0.8.12" }
 tasks.withType<Test>().configureEach {
     maxHeapSize = "2g"
     maxParallelForks = 1
+    timeout.set(Duration.ofMinutes(15))
+    testLogging {
+        events("started", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
     jvmArgs(
         "--add-opens=java.base/java.lang=ALL-UNNAMED",
         "--add-opens=java.base/java.util=ALL-UNNAMED",
