@@ -9,7 +9,7 @@ internal data class AdaptiveBufferConfig(
     val backBufferMs: Int
 )
 
-/** Keeps startup quick while bounding memory on low-RAM TVs and large 4K streams. */
+/** Keeps a larger rebuffer cushion on low-RAM TVs without raising their allocation cap. */
 internal object AdaptiveBufferPolicy {
     fun choose(
         isTorrent: Boolean,
@@ -23,10 +23,10 @@ internal object AdaptiveBufferPolicy {
 
         if (lowMemory) {
             return AdaptiveBufferConfig(
-                minBufferMs = if (isTorrent) 6_000 else 8_000,
-                maxBufferMs = if (isTorrent) 20_000 else 24_000,
-                bufferForPlaybackMs = if (isTorrent) 500 else 250,
-                bufferForPlaybackAfterRebufferMs = 2_000,
+                minBufferMs = if (isTorrent) 12_000 else 16_000,
+                maxBufferMs = if (isTorrent) 35_000 else 45_000,
+                bufferForPlaybackMs = if (isTorrent) 1_500 else 1_000,
+                bufferForPlaybackAfterRebufferMs = 7_000,
                 targetBufferBytes = 48 * 1024 * 1024,
                 backBufferMs = 1_500
             )

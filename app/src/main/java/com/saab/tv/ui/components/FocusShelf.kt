@@ -44,6 +44,7 @@ internal fun FocusShelf(
     contentPadding: PaddingValues = PaddingValues(start = startPadding, top = 6.dp, bottom = 6.dp),
     viewportHeight: Dp = height + 12.dp,
     indicatorAlignment: Alignment = Alignment.CenterStart,
+    showIndicator: Boolean = true,
     pivotSpec: BringIntoViewSpec? = null,
     rowModifier: Modifier = Modifier.fillMaxSize().focusGroup(),
     content: LazyListScope.() -> Unit
@@ -61,6 +62,7 @@ internal fun FocusShelf(
         rounded = rounded,
         viewportHeight = viewportHeight,
         indicatorAlignment = indicatorAlignment,
+        showIndicator = showIndicator,
         pivotSpec = pivotSpec
     ) {
         LazyRow(
@@ -88,6 +90,7 @@ internal fun FocusShelfFrame(
     rounded: Boolean? = null,
     viewportHeight: Dp = height + 12.dp,
     indicatorAlignment: Alignment = Alignment.CenterStart,
+    showIndicator: Boolean = true,
     pivotSpec: BringIntoViewSpec? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
@@ -101,18 +104,20 @@ internal fun FocusShelfFrame(
     CompositionLocalProvider(LocalBringIntoViewSpec provides resolvedPivotSpec) {
         Box(modifier.fillMaxWidth().height(viewportHeight)) {
             content()
-            ShelfFocusIndicator(
-                focused = focused,
-                width = width,
-                height = height,
-                startPadding = startPadding,
-                rounded = resolvedRounded,
-                listState = state,
-                focusedItemIndex = focusedItemIndex,
-                repeatedSectionSize = repeatedSectionSize,
-                modifier = Modifier.align(indicatorAlignment).zIndex(20f),
-                tag = tag
-            )
+            if (showIndicator) {
+                ShelfFocusIndicator(
+                    focused = focused,
+                    width = width,
+                    height = height,
+                    startPadding = startPadding,
+                    rounded = resolvedRounded,
+                    listState = state,
+                    focusedItemIndex = focusedItemIndex,
+                    repeatedSectionSize = repeatedSectionSize,
+                    modifier = Modifier.align(indicatorAlignment).zIndex(20f),
+                    tag = tag
+                )
+            }
         }
     }
 }

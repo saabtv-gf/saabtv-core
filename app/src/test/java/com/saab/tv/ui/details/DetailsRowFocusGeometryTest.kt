@@ -37,11 +37,17 @@ class DetailsRowFocusGeometryTest {
             }
         }
         val card = compose.onNode(hasText("Ada Actor") and hasClickAction())
+        val avatar = compose.onNodeWithTag("details-cast-avatar", useUnmergedTree = true)
         val initialBounds = card.fetchSemanticsNode().boundsInRoot
+        val avatarBounds = avatar.fetchSemanticsNode().boundsInRoot
 
         compose.runOnIdle { requester.requestFocus() }
         card.assertIsFocused()
+        avatar.assertExists()
+        assertEquals(72f, avatarBounds.width, 0.5f)
+        assertEquals(72f, avatarBounds.height, 0.5f)
         assertEquals(initialBounds, card.fetchSemanticsNode().boundsInRoot)
+        assertEquals(avatarBounds, avatar.fetchSemanticsNode().boundsInRoot)
         compose.runOnIdle { assertTrue(focusObserved) }
     }
 

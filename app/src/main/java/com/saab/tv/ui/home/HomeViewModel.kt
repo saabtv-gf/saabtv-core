@@ -78,6 +78,27 @@ private fun preferExistingGenres(existing: List<String>?, enriched: List<String>
 
 internal fun personalizedRailOrder(offset: Int): Int = Int.MAX_VALUE / 2 + offset
 
+internal data class TmdbHomeRailLoadPlan(
+    val topSuggestions: Boolean,
+    val favoriteGenres: Boolean,
+    val newForYou: Boolean,
+    val popularInTaste: Boolean
+) {
+    val needsTasteSeeds: Boolean get() = topSuggestions || favoriteGenres || popularInTaste
+    val needsInterestDetails: Boolean get() = favoriteGenres || popularInTaste
+    val needsWatchlist: Boolean get() = needsInterestDetails
+    val hasVisibleRails: Boolean get() = topSuggestions || favoriteGenres || newForYou || popularInTaste
+}
+
+internal fun tmdbHomeRailLoadPlan(visibleRailIds: Collection<String>) = TmdbHomeRailLoadPlan(
+    topSuggestions = "tmdb-top-suggestions" in visibleRailIds,
+    favoriteGenres = "tmdb-favorite-genres" in visibleRailIds,
+    newForYou = "tmdb-new-for-you" in visibleRailIds,
+    popularInTaste = "tmdb-popular-in-taste" in visibleRailIds
+)
+
+private const val MAX_HOME_TASTE_SEEDS = 2
+
 internal fun rankWatchHistorySuggestions(
     recommendationsByHistory: List<List<TitleCardProjection>>,
     limit: Int = 30
@@ -1507,8 +1528,11 @@ class HomeViewModel @Inject constructor(
         homeRows: List<HomeRow>
     ): List<CategoryRow> {
         return try {
-            val history = dao.getWatchHistoryForProfileOnce(profile.id)
-            val watchlist = dao.getWatchlistOnce(profile.id)
+            val visibleTmdbRails = TmdbHomeRails.parse(profile.homeTmdbRails)
+            val loadPlan = tmdbHomeRailLoadPlan(visibleTmdbRails)
+            if (!loadPlan.hasVisibleRails) return emptyList()
+            val history = if (loadPlan.needsTasteSeeds) dao.getWatchHistoryForProfileOnce(profile.id) else emptyList()
+            val watchlist = if (loadPlan.needsWatchlist) dao.getWatchlistOnce(profile.id) else emptyList()
             val watchedTitles = history.asSequence()
                 .filter { it.watched || it.position > 0L }
                 .groupBy { if (it.type == "series") com.saab.tv.domain.seriesIdFromPlaybackId(it.id) else it.id }
@@ -1516,15 +1540,16 @@ class HomeViewModel @Inject constructor(
                     entries.maxByOrNull { it.lastWatched }?.let { latest -> id to latest }
                 }
                 .sortedByDescending { it.second.lastWatched }
-                .take(3)
+                .take(MAX_HOME_TASTE_SEEDS)
                 .map { (id, latest) ->
                     Triple(id, latest.type, latest.title)
                 }
                 .toList()
-            val interestSeeds = (watchedTitles + watchlist.take(2).map { Triple(it.id, it.type, it.title) })
-                .distinctBy { "${it.second}:${it.first}" }.take(3)
+            val interestSeeds = if (loadPlan.needsInterestDetails) {
+                (watchedTitles + watchlist.take(2).map { Triple(it.id, it.type, it.title) })
+                    .distinctBy { "${it.second}:${it.first}" }.take(MAX_HOME_TASTE_SEEDS)
+            } else emptyList()
             val language = profile.tmdbLanguage.ifBlank { "en" }
-            val visibleTmdbRails = TmdbHomeRails.parse(profile.homeTmdbRails)
             val visibleIds = homeRows.flatMap { row -> row.items.map { it.canonicalPresentationKey() } }.toSet()
             val usedTmdbKeys = mutableSetOf<String>()
             val output = mutableListOf<CategoryRow>()
@@ -1569,16 +1594,18 @@ class HomeViewModel @Inject constructor(
 
             // Aggregate every recent history seed into one rail, ranking titles by
             // overlap and position across each seed's TMDB recommendations.
-            val historyRecommendationPages = kotlinx.coroutines.coroutineScope {
-                watchedTitles.map { (seedId, type, _) -> async(Dispatchers.IO) {
-                    val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async null
-                    Triple(
-                        tmdbId,
-                        type,
-                        tmdbMetadataService.fetchRecommendationsPage(tmdbId, type, language, page = 1, maxItems = 20)
-                    )
-                } }.awaitAll()
-            }.filterNotNull()
+            val historyRecommendationPages = if (loadPlan.topSuggestions) {
+                kotlinx.coroutines.coroutineScope {
+                    watchedTitles.map { (seedId, type, _) -> async(Dispatchers.IO) {
+                        val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async null
+                        Triple(
+                            tmdbId,
+                            type,
+                            tmdbMetadataService.fetchRecommendationsPage(tmdbId, type, language, page = 1, maxItems = 20)
+                        )
+                    } }.awaitAll()
+                }.filterNotNull()
+            } else emptyList()
             val historyRankedSuggestions = rankWatchHistorySuggestions(
                 historyRecommendationPages.map { it.third.items },
                 limit = Int.MAX_VALUE
@@ -1586,13 +1613,15 @@ class HomeViewModel @Inject constructor(
 
             // A small, bounded enrichment sample gives genre rails and cross-type
             // suggestions real signals without slowing the initial catalog load.
-            val interestDetails = kotlinx.coroutines.coroutineScope {
-                interestSeeds.map { (seedId, type, _) -> async(Dispatchers.IO) {
-                    val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async null
-                    val enrichment = tmdbMetadataService.fetchHomeEnrichment(tmdbId, type, language) ?: return@async null
-                    Triple(type, tmdbId, enrichment)
-                } }.awaitAll().filterNotNull()
-            }
+            val interestDetails = if (loadPlan.needsInterestDetails) {
+                kotlinx.coroutines.coroutineScope {
+                    interestSeeds.map { (seedId, type, _) -> async(Dispatchers.IO) {
+                        val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async null
+                        val enrichment = tmdbMetadataService.fetchHomeEnrichment(tmdbId, type, language) ?: return@async null
+                        Triple(type, tmdbId, enrichment)
+                    } }.awaitAll().filterNotNull()
+                }
+            } else emptyList()
 
             val genreVotes = linkedMapOf<Pair<String, Int>, Int>()
             interestDetails.forEach { (type, _, enrichment) ->
@@ -1658,7 +1687,7 @@ class HomeViewModel @Inject constructor(
                 )
             }
 
-            if (allFavoriteGenres) {
+            if (loadPlan.favoriteGenres && allFavoriteGenres) {
                 val query = TmdbNaturalQuery(null, genreFilterMovie, null, "vote_average.desc", tvGenreIds = genreFilterTv)
                 val page = tmdbMetadataService.discoverByIntentPage(
                     query, language, page = 1, maxItems = 30
@@ -1669,33 +1698,37 @@ class HomeViewModel @Inject constructor(
                 )
             }
 
-            val recentDate = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(
-                java.util.Date(System.currentTimeMillis() - 365L * 24L * 60L * 60L * 1000L)
-            )
-            val today = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date())
-            val newForYouQuery = TmdbNaturalQuery(
+            if (loadPlan.newForYou) {
+                val recentDate = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(
+                    java.util.Date(System.currentTimeMillis() - 365L * 24L * 60L * 60L * 1000L)
+                )
+                val today = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date())
+                val newForYouQuery = TmdbNaturalQuery(
                     null, null, null, "release_date.desc",
                     releaseDateGte = recentDate, releaseDateLte = today
                 )
-            val newForYou = tmdbMetadataService.discoverByIntentPage(
-                newForYouQuery, language, page = 1, maxItems = 30
-            )
-            addRow(
-                "tmdb-new-for-you", "New for You", 15, newForYou.items,
-                TmdbRailPageSource(language, discoverQueries = listOf(newForYouQuery)), newForYou
-            )
+                val newForYou = tmdbMetadataService.discoverByIntentPage(
+                    newForYouQuery, language, page = 1, maxItems = 30
+                )
+                addRow(
+                    "tmdb-new-for-you", "New for You", 15, newForYou.items,
+                    TmdbRailPageSource(language, discoverQueries = listOf(newForYouQuery)), newForYou
+                )
+            }
 
-            val popularInTasteQuery = TmdbNaturalQuery(
+            if (loadPlan.popularInTaste) {
+                val popularInTasteQuery = TmdbNaturalQuery(
                     null, genreFilterMovie, favoriteLanguage ?: profile.tmdbLanguage.takeIf(String::isNotBlank),
                     "popularity.desc", tvGenreIds = genreFilterTv
                 )
-            val popularInTaste = tmdbMetadataService.discoverByIntentPage(
-                popularInTasteQuery, language, page = 1, maxItems = 30
-            )
-            addRow(
-                "tmdb-popular-in-taste", "Popular in Your Taste", 16, popularInTaste.items,
-                TmdbRailPageSource(language, discoverQueries = listOf(popularInTasteQuery)), popularInTaste
-            )
+                val popularInTaste = tmdbMetadataService.discoverByIntentPage(
+                    popularInTasteQuery, language, page = 1, maxItems = 30
+                )
+                addRow(
+                    "tmdb-popular-in-taste", "Popular in Your Taste", 16, popularInTaste.items,
+                    TmdbRailPageSource(language, discoverQueries = listOf(popularInTasteQuery)), popularInTaste
+                )
+            }
 
             output
         } catch (cancelled: CancellationException) {

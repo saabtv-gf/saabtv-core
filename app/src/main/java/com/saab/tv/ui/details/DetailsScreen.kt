@@ -74,11 +74,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -1356,6 +1358,7 @@ private fun CastRow(
         modifier = Modifier.onFocusChanged { if (!it.hasFocus) rowHasCardFocus.value = false },
         viewportHeight = 110.dp,
         indicatorAlignment = Alignment.TopStart,
+        showIndicator = false,
         horizontalArrangement = Arrangement.spacedBy(0.dp),
         contentPadding = PaddingValues(start = startPad),
         rowModifier = Modifier.fillMaxWidth().height(110.dp).focusGroup()
@@ -1458,6 +1461,16 @@ internal fun CastCard(
                     .size(72.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(0.08f))
+                    .drawWithContent {
+                        drawContent()
+                        if (isFocused) {
+                            drawCircle(
+                                color = Color.White,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx())
+                            )
+                        }
+                    }
+                    .testTag("details-cast-avatar")
             ) {
                 Text(
                     text = com.saab.tv.ui.components.initialsForPerson(member.name),
