@@ -1,7 +1,6 @@
 package com.saab.tv.ui.home
 
 import android.app.Application
-import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
@@ -12,7 +11,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.viewModelScope
 import androidx.tv.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -142,9 +140,7 @@ class HomeScreenComposeJourneyTest {
 
         val entry = FocusRequester()
         val drawer = FocusRequester()
-        var rootView: View? = null
         compose.setContent {
-            rootView = LocalView.current
             MaterialTheme {
                 HomeScreen(
                     tab = DashboardTab.HOME,
@@ -159,21 +155,10 @@ class HomeScreenComposeJourneyTest {
 
         compose.onNodeWithContentDescription(item.name).assertExists()
             .performSemanticsAction(SemanticsActions.RequestFocus)
-        val view = requireNotNull(rootView)
-        val downTime = android.os.SystemClock.uptimeMillis()
-        compose.runOnUiThread {
-            view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime, android.view.KeyEvent.ACTION_DOWN,
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER, 0
-            ))
-            view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime + 600, android.view.KeyEvent.ACTION_DOWN,
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER, 1
-            ))
-            view.dispatchKeyEvent(android.view.KeyEvent(
-                downTime, downTime + 650, android.view.KeyEvent.ACTION_UP,
-                android.view.KeyEvent.KEYCODE_DPAD_CENTER, 0
-            ))
+        compose.onNodeWithContentDescription(item.name).performKeyInput {
+            keyDown(Key.DirectionCenter)
+            advanceEventTime(600)
+            keyUp(Key.DirectionCenter)
         }
         compose.waitUntil(5_000) {
             runCatching { action("Mark As Watched").assertIsEnabled() }.isSuccess
