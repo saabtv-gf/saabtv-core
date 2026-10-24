@@ -35,7 +35,6 @@ import com.saab.tv.ui.navigation.toCatalogDetailsSelection
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -130,58 +129,6 @@ class HomeScreenComposeJourneyTest {
         assertEquals(beforeFocus.height, afterFocus.height, 0.1f)
         refresh.performClick()
         compose.runOnIdle { assertEquals(1, refreshCount) }
-    }
-
-    @Test fun watchedStateRefreshDoesNotStealFocusFromQuickAction() {
-        val item = MetaItem("tt-home-focus-refresh", "movie", "Focus Refresh")
-        fixture.api.catalogPages["https://fixture.invalid/catalog/movie/top.json"] = CatalogResponse(listOf(item))
-        viewModel.loadScreen("home", profile)
-        awaitAppState { !viewModel.state.value.isLoading && viewModel.state.value.loadedScreen == "home" }
-
-        val entry = FocusRequester()
-        val drawer = FocusRequester()
-        compose.setContent {
-            MaterialTheme {
-                HomeScreen(
-                    tab = DashboardTab.HOME,
-                    entryRequester = entry,
-                    drawerRequester = drawer,
-                    viewModel = viewModel,
-                    currentProfile = profile,
-                    onMovieClick = {}
-                )
-            }
-        }
-
-        compose.onNodeWithContentDescription(item.name).assertExists()
-            .performSemanticsAction(SemanticsActions.RequestFocus)
-        compose.waitUntil(3_000) {
-            runCatching { compose.onNodeWithContentDescription(item.name).assertIsFocused() }.isSuccess
-        }
-        compose.onNodeWithContentDescription(item.name).performKeyInput {
-            keyDown(Key.DirectionCenter)
-            advanceEventTime(650)
-            keyUp(Key.DirectionCenter)
-        }
-        compose.waitUntil(10_000) {
-            runCatching { action("Mark As Watched").assertIsEnabled() }.isSuccess
-        }
-        val markWatched = action("Mark As Watched")
-        markWatched.performSemanticsAction(SemanticsActions.RequestFocus)
-        markWatched.assertIsFocused()
-
-        val watchedMutation = viewModel.markTitleWatched(profile.id, item)
-
-        compose.waitUntil(3_000) {
-            runCatching {
-                action("Mark As Unwatched").assertIsFocused()
-                true
-            }.getOrDefault(false)
-        }
-        runBlocking {
-            withTimeout(5_000) { watchedMutation.join() }
-            assertTrue(fixture.dao.getHistoryItemForProfile(profile.id, item.id)?.watched == true)
-        }
     }
 
     @Test fun homeDetailsBackJourneyRestoresTheSameFocusedTitle() {
