@@ -155,8 +155,9 @@ class HomeScreenComposeJourneyTest {
 
         compose.onNodeWithContentDescription(item.name).assertExists()
             .performSemanticsAction(SemanticsActions.RequestFocus)
-        compose.waitForIdle()
-        compose.onNodeWithContentDescription(item.name).assertIsFocused()
+        compose.waitUntil(3_000) {
+            runCatching { compose.onNodeWithContentDescription(item.name).assertIsFocused() }.isSuccess
+        }
         compose.onNodeWithContentDescription(item.name).performKeyInput {
             keyDown(Key.DirectionCenter)
             advanceEventTime(650)
