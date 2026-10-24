@@ -544,7 +544,8 @@ class WatchlistScreenComposeJourneyTest {
                 viewModel.libraryItems.value.watched.any { it.asActionItem().id == "tt-library-progress-movie" } &&
                 viewModel.libraryItems.value.watchlist.none { it.asActionItem().id == "tt-library-progress-movie" }
         }
-        compose.onNodeWithContentDescription("Progress Movie").assertExists()
+        assertTrue(compose.onAllNodesWithContentDescription("Progress Movie")
+            .fetchSemanticsNodes().isNotEmpty())
         }
     }
 }

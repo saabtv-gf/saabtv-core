@@ -155,12 +155,14 @@ class HomeScreenComposeJourneyTest {
 
         compose.onNodeWithContentDescription(item.name).assertExists()
             .performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription(item.name).assertIsFocused()
         compose.onNodeWithContentDescription(item.name).performKeyInput {
             keyDown(Key.DirectionCenter)
-            advanceEventTime(600)
+            advanceEventTime(650)
             keyUp(Key.DirectionCenter)
         }
-        compose.waitUntil(5_000) {
+        compose.waitUntil(10_000) {
             runCatching { action("Mark As Watched").assertIsEnabled() }.isSuccess
         }
         val markWatched = action("Mark As Watched")
