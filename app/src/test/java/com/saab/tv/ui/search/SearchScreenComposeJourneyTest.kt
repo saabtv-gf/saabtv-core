@@ -469,6 +469,10 @@ class SearchScreenComposeJourneyTest {
 
     @Test fun detailsReturnRestoresThePreviouslyFocusedSearchTitle() {
         val profile = runBlocking { fixture.dao.getProfileById(73)!! }
+        // SearchScreen configures the active profile when mounted. Configure it
+        // before seeding results so this journey matches the already-configured
+        // profile in the real shell and doesn't clear its own query on entry.
+        searchViewModel.configureSearchProfile(profile.id)
         searchViewModel.beginSearchSession(73)
         searchViewModel.onQueryChange("bat")
         awaitSearchReady {

@@ -62,7 +62,10 @@ class MenuInteractionP0Test {
         compose.runOnIdle {assertEquals(NavDestination.Movies,actions.single())}
     }
     @Test fun automaticMenuFocusIsReturnedToContentWithoutNavigationAction() {
-        show();compose.runOnIdle {requesters.getValue(NavDestination.Settings).requestFocus()}
+        // Home stays in the collapsed drawer's focus tree, so this simulates an
+        // unsolicited framework focus restore. Settings is now deliberately
+        // non-focusable while collapsed and cannot exercise the recovery guard.
+        show();compose.runOnIdle {requesters.getValue(NavDestination.Home).requestFocus()}
         compose.waitForIdle()
         compose.onNodeWithText("Content").assertIsFocused()
         compose.runOnIdle {assertTrue(actions.isEmpty());assertTrue(returns>0)}
