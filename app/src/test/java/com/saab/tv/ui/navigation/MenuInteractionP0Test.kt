@@ -73,6 +73,21 @@ class MenuInteractionP0Test {
         compose.runOnIdle {assertTrue(actions.isEmpty())}
     }
 
+    @Test fun collapsedProfileSettingsAndExitAreNotFocusable() {
+        show()
+
+        compose.runOnIdle {
+            requesters.getValue(NavDestination.Profile).requestFocus()
+            requesters.getValue(NavDestination.Settings).requestFocus()
+            requesters.getValue(NavDestination.Exit).requestFocus()
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Content").assertIsFocused()
+        compose.onNodeWithTag("nav-profile-avatar").assertIsNotFocused()
+        compose.runOnIdle { assertTrue(actions.isEmpty()) }
+    }
+
     @Test fun blockingNavigationClearsPreviouslyOwnedDrawerFocus() {
         val hidden = mutableStateOf(false)
         compose.setContent {
@@ -165,6 +180,33 @@ class MenuInteractionP0Test {
 
         compose.onNodeWithText("Content").assertIsFocused()
         compose.runOnIdle { assertTrue(actions.isEmpty()) }
+    }
+
+    @Test fun collapsedTopBarProfileCannotStealFocusFromContent() {
+        val topRequesters = NavDestination.entries.associateWith { FocusRequester() }
+        compose.setContent {
+            MaterialTheme {
+                TopNavigationBar(
+                    currentDestination = NavDestination.Home,
+                    currentProfile = null,
+                    topNavRequesters = topRequesters,
+                    onNavigate = { actions += it },
+                    onEnterContent = { returns++; content.requestFocus() }
+                ) {
+                    Box(Modifier.padding(top = 100.dp)) {
+                        SetupButton("Content", {}, focusRequester = content)
+                    }
+                }
+            }
+        }
+        compose.runOnIdle {
+            content.requestFocus()
+            topRequesters.getValue(NavDestination.Profile).requestFocus()
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Content").assertIsFocused()
+        compose.onNodeWithTag("top-nav-profile-avatar").assertIsNotFocused()
     }
 
     @Test fun pendingAutomaticFocusRecoveryDoesNotUndoAuthorizedMenuHandoff() {

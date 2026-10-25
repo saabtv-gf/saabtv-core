@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -87,6 +88,7 @@ fun WatchlistScreen(
     onTrailerClick: (String, String) -> Unit = { _, _ -> },
     onPreviewActiveChanged: (Boolean) -> Unit = {},
     watchedIds: Set<String> = emptySet(),
+    browseFocusRestoreToken: Int = 0,
     viewModel: WatchlistViewModel = hiltViewModel(),
     actionsViewModel: HomeViewModel = hiltViewModel()
 ) {
@@ -140,6 +142,30 @@ fun WatchlistScreen(
             viewModel.lastFocusedKey,
             viewModel.lastFocusedItemIndex
         )
+    }
+    val browseRestoreTargetAddress = remember(rows, restoredFocus) {
+        restoredFocus?.let { "${it.rowId}:${it.itemId}" } ?: rows.firstNotNullOfOrNull { (title, items) ->
+            items.firstOrNull()?.let { "${WatchlistFocusPolicy.rowId(title)}:${it.canonicalPresentationKey()}" }
+        }
+    }
+    var handledBrowseFocusRestoreToken by remember { mutableIntStateOf(0) }
+
+    // Re-entering from Details must restore the exact saved title when it still
+    // exists, otherwise the library's first available title, and verify that the
+    // card actually received focus before considering the handoff complete.
+    LaunchedEffect(browseFocusRestoreToken, activeLibraryProfileId, browseRestoreTargetAddress) {
+        if (browseFocusRestoreToken <= handledBrowseFocusRestoreToken ||
+            activeLibraryProfileId != currentProfile?.id
+        ) return@LaunchedEffect
+
+        val restored = entryRequester.requestFocusWhenAttached(maxFrameAttempts = 60) {
+            if (browseRestoreTargetAddress != null) {
+                focusedLibraryAddress == browseRestoreTargetAddress
+            } else {
+                hasContentFocus
+            }
+        }
+        if (restored) handledBrowseFocusRestoreToken = browseFocusRestoreToken
     }
 
     LaunchedEffect(pendingMutationFocusRestore, storedLibrary, restoredFocus?.itemId) {

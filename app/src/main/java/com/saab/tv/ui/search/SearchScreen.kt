@@ -69,7 +69,8 @@ fun SearchScreen(
     seriesViewMoreRequester: FocusRequester = remember { FocusRequester() },
     resultsRequester: FocusRequester = remember { FocusRequester() },
     lastFocusedId: String? = null, onFocusedIdChange: (String?) -> Unit = {},
-    watchedIds: Set<String> = emptySet()
+    watchedIds: Set<String> = emptySet(),
+    browseFocusRestoreToken: Int = 0
 ) {
     val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -103,6 +104,9 @@ fun SearchScreen(
     }
     var remoteSearch by remember { mutableStateOf(false) }
     var resultFocus by remember { mutableStateOf(false) }
+    var keyboardHasFocus by remember { mutableStateOf(false) }
+    var focusedResultId by remember { mutableStateOf<String?>(null) }
+    var handledBrowseFocusRestoreToken by remember { mutableIntStateOf(0) }
     var originalPosterFocus by remember { mutableStateOf<FocusRequester?>(null) }
     val filterEntry = remember { FocusRequester() }
     val interpretationEntry = remember { FocusRequester() }
@@ -118,10 +122,11 @@ fun SearchScreen(
         // to an unrelated Movie at the same index in the unfiltered batch.
         val item = resolveSearchFocusItem(visibleResultItems, resultIndexByKey, id)
         val presentationKey = item?.canonicalPresentationKey()
+        focusedResultId = presentationKey
         onFocusedIdChange(presentationKey)
         if (resultsAreCurrent) item?.let(previewViewModel::ensureTmdbEnrichment)
     }
-    var restoreResultFocus by remember { mutableStateOf(lastFocusedId != null) }
+    var restoreResultFocus by remember(lastFocusedId) { mutableStateOf(lastFocusedId != null) }
     val moviesEntry = remember { FocusRequester() }
     val seriesEntry = remember { FocusRequester() }
     val topNav = currentProfile?.navPosition == "top"
@@ -155,18 +160,30 @@ fun SearchScreen(
         viewModel.configureTmdbSearch(currentProfile?.tmdbEnabled == true, currentProfile?.tmdbLanguage.orEmpty())
         previewViewModel.configureTmdbProfile(currentProfile)
     }
-    LaunchedEffect(lastFocusedId, targetKey) {
+    LaunchedEffect(lastFocusedId, targetKey, browseFocusRestoreToken, visibleResultItems, resultsAreCurrent) {
         // A saved result can disappear when the query is refreshed or its provider
         // changes. In that case focusTarget is the first available result; restore
-        // to it instead of leaving the Search screen without a focused control.
-        if (restoreResultFocus && focusTarget != null) {
-            repeat(20) {
-                withFrameNanos { }
-                if (resultsRequester.requestFocusSafely()) {
-                    restoreResultFocus = false
-                    return@LaunchedEffect
+        // to it. On Details return, request focus again and wait for the card's
+        // onFocus callback, not merely a successful dispatch to a stale requester.
+        val returningFromDetails = browseFocusRestoreToken > handledBrowseFocusRestoreToken
+        if (!restoreResultFocus && !returningFromDetails) return@LaunchedEffect
+        if (state.isLoading || !resultsAreCurrent) return@LaunchedEffect
+
+        if (focusTarget != null && targetKey != null) {
+            if (resultsRequester.requestFocusWhenAttached(maxFrameAttempts = 60) {
+                    focusedResultId == targetKey
                 }
+            ) {
+                restoreResultFocus = false
+                handledBrowseFocusRestoreToken = browseFocusRestoreToken
             }
+        } else if (returningFromDetails && entryRequester.requestFocusWhenAttached(maxFrameAttempts = 60) {
+                keyboardHasFocus
+            }
+        ) {
+            // No title card is available; keep focus in Search rather than allowing
+            // the shell to fall through to the collapsed navigation controls.
+            handledBrowseFocusRestoreToken = browseFocusRestoreToken
         }
     }
 
@@ -422,6 +439,7 @@ fun SearchScreen(
                     entryRequester = entryRequester, drawerRequester = drawerRequester,
                     isTopNav = topNav, hasResults = resultItems.isNotEmpty() || state.query.isNotBlank(),
                     contentEntryRequester = if (resultItems.isNotEmpty()) resultsRequester else filterEntry,
+                    onEntryFocusChanged = { keyboardHasFocus = it },
                     onSubmitSearch = viewModel::submitQuery
                 )
             }
@@ -601,7 +619,8 @@ fun TvKeyboard(
     onClear: () -> Unit, onOpenRemoteInput: () -> Unit,
     entryRequester: FocusRequester, drawerRequester: FocusRequester, isTopNav: Boolean,
     hasResults: Boolean, contentEntryRequester: FocusRequester? = null, modifier: Modifier = Modifier,
-    onSubmitSearch: () -> Unit = {}
+    onSubmitSearch: () -> Unit = {},
+    onEntryFocusChanged: (Boolean) -> Unit = {}
 ) {
     val authorizeNavigationHandoff = LocalNavigationFocusHandoff.current
     val rows = remember { listOf("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm.'-") }
@@ -609,7 +628,10 @@ fun TvKeyboard(
     val repeatGate = remember { DpadRepeatGate(horizontalRepeatIntervalMs = 80L, verticalRepeatIntervalMs = 120L) }
     fun keyModifier(id: String, row: Int, column: Int, lastColumn: Int): Modifier = Modifier
         .then(if (id == lastKey) Modifier.focusRequester(entryRequester) else Modifier)
-        .onFocusChanged { if (it.isFocused) lastKey = id }
+        .onFocusChanged {
+            onEntryFocusChanged(it.isFocused)
+            if (it.isFocused) lastKey = id
+        }
         .onPreviewKeyEvent {
             if (repeatGate.shouldConsume(it)) return@onPreviewKeyEvent true
             if (it.type != KeyEventType.KeyDown) false

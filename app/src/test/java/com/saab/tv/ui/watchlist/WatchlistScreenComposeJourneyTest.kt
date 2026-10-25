@@ -132,6 +132,7 @@ class WatchlistScreenComposeJourneyTest {
         val entry = FocusRequester()
         val drawer = FocusRequester()
         val showLibrary = mutableStateOf(true)
+        val browseFocusRestoreToken = mutableStateOf(0)
         compose.setContent {
             Material3Theme {
                 MaterialTheme {
@@ -142,7 +143,8 @@ class WatchlistScreenComposeJourneyTest {
                             drawerRequester = drawer,
                             onMovieClick = {},
                             viewModel = viewModel,
-                            actionsViewModel = actionsViewModel
+                            actionsViewModel = actionsViewModel,
+                            browseFocusRestoreToken = browseFocusRestoreToken.value
                         )
                     } else {
                         Text("Details")
@@ -163,9 +165,11 @@ class WatchlistScreenComposeJourneyTest {
 
         compose.runOnIdle { showLibrary.value = false }
         compose.onNodeWithText("Details").assertExists()
-        compose.runOnIdle { showLibrary.value = true }
+        compose.runOnIdle {
+            showLibrary.value = true
+            browseFocusRestoreToken.value++
+        }
         compose.waitUntil(5_000) { secondCard.isDisplayedForWait() }
-        compose.runOnUiThread { entry.requestFocus() }
         compose.waitUntil(3_000) {
             runCatching { secondCard.assertIsFocused(); true }.getOrDefault(false)
         }

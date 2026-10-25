@@ -1275,6 +1275,7 @@ class MainActivity : LocalizedComponentActivity() {
                                                 resultsRequester = searchResultsRequester,
                                                 lastFocusedId = searchLastFocusedId,
                                                 onFocusedIdChange = { searchLastFocusedId = it },
+                                                browseFocusRestoreToken = browseFocusRestoreToken,
                                                 entryRequester = searchEntryRequester,
                                                 drawerRequester = drawerRequesters[NavDestination.Search]!!
                                             )
@@ -1297,6 +1298,7 @@ class MainActivity : LocalizedComponentActivity() {
                                                     YouTubeTrailerActivity.createIntent(this@MainActivity, youtubeKey, trailerName)?.let(::startActivity)
                                                 },
                                                 watchedIds = watchlistHomeVm.state.collectAsStateWithLifecycle().value.watchedIds,
+                                                browseFocusRestoreToken = browseFocusRestoreToken,
                                                 onContinueClick = { movie -> openContinueTitle(movie, watchlistHomeVm.state.value.history) },
                                                 onMovieClick = openCatalogTitleDetails
                                             )

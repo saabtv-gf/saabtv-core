@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.platform.testTag
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Surface
@@ -234,6 +235,7 @@ fun NavDrawer(
                 @Composable
                 fun DrawerItem(dest: NavDestination, label: String? = null) {
                     val isSelected = currentDestination == dest
+                    val isExpandedOnly = dest == NavDestination.Settings || dest == NavDestination.Exit
 
                     SidebarItem(
                         screen = dest,
@@ -244,7 +246,9 @@ fun NavDrawer(
                         onNavigate = onNavigate,
                         modifier = Modifier
                             .focusProperties {
-                                canFocus = !navigationBlocked
+                                // These controls are faded out until the drawer opens.
+                                // Keep invisible destinations out of D-pad traversal too.
+                                canFocus = !navigationBlocked && (!isExpandedOnly || isMenuFocused)
                                 up = drawerRequesters[DrawerFocusPolicy.adjacent(dest, false)]!!
                                 down = drawerRequesters[DrawerFocusPolicy.adjacent(dest, true)]!!
                             }
@@ -272,10 +276,14 @@ fun NavDrawer(
                             onNavigate = { onNavigate(NavDestination.Profile) },
                             modifier = Modifier
                                 .focusProperties {
-                                    canFocus = !navigationBlocked
+                                    // The avatar is visually absent while collapsed. If it
+                                    // stays focusable, a failed content restore can strand
+                                    // the remote on this invisible Profile target.
+                                    canFocus = !navigationBlocked && isMenuFocused
                                     down = drawerRequesters[NavDestination.Search]!!
                                 }
                                 .focusRequester(drawerRequesters[NavDestination.Profile]!!)
+                                .testTag("nav-profile-avatar")
                                 .onPreviewKeyEvent { event ->
                                     dispatchFreshDpadAction(
                                         event = event,

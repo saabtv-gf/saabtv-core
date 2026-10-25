@@ -136,9 +136,10 @@ class HomeScreenComposeJourneyTest {
 
     @Test fun homeDetailsBackJourneyRestoresTheSameFocusedTitle() {
         val catalogUrl = "https://fixture.invalid/catalog/movie/top.json"
-        fixture.api.catalogPages[catalogUrl] = CatalogResponse(listOf(MetaItem(
-            id = "tt-home-return", type = "movie", name = "Return Journey"
-        )))
+        fixture.api.catalogPages[catalogUrl] = CatalogResponse(listOf(
+            MetaItem(id = "tt-home-return-first", type = "movie", name = "First Journey Title"),
+            MetaItem(id = "tt-home-return", type = "movie", name = "Return Journey")
+        ))
         viewModel.loadScreen("home", profile)
         awaitAppState { !viewModel.state.value.isLoading && viewModel.state.value.loadedScreen == "home" }
 
@@ -192,6 +193,7 @@ class HomeScreenComposeJourneyTest {
         card.assertExists()
             .performSemanticsAction(SemanticsActions.RequestFocus)
             .assertIsFocused()
+        compose.onNodeWithContentDescription("First Journey Title").assertIsNotFocused()
         card
             .performKeyInput { pressKey(Key.DirectionCenter) }
         compose.onNodeWithText("Details: Return Journey · tt-home-return").assertExists()

@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
@@ -463,6 +464,59 @@ class SearchScreenComposeJourneyTest {
             runCatching {
                 compose.onNodeWithContentDescription("Batman Movie").assertIsFocused()
             }.isSuccess
+        }
+    }
+
+    @Test fun detailsReturnRestoresThePreviouslyFocusedSearchTitle() {
+        val profile = runBlocking { fixture.dao.getProfileById(73)!! }
+        searchViewModel.beginSearchSession(73)
+        searchViewModel.onQueryChange("bat")
+        awaitSearchReady {
+            searchViewModel.state.value.query == "bat" && !searchViewModel.state.value.isLoading &&
+                searchViewModel.state.value.results.isNotEmpty()
+        }
+
+        val showSearch = mutableStateOf(true)
+        val restoreToken = mutableStateOf(0)
+        val lastFocusedId = mutableStateOf<String?>(null)
+        val entry = FocusRequester()
+        val drawer = FocusRequester()
+        val results = FocusRequester()
+        compose.setContent {
+            MaterialTheme {
+                if (showSearch.value) {
+                    SearchScreen(
+                        entryRequester = entry,
+                        drawerRequester = drawer,
+                        resultsRequester = results,
+                        searchSessionId = 73,
+                        viewModel = searchViewModel,
+                        previewViewModel = previewViewModel,
+                        currentProfile = profile,
+                        onMovieClick = {},
+                        lastFocusedId = lastFocusedId.value,
+                        onFocusedIdChange = { lastFocusedId.value = it },
+                        browseFocusRestoreToken = restoreToken.value
+                    )
+                } else {
+                    Text("Details")
+                }
+            }
+        }
+
+        val selected = compose.onNodeWithContentDescription("Batman Movie")
+        compose.waitUntil(5_000) { selected.isDisplayedForWait() }
+        selected.performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.runOnIdle { assertTrue(lastFocusedId.value.orEmpty().contains("tt-search-movie")) }
+
+        compose.runOnIdle { showSearch.value = false }
+        compose.onNodeWithText("Details").assertExists()
+        compose.runOnIdle {
+            showSearch.value = true
+            restoreToken.value++
+        }
+        compose.waitUntil(5_000) {
+            runCatching { selected.assertIsFocused(); true }.getOrDefault(false)
         }
     }
 

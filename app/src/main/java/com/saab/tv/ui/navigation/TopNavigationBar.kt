@@ -16,6 +16,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
@@ -247,8 +248,11 @@ fun TopNavigationBar(
                     profile = currentProfile,
                     onNavigate = onLogout,
                     modifier = Modifier
-                        .focusProperties { canFocus = !navigationBlocked }
+                        // Keep the faded profile control out of traversal until the
+                        // top navigation has actually accepted focus.
+                        .focusProperties { canFocus = !navigationBlocked && isTopNavActive }
                         .focusRequester(topNavRequesters[profileItem]!!)
+                        .testTag("top-nav-profile-avatar")
                         .onFocusChanged { isProfileFocused = it.isFocused }
                         .onPreviewKeyEvent { event ->
                              if (event.type == KeyEventType.KeyDown) {
