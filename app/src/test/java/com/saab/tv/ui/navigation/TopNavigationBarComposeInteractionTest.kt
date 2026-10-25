@@ -12,6 +12,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import com.saab.tv.data.model.ProfileEntity
 import org.junit.Assert.assertEquals
@@ -26,6 +27,33 @@ import org.robolectric.annotation.Config
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalTestApi::class)
 class TopNavigationBarComposeInteractionTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun upFromSettingsBoundaryOpensItsCollapsedMenuAndDpadCanReturn() {
+        val requesters = NavDestination.entries.associateWith { FocusRequester() }
+        val contentRequester = FocusRequester()
+        compose.setContent {
+            MaterialTheme {
+                TopNavigationBar(
+                    currentDestination = NavDestination.Settings, currentProfile = null,
+                    topNavRequesters = requesters, onNavigate = {},
+                    onEnterContent = { contentRequester.requestFocus() }
+                ) {
+                    val handoff = LocalNavigationFocusHandoff.current
+                    Text("Settings boundary", Modifier.focusRequester(contentRequester)
+                        .onPreviewKeyEvent { handoffNavigationFocus(it, handoff) }.focusable())
+                }
+            }
+        }
+        compose.runOnIdle { contentRequester.requestFocus() }
+        compose.onNodeWithText("Settings boundary").performKeyInput { pressKey(Key.DirectionUp) }
+        val settings = compose.onNodeWithContentDescription("Settings")
+        settings.assertIsFocused()
+        compose.onNodeWithTag("top-nav-profile-avatar").assertIsNotFocused()
+        settings.performKeyInput { pressKey(Key.DirectionDown) }
+        compose.onNodeWithContentDescription("Exit").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionRight) }
+        compose.onNodeWithText("Settings boundary").assertIsFocused()
+    }
 
     @Test fun centerItemNavigatesAndSelectedItemEntersContent() {
         val requesters = NavDestination.entries.associateWith { FocusRequester() }

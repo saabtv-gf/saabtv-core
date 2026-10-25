@@ -21,8 +21,10 @@ import com.saab.tv.domain.CategoryRow
 import com.saab.tv.domain.schema.CatalogCardProjection
 import com.saab.tv.ui.components.ArtworkPrefetchDispatcher
 import com.saab.tv.ui.components.ShelfFocusIndicatorActive
+import com.saab.tv.ui.utils.requestFocusSafely
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,6 +37,41 @@ import org.robolectric.annotation.Config
 @OptIn(ExperimentalTestApi::class)
 class HomeLateRailFocusComposeTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun repeatingTmdbShelfRestoresCanonicalTitleAndRemainsNavigable() =
+        assertSavedTitleRestores(repeating = true, savedIndex = 1)
+
+    @Test fun finiteTmdbShelfRestoresTitleBeyondTheSavedViewport() =
+        assertSavedTitleRestores(repeating = false, savedIndex = 14)
+
+    private fun assertSavedTitleRestores(repeating: Boolean, savedIndex: Int) {
+        val titles = (0..14).map { MetaItem("tmdb:${100 + it}", "movie", "TMDB title $it") }
+        val entry = FocusRequester()
+        val listState = LazyListState(firstVisibleItemIndex = 0)
+        val savedAddress = homeCardFocusKey(0, "tmdb-top-suggestions", titles[savedIndex].homeFocusIdentityKey(), savedIndex)
+        compose.setContent {
+            MaterialTheme {
+                InfiniteLoopRow(
+                    startPadding = 48.dp, isTopNav = false, rowIndex = 0,
+                    focusRowId = "tmdb-top-suggestions", title = "Top Suggestions", items = titles,
+                    onMovieClick = {}, onViewMore = {}, onFocused = { _, _ -> },
+                    entryRequester = entry, drawerRequester = remember { FocusRequester() },
+                    locallyFocusedItemId = savedAddress, isGlobalFocusPresent = true, isFirstRow = true,
+                    isInfiniteLoopEnabled = true, isInfiniteScrollingEnabled = repeating,
+                    visibleItemCount = 15, externalListState = listState,
+                    repeatGate = remember { DpadRepeatGate() },
+                    artworkPrefetchDispatcher = remember { ArtworkPrefetchDispatcher({}, {}, {}) }
+                )
+            }
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { assertTrue("saved card must have an attached entry requester", entry.requestFocusSafely()) }
+        val target = compose.onNode(hasClickAction() and hasContentDescription("TMDB title $savedIndex"))
+        target.assertIsFocused()
+        target.performKeyInput { pressKey(Key.DirectionLeft) }
+        compose.waitForIdle()
+        compose.onNode(hasClickAction() and hasContentDescription("TMDB title ${savedIndex - 1}")).assertIsFocused()
+    }
 
     @Test fun addingRecommendationRailAboveFocusedShelfKeepsFocusedTitleAndFocusNode() {
         val target = MetaItem("tt-target", "movie", "Focused title")

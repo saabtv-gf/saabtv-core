@@ -95,9 +95,8 @@ fun SettingsScreen(
     }
 
     fun returnToNavigation() {
-        val handedOff = authorizeNavigationHandoff?.invoke(null) == true
-        val drawerFocused = drawerRequester.requestFocusSafely()
-        if (!handedOff && !drawerFocused) onBack()
+        if (authorizeNavigationHandoff?.invoke(null) == true) return
+        if (!drawerRequester.requestFocusSafely()) onBack()
     }
 
     val scope = rememberCoroutineScope()

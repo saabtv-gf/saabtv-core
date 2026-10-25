@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -175,6 +176,10 @@ internal fun InfiniteLoopRow(
     // Use external state if provided, otherwise create local state
     val internalListState = rememberLazyListState()
     val listState = externalListState ?: internalListState
+    RestoreSavedListItem(
+        listState,
+        locallyFocusedItemId?.let { focusKeyWithoutRowId(it).substringAfterLast('_').toIntOrNull() }
+    )
     val context = LocalContext.current
     val artworkDispatcher = remember(context, artworkPrefetchDispatcher) {
         artworkPrefetchDispatcher ?: ArtworkPrefetchDispatcher.forCoil(context)
@@ -630,6 +635,9 @@ private fun InfiniteGridContent(
         })
     }
     val sectionSize = baseDataList.size
+    val currentSectionStart by remember(listState, sectionSize) {
+        derivedStateOf { (listState.firstVisibleItemIndex / sectionSize) * sectionSize }
+    }
     val cardFocusRequesters = remember(listState, sectionSize) { mutableStateMapOf<Int, FocusRequester>() }
     
     // Calculate total items and start position
@@ -687,14 +695,14 @@ private fun InfiniteGridContent(
 
             // For focus restoration: match by item ID, only in the current visible section
             // to avoid multiple items requesting focus across different generations
-            val currentSectionStart = (listState.firstVisibleItemIndex / sectionSize) * sectionSize
             val isInCurrentSection = scrollIndex >= currentSectionStart && scrollIndex < currentSectionStart + sectionSize
             
             val shouldRequestFocus = when {
                 // First row, no previous focus - focus the entry item
                 !isGlobalFocusPresent && isFirstRow && isEntryItem -> true
                 // Match by item ID in the current visible section only
-                isInCurrentSection && item is GridRowItem.MovieItem && lastFocusedItemId == item.movie.id -> true
+                isInCurrentSection && item is GridRowItem.MovieItem &&
+                    (lastFocusedItemId == item.movie.homeFocusIdentityKey() || lastFocusedItemId == item.movie.id) -> true
                 isInCurrentSection && item is GridRowItem.ViewMoreItem && lastFocusedItemId == "viewmore" -> true
                 else -> false
             }
@@ -867,7 +875,7 @@ private fun FiniteGridContent(
     val dataList: List<GridRowItem> = remember(truncatedMovies) {
         truncatedMovies.map { GridRowItem.MovieItem(it) } + GridRowItem.ViewMoreItem
     }
-    val cardFocusRequesters = remember(dataList) { List(dataList.size) { FocusRequester() } }
+    val cardFocusRequesters = remember(listState, dataList.size) { List(dataList.size) { FocusRequester() } }
     val itemLazyKeys = remember(dataList, focusRowId) {
         homeRowItemLazyKeys(focusRowId, dataList.map { item ->
             when (item) {

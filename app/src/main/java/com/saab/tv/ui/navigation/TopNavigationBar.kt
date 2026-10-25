@@ -351,7 +351,11 @@ fun TopNavigationBar(
                         else onNavigate(settingsItem)
                     },
                     modifier = Modifier
-                        .focusProperties { canFocus = showSettingsMenu && !navigationBlocked }
+                        .focusProperties {
+                            // A Settings screen handoff must be able to focus this
+                            // destination before its dropdown becomes visible.
+                            canFocus = !navigationBlocked && (showSettingsMenu || currentDestination == settingsItem)
+                        }
                         .focusRequester(topNavRequesters[settingsItem]!!)
                         .onFocusChanged { isSettingsFocused = it.isFocused }
                         .onPreviewKeyEvent { event ->

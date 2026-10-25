@@ -985,18 +985,22 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun patchMetaListWithFallback(
-        items: List<MetaItem>,
+        items: List<CatalogCardProjection>,
         presentationKey: String,
         fallback: MetadataFallback
-    ): Pair<List<MetaItem>, Boolean> {
+    ): Pair<List<CatalogCardProjection>, Boolean> {
+        if (items.none { it.presentationKey == presentationKey }) return items to false
         var changed = false
-        val patched = items.map { meta ->
-            if (meta.canonicalPresentationKey() == presentationKey) {
+        val patched = items.map { card ->
+            if (card.presentationKey == presentationKey) {
+                val meta = card.asActionItem()
                 val merged = applyFallbackToMeta(meta, fallback)
-                if (merged != meta) changed = true
-                merged
+                if (merged != meta) {
+                    changed = true
+                    CatalogCardProjection.from(merged)
+                } else card
             } else {
-                meta
+                card
             }
         }
         return patched to changed
@@ -1012,13 +1016,13 @@ class HomeViewModel @Inject constructor(
 
             val updatedRows = current.rows.map { row ->
                 val (patchedItems, changed) = patchMetaListWithFallback(
-                    row.items.map(CatalogCardProjection::asActionItem),
+                    row.items,
                     presentationKey,
                     fallback
                 )
                 if (changed) {
                     stateChanged = true
-                    row.copy(items = patchedItems.map(CatalogCardProjection::from))
+                    row.copy(items = patchedItems)
                 } else {
                     row
                 }
@@ -1027,13 +1031,13 @@ class HomeViewModel @Inject constructor(
             val updatedMixedRows = current.mixedRows.map { rowItem ->
                 if (rowItem is CategoryRow) {
                     val (patchedItems, changed) = patchMetaListWithFallback(
-                        rowItem.items.map(CatalogCardProjection::asActionItem),
+                        rowItem.items,
                         presentationKey,
                         fallback
                     )
                     if (changed) {
                         stateChanged = true
-                        rowItem.copy(items = patchedItems.map(CatalogCardProjection::from))
+                        rowItem.copy(items = patchedItems)
                     } else {
                         rowItem
                     }
@@ -1044,13 +1048,13 @@ class HomeViewModel @Inject constructor(
 
             val updatedHeroRow = current.heroRow?.let { hero ->
                 val (patchedItems, changed) = patchMetaListWithFallback(
-                    hero.items.map(CatalogCardProjection::asActionItem),
+                    hero.items,
                     presentationKey,
                     fallback
                 )
                 if (changed) {
                     stateChanged = true
-                    hero.copy(items = patchedItems.map(CatalogCardProjection::from))
+                    hero.copy(items = patchedItems)
                 } else {
                     hero
                 }
@@ -1215,10 +1219,11 @@ class HomeViewModel @Inject constructor(
             }
 
             fun patchCards(cards: List<CatalogCardProjection>): Pair<List<CatalogCardProjection>, Boolean> {
+                if (cards.none { it.presentationKey == marker }) return cards to false
                 var changed = false
                 val patched = cards.map { card ->
+                    if (card.presentationKey != marker) return@map card
                     val meta = card.asActionItem()
-                    if (meta.canonicalPresentationKey() != marker) return@map card
                     CatalogCardProjection.from(overwriteMeta(meta)).also { if (it != card) changed = true }
                 }
                 return patched to changed

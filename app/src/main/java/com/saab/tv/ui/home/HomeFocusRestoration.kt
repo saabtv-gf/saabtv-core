@@ -5,7 +5,13 @@ import com.saab.tv.domain.CategoryRow
 import com.saab.tv.domain.HubGroupRow
 import com.saab.tv.domain.HomeRowItem
 import com.saab.tv.domain.schema.CatalogCardProjection
-import com.saab.tv.domain.schema.toCanonicalProjection
+import com.saab.tv.domain.schema.canonicalContentIdentity
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -90,6 +96,28 @@ internal fun resolveFocusedItemIndex(
 }
 
 internal fun focusKeyWithoutRowId(key: String): String = key.substringBefore('@')
+
+/** Only repair the initial saved viewport; normal D-pad movement keeps its animated pivot. */
+@Composable
+internal fun RestoreSavedListItem(listState: LazyListState, savedIndex: Int?) {
+    val initialIndex = remember(listState) { savedIndex }
+    LaunchedEffect(listState, initialIndex) {
+        val target = initialIndex?.takeIf { it >= 0 } ?: return@LaunchedEffect
+        val count = snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+        if (target < count && listState.layoutInfo.visibleItemsInfo.none { it.index == target }) {
+            listState.scrollToItem(target)
+        }
+    }
+}
+
+internal fun homeShelfListIndex(key: String?, hasHistory: Boolean, leadingItems: Int = 0): Int? {
+    val address = key?.takeUnless { it.startsWith("hero_") } ?: return null
+    val rowIndex = if (address.startsWith("hub_")) address.removePrefix("hub_").substringBefore('@').toIntOrNull()
+        else address.substringBefore('_').toIntOrNull()
+    return rowIndex?.takeIf { it >= -1 }?.let {
+        leadingItems + if (it == -1) 0 else it + if (hasHistory) 1 else 0
+    }
+}
 
 internal fun decodeFocusToken(value: String): String =
     runCatching { URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8.name()) }
@@ -256,6 +284,5 @@ private fun resolveMetaItemIndex(items: List<MetaItem>, identity: String, savedI
 }
 
 internal fun MetaItem.homeFocusIdentityKey(): String {
-    val projection = toCanonicalProjection() ?: return id
-    return projection.presentationKey
+    return canonicalContentIdentity()?.stableKey ?: id
 }

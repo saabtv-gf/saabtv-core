@@ -91,6 +91,7 @@ import com.saab.tv.ui.components.FocusPivotSpec
 import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
 import com.saab.tv.ui.utils.requestFocusOrFallback
 import com.saab.tv.ui.utils.requestFocusSafely
+import com.saab.tv.ui.utils.requestFocusWhenAttached
 import com.saab.tv.ui.addons.VoidButton
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.window.Popup
@@ -241,8 +242,7 @@ fun HomeScreen(
         enabled = isContentFocused,
         priority = com.saab.tv.ui.navigation.AppBackPriority.Screen
     ) {
-        authorizeNavigationHandoff?.invoke(null)
-        drawerRequester.requestFocusSafely()
+        if (authorizeNavigationHandoff?.invoke(null) != true) drawerRequester.requestFocusSafely()
     }
 
     Box(
@@ -844,19 +844,18 @@ fun CinematicLayout(
             }
         }
 
+    }
+
+    LaunchedEffect(browseFocusRestoreToken, historyItems.isNotEmpty(), state.mixedRows.isNotEmpty()) {
         // SMART FOCUS:
         // We are now safe to request focus because HomeScreen ensures we only reach here when data is ready.
         val shouldRestoreBrowseFocus = browseFocusRestoreToken > handledBrowseFocusRestoreToken
         if ((shouldRestoreBrowseFocus || !hasRequestedFocus) &&
             (historyItems.isNotEmpty() || state.mixedRows.isNotEmpty())
         ) {
-            repeat(8) {
-                delay(100)
-                if (requestFocusIfReady(entryRequester::requestFocus)) {
-                    hasRequestedFocus = true
-                    handledBrowseFocusRestoreToken = browseFocusRestoreToken
-                    return@LaunchedEffect
-                }
+            if (entryRequester.requestFocusWhenAttached(maxFrameAttempts = 24)) {
+                hasRequestedFocus = true
+                handledBrowseFocusRestoreToken = browseFocusRestoreToken
             }
         }
     }
@@ -1015,6 +1014,7 @@ fun CinematicLayout(
                         initialFirstVisibleItemIndex = verticalScrollPosition.first + historyScrollAdjustment,
                         initialFirstVisibleItemScrollOffset = verticalScrollPosition.second
                     )
+                    RestoreSavedListItem(verticalListState, homeShelfListIndex(effectiveLastFocusedKey, historyItems.isNotEmpty()))
 
                     val dpadRepeatGate = remember {
                         DpadRepeatGate(
@@ -1471,10 +1471,10 @@ fun SimpleLayout(
     // Focus requester for the first row's pivot item (used by hero carousel DOWN key)
     val firstRowPivotRequester = remember { FocusRequester() }
 
-    LaunchedEffect(state.rows, historyItems, browseFocusRestoreToken) {
+    LaunchedEffect(state.mixedRows.isNotEmpty(), historyItems.isNotEmpty(), browseFocusRestoreToken) {
         val shouldRestoreBrowseFocus = browseFocusRestoreToken > handledBrowseFocusRestoreToken
         if ((shouldRestoreBrowseFocus || !hasRequestedFocus) &&
-            (state.rows.isNotEmpty() || historyItems.isNotEmpty())
+            (state.mixedRows.isNotEmpty() || historyItems.isNotEmpty())
         ) {
             val requester = when {
                 // Returning from Details must restore to the saved card (or the
@@ -1484,13 +1484,9 @@ fun SimpleLayout(
                 onRefreshOtt != null && topActionRequester != null -> topActionRequester
                 else -> entryRequester
             }
-            repeat(8) {
-                delay(100)
-                if (requestFocusIfReady(requester::requestFocus)) {
-                    hasRequestedFocus = true
-                    handledBrowseFocusRestoreToken = browseFocusRestoreToken
-                    return@LaunchedEffect
-                }
+            if (requester.requestFocusWhenAttached(maxFrameAttempts = 24)) {
+                hasRequestedFocus = true
+                handledBrowseFocusRestoreToken = browseFocusRestoreToken
             }
         }
     }
@@ -1525,6 +1521,14 @@ fun SimpleLayout(
         val verticalListState = rememberLazyListState(
             initialFirstVisibleItemIndex = verticalScrollPosition.first + historyScrollAdjustment,
             initialFirstVisibleItemScrollOffset = verticalScrollPosition.second
+        )
+        RestoreSavedListItem(
+            verticalListState,
+            homeShelfListIndex(
+                effectiveLastFocusedKey, historyItems.isNotEmpty(),
+                (if (heroItems.isNotEmpty()) 1 else 0) +
+                    (if (onRefreshOtt != null && topActionRequester != null) 1 else 0)
+            )
         )
 
         PersistLazyListPosition(

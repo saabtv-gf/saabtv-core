@@ -248,7 +248,9 @@ fun NavDrawer(
                             .focusProperties {
                                 // These controls are faded out until the drawer opens.
                                 // Keep invisible destinations out of D-pad traversal too.
-                                canFocus = !navigationBlocked && (!isExpandedOnly || isMenuFocused)
+                                // Settings must accept the explicit return from its screen
+                                // before drawer focus can expand the collapsed menu.
+                                canFocus = !navigationBlocked && (!isExpandedOnly || isMenuFocused || isSelected)
                                 up = drawerRequesters[DrawerFocusPolicy.adjacent(dest, false)]!!
                                 down = drawerRequesters[DrawerFocusPolicy.adjacent(dest, true)]!!
                             }

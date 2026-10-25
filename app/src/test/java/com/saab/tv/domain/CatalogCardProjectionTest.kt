@@ -7,13 +7,40 @@ import com.saab.tv.domain.CategoryRow
 import com.saab.tv.domain.HomeRow
 import com.saab.tv.domain.schema.CatalogCardProjection
 import com.saab.tv.domain.schema.IdentityNamespace
+import com.saab.tv.domain.schema.canonicalPresentationKey
+import com.saab.tv.domain.schema.toCanonicalProjection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertNotSame
 import org.junit.Test
 
 class CatalogCardProjectionTest {
+    @Test fun identityLookupMatchesTheFullProjectionWithoutDependingOnArtworkOrText() {
+        listOf(
+            MetaItem("tt1234567", "movie", "Movie", addonBaseUrl = "https://addon.example"),
+            MetaItem("tmdb:123", "series", "Show"),
+            MetaItem("provider:title", "movie", "Addon", addonBaseUrl = "https://addon.example"),
+            MetaItem("opaque", "movie", "Legacy")
+        ).forEach { item ->
+            val expected = item.toCanonicalProjection()?.presentationKey ?: "legacy/${item.type}/${item.id}"
+            assertEquals(expected, item.canonicalPresentationKey())
+            assertEquals(expected, item.copy(name = "Enriched", background = "https://image.example/bg", logo = "https://image.example/logo").canonicalPresentationKey())
+        }
+    }
+
+    @Test fun actionProjectionIsReusedAcrossFocusReadsAndRebuiltOnlyForNewMetadata() {
+        val card = CatalogCardProjection.from(MetaItem("tmdb:123", "movie", "Original"))
+        val first = card.asActionItem()
+        repeat(1_000) { assertSame(first, card.asActionItem()) }
+        val updated = card.copy(content = card.content!!.copy(title = "Updated"))
+        assertNotSame(first, updated.asActionItem())
+        assertEquals("Original", first.name)
+        assertEquals("Updated", updated.asActionItem().name)
+    }
+
     @Test fun verifiedTitleUsesCanonicalProjectionAndPreservesTrailerActionMetadata() {
         val providerItem = MetaItem(
             id = "tt1234567",

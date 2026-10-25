@@ -14,6 +14,11 @@ import com.saab.tv.data.cache.SeekThumbnailCache
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.testing.OfflineAppFixture
 import com.saab.tv.ui.navigation.LocalNavigationFocusHandoff
+import com.saab.tv.ui.navigation.NavigationFocusHandoffHost
+import com.saab.tv.ui.navigation.NavDestination
+import com.saab.tv.ui.navigation.NavDrawer
+import com.saab.tv.ui.navigation.TopNavigationBar
+import androidx.compose.foundation.layout.Box
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -37,6 +42,51 @@ class SettingsScreenComposeJourneyTest {
     private lateinit var app: OfflineAppFixture
     private lateinit var viewModel: SettingsViewModel
     private lateinit var profile: ProfileEntity
+
+    @Test fun dpadReturnsFromSettingsControlsThroughSidebarToTheRealMenu() = assertReturnToMenu(top = false)
+
+    @Test fun backReturnsFromSettingsSidebarToTheTopMenu() = assertReturnToMenu(top = true)
+
+    private fun assertReturnToMenu(top: Boolean) {
+        val entry = FocusRequester()
+        val navigation = NavDestination.entries.associateWith { FocusRequester() }
+        compose.setContent {
+            MaterialTheme {
+                NavigationFocusHandoffHost {
+                    Box {
+                        SettingsScreen(
+                            currentProfile = profile.copy(navPosition = if (top) "top" else "left"), onBack = {}, entryRequester = entry,
+                            drawerRequester = navigation.getValue(NavDestination.Settings), viewModel = viewModel
+                        )
+                        if (top) TopNavigationBar(
+                            currentDestination = NavDestination.Settings, currentProfile = profile,
+                            topNavRequesters = navigation, onNavigate = {}, onEnterContent = { entry.requestFocus() }, content = {}
+                        ) else NavDrawer(
+                            currentDestination = NavDestination.Settings, currentProfile = profile,
+                            drawerRequesters = navigation, onNavigate = {}, onClose = { entry.requestFocus() }, content = {}
+                        )
+                    }
+                }
+            }
+        }
+        val section = compose.onNode(hasText("Personalization") and hasClickAction())
+        section.performSemanticsAction(SemanticsActions.RequestFocus)
+            .performKeyInput { pressKey(Key.DirectionRight) }
+        val control = compose.onNodeWithTag("personalization-reduce-motion")
+        compose.waitUntil(3_000) { runCatching { control.assertIsFocused() }.isSuccess }
+        control.performKeyInput { pressKey(Key.DirectionLeft) }
+        section.assertIsFocused()
+        if (top) {
+            section.performKeyInput { pressKey(Key.Back) }
+        } else section.performKeyInput { pressKey(Key.DirectionLeft) }
+        val settings = compose.onNode(hasContentDescription("Settings") and hasClickAction())
+        settings.assertIsFocused()
+        compose.onNodeWithTag(if (top) "top-nav-profile-avatar" else "nav-profile-avatar").assertIsNotFocused()
+        if (!top) {
+            settings.performKeyInput { pressKey(Key.DirectionUp) }
+            compose.onNode(hasText("My Library") and hasClickAction()).assertIsFocused()
+        }
+    }
 
     @Before fun setUp() = runBlocking {
         val context = RuntimeEnvironment.getApplication()

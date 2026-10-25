@@ -134,11 +134,29 @@ class HomeScreenComposeJourneyTest {
         compose.runOnIdle { assertEquals(1, refreshCount) }
     }
 
-    @Test fun homeDetailsBackJourneyRestoresTheSameFocusedTitle() {
+    @Test fun homeDetailsBackJourneyRestoresTheSameFocusedTitle() =
+        assertDetailsBackJourney("tt-home-return", "simple", "poster", gridEnabled = false)
+
+    @Test fun tmdbDetailsBackRestoresTheSamePosterAndDpadNavigation() =
+        assertDetailsBackJourney("tmdb:123456", "simple", "poster", gridEnabled = true)
+
+    @Test fun tmdbDetailsBackRestoresTheSameLandscapeCardInCinematicLayout() =
+        assertDetailsBackJourney("tmdb:123456", "cinematic", "landscape", gridEnabled = true)
+
+    private fun assertDetailsBackJourney(targetId: String, layout: String, shape: String, gridEnabled: Boolean) {
+        profile = profile.copy(homeTabLayout = layout, titleCardShape = shape)
+        runBlocking {
+            fixture.dao.saveCatalogConfig(CatalogConfigEntity(
+                uniqueId = "fixture-movie-top", transportUrl = "https://fixture.invalid", addonName = "Fixture",
+                catalogType = "movie", catalogId = "top", showInHome = true,
+                isInfiniteLoopEnabled = gridEnabled, isInfiniteScrollingEnabled = false
+            ))
+        }
+        val target = MetaItem(id = targetId, type = "movie", name = "Return Journey")
         val catalogUrl = "https://fixture.invalid/catalog/movie/top.json"
         fixture.api.catalogPages[catalogUrl] = CatalogResponse(listOf(
             MetaItem(id = "tt-home-return-first", type = "movie", name = "First Journey Title"),
-            MetaItem(id = "tt-home-return", type = "movie", name = "Return Journey")
+            target
         ))
         viewModel.loadScreen("home", profile)
         awaitAppState { !viewModel.state.value.isLoading && viewModel.state.value.loadedScreen == "home" }
@@ -196,7 +214,7 @@ class HomeScreenComposeJourneyTest {
         compose.onNodeWithContentDescription("First Journey Title").assertIsNotFocused()
         card
             .performKeyInput { pressKey(Key.DirectionCenter) }
-        compose.onNodeWithText("Details: Return Journey · tt-home-return").assertExists()
+        compose.onNodeWithText("Details: Return Journey · $targetId").assertExists()
 
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
         compose.waitForIdle()
@@ -208,8 +226,12 @@ class HomeScreenComposeJourneyTest {
         }
         compose.onNodeWithContentDescription("Return Journey").assertExists().assertIsFocused()
         compose.runOnIdle {
-            assertTrue(viewModel.state.value.lastFocusedKey.orEmpty().contains("tt-home-return"))
+            val loadedCard = viewModel.state.value.rows.single().items[1]
+            assertEquals(homeCardFocusKey(0, "fixture-movie-top", loadedCard.focusIdentityKey, 1), viewModel.state.value.lastFocusedKey)
         }
+        compose.onNodeWithTag("nav-profile-avatar").assertIsNotFocused()
+        compose.onNodeWithContentDescription("Return Journey").performKeyInput { pressKey(Key.DirectionLeft) }
+        compose.onNodeWithContentDescription("First Journey Title").assertIsFocused()
     }
 
     @Test fun returningToOttPrefersTheFirstTitleCardOverItsRefreshAction() {
@@ -264,6 +286,40 @@ class HomeScreenComposeJourneyTest {
         }
         compose.onNodeWithContentDescription("OTT Return Title").assertIsFocused()
         compose.onNodeWithText("Refresh OTT").assertIsNotFocused()
+    }
+
+    @Test fun personalizedOnlyRailRestoresFocusBeyondBothSavedViewports() {
+        val rows = (0..7).map { row ->
+            CategoryRow.fromHomeRow(HomeRow(
+                configId = "tmdb-rail-$row", title = "Suggestions $row", order = row,
+                items = (0..14).map { item -> MetaItem("tmdb:${1000 + row * 100 + item}", "movie", "Suggestion $row $item") },
+                isInfiniteLoopEnabled = true, isInfiniteScrollingEnabled = false
+            ))
+        }
+        val target = rows.last().items.last().asActionItem()
+        val state = HomeViewModel.HomeState(mixedRows = rows, personalizedRows = rows, isLoading = false)
+        compose.setContent {
+            MaterialTheme {
+                SimpleLayout(
+                    startPadding = androidx.compose.ui.unit.Dp(80f), isTopNav = false, state = state,
+                    onMovieClick = {}, onContinueClick = {}, onMovieLongClick = { _, _, _ -> },
+                    onViewMore = { _, _, _ -> }, onHubClick = {}, onLoadMore = {},
+                    entryRequester = remember { FocusRequester() }, drawerRequester = remember { FocusRequester() },
+                    lastFocusedKey = homeCardFocusKey(7, rows.last().id, target.homeFocusIdentityKey(), 14),
+                    rowScrollPositions = emptyMap(), verticalScrollPosition = 0 to 0, historyScrollAdjustment = 0,
+                    onFocusChange = {}, onScrollPositionChange = { _, _ -> }, onVerticalScrollChange = {},
+                    onHeroItemVisible = {}, browseFocusRestoreToken = 1
+                )
+            }
+        }
+        val restored = compose.onNodeWithContentDescription(target.name)
+        compose.waitUntil(3_000) { runCatching { restored.assertIsFocused() }.isSuccess }
+        restored.performKeyInput { pressKey(Key.DirectionLeft) }
+        compose.onNodeWithContentDescription("Suggestion 7 13").assertIsFocused()
+            .performKeyInput { pressKey(Key.DirectionUp) }
+        compose.onNode(isFocused() and hasContentDescription("Suggestion 6 ", substring = true)).assertExists()
+            .performKeyInput { pressKey(Key.DirectionDown) }
+        compose.onNode(isFocused() and hasContentDescription("Suggestion 7 ", substring = true)).assertExists()
     }
 
     @Test fun catalogDetailsSelectionKeepsSeriesIdentityArtworkAndAddonOrigin() {

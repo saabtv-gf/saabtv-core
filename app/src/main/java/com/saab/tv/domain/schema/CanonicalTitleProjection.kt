@@ -79,6 +79,12 @@ data class CatalogCardProjection(
     val content: TitleCardProjection?,
     private val opaqueCompatibilityItem: MetaItem? = null
 ) {
+    // The compatibility edge is read repeatedly by focus, artwork and preview indexes.
+    // Materialize it once per immutable projection, not on each remote key press.
+    private val actionItem by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        content?.asMetaItem() ?: requireNotNull(opaqueCompatibilityItem)
+    }
+
     val presentationKey: String
         get() = content?.presentationKey ?: requireNotNull(opaqueCompatibilityItem).canonicalPresentationKey()
 
@@ -86,7 +92,7 @@ data class CatalogCardProjection(
     val focusIdentityKey: String
         get() = content?.presentationKey ?: requireNotNull(opaqueCompatibilityItem).id
 
-    fun asActionItem(): MetaItem = content?.asMetaItem() ?: requireNotNull(opaqueCompatibilityItem)
+    fun asActionItem(): MetaItem = actionItem
 
     companion object {
         fun from(item: MetaItem): CatalogCardProjection {
@@ -142,17 +148,21 @@ fun CanonicalTitleEntity.toTitleCardProjection(
 }
 
 /** Compatibility adapter: unknown IDs must carry an addon installation/base URL to avoid collisions. */
-fun MetaItem.toCanonicalProjection(addonInstallationId: String? = null): TitleCardProjection? {
+internal fun MetaItem.canonicalContentIdentity(addonInstallationId: String? = null): ContentIdentity? {
     val kind = ContentKind.fromProvider(type)?.takeIf { it == ContentKind.MOVIE || it == ContentKind.SERIES }
         ?: return null
     val rawId = id.trim()
-    val install = addonInstallationId ?: addonBaseUrl?.let(::installationFingerprint)
-    val identity = when {
+    return when {
         rawId.startsWith("tmdb:", ignoreCase = true) -> ContentIdentity.tmdb(kind, rawId.substringAfter(':').substringBefore(':'))
         rawId.matches(Regex("tt[0-9]+")) -> ContentIdentity.imdb(kind, rawId)
-        install != null -> ContentIdentity.addon(install, kind, rawId)
-        else -> null
-    } ?: return null
+        else -> (addonInstallationId ?: addonBaseUrl?.let(::installationFingerprint))
+            ?.let { ContentIdentity.addon(it, kind, rawId) }
+    }
+}
+
+fun MetaItem.toCanonicalProjection(addonInstallationId: String? = null): TitleCardProjection? {
+    val identity = canonicalContentIdentity(addonInstallationId) ?: return null
+    val kind = identity.kind
     val artwork = buildList {
         val source = metadataSource().name
         poster?.takeIf(String::isNotBlank)?.let { add(ArtworkReference(ArtworkRole.POSTER, it, source)) }
@@ -208,7 +218,7 @@ private fun ContentIdentity.sourceReference(): String = when (namespace) {
 }
 
 /** Stable, provider-qualified de-duplication key for compatibility MetaItem lists. */
-fun MetaItem.canonicalPresentationKey(): String = toCanonicalProjection()?.presentationKey
+fun MetaItem.canonicalPresentationKey(): String = canonicalContentIdentity()?.stableKey
     ?: "legacy/${type.trim().lowercase()}/${id.trim()}"
 
 /** Best-known origin for metadata that has not yet crossed the canonical database boundary. */
