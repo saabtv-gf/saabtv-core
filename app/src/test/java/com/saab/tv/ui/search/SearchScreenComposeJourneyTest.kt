@@ -499,13 +499,15 @@ class SearchScreenComposeJourneyTest {
                         browseFocusRestoreToken = restoreToken.value
                     )
                 } else {
-                    Text("Details")
+                    androidx.compose.material3.Text("Details")
                 }
             }
         }
 
         val selected = compose.onNodeWithContentDescription("Batman Movie")
-        compose.waitUntil(5_000) { selected.isDisplayedForWait() }
+        compose.waitUntil(5_000) {
+            runCatching { selected.assertIsDisplayed(); true }.getOrDefault(false)
+        }
         selected.performSemanticsAction(SemanticsActions.RequestFocus)
         compose.runOnIdle { assertTrue(lastFocusedId.value.orEmpty().contains("tt-search-movie")) }
 
