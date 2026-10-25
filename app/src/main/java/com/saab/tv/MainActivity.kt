@@ -1052,6 +1052,7 @@ class MainActivity : LocalizedComponentActivity() {
                         val searchResultsRequester = remember { FocusRequester() }
                         var searchFocusTarget by rememberSaveable { mutableStateOf<String?>(null) }
                         var searchLastFocusedId by rememberSaveable { mutableStateOf<String?>(null) }
+                        var browseFocusRestoreToken by remember { mutableIntStateOf(0) }
 
                         // Track where we came from for proper back navigation
                         val uiScope = rememberCoroutineScope()
@@ -1090,7 +1091,11 @@ class MainActivity : LocalizedComponentActivity() {
                                         when (target) {
                                             "movies" -> searchMoviesViewMoreRequester.requestFocusWhenAttached()
                                             "series" -> searchSeriesViewMoreRequester.requestFocusWhenAttached()
-                                            "poster" -> searchResultsRequester.requestFocusWhenAttached()
+                                            "poster" -> {
+                                                if (!searchResultsRequester.requestFocusWhenAttached()) {
+                                                    searchEntryRequester.requestFocusWhenAttached()
+                                                }
+                                            }
                                         }
                                     } else {
                                         searchEntryRequester.requestFocusWhenAttached()
@@ -1204,6 +1209,7 @@ class MainActivity : LocalizedComponentActivity() {
                                                     onPreviewActiveChanged = { backdropTrailerActive = it },
                                                     tab = dashboardTab,
                                                     screenNameOverride = tab.takeIf { it == "ott" },
+                                                    browseFocusRestoreToken = browseFocusRestoreToken,
                                                     viewModel = vm,
                                                     currentProfile = currentProfile,
                                                     entryRequester = homeEntryRequester,
@@ -1486,9 +1492,10 @@ class MainActivity : LocalizedComponentActivity() {
 
                             AppBackHandler(priority = AppBackPriority.Route) {
                                 if (!detailsNavController.popBackStack()) {
+                                    browseFocusRestoreToken++
                                     autoResumeFromContinue = false
                                     activeView = com.saab.tv.ui.navigation.BrowseReturnPolicy.onBack(previousView)
-                    }
+                                }
                             }
 
                             // Shared onPlayClick lambda for all detail screens

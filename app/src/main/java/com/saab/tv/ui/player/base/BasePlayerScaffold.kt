@@ -86,6 +86,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -2115,14 +2116,6 @@ private fun PauseBrandOverlay(
                         .height(120.dp),
                     contentScale = ContentScale.Fit
                 )
-            } else {
-                Text(
-                    text = primaryText,
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = Color.White,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
         }
     }
@@ -2252,7 +2245,7 @@ private fun PlayerStatusPill(
 }
 
 @Composable
-private fun LoadingOverlay(
+internal fun LoadingOverlay(
     torrentProgress: TorrentProgress? = null,
     logoUrl: String? = null,
     primaryText: String
@@ -2301,7 +2294,8 @@ private fun LoadingOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.38f)),
+            .background(Color.Black.copy(alpha = 0.38f))
+            .testTag("playback-loading-overlay"),
         contentAlignment = Alignment.Center
     ) {
         val progress = torrentProgress?.progress
@@ -2311,56 +2305,28 @@ private fun LoadingOverlay(
             label = "preload"
         )
 
-        if (!logoUrl.isNullOrBlank()) {
-            AsyncImage(
-                model = logoUrl,
-                contentDescription = primaryText,
-                modifier = Modifier
-                    .width(360.dp)
-                    .height(120.dp)
-                    .scale(pulse)
-                    .alpha(brandAlpha),
-                contentScale = ContentScale.Fit
-            )
-        } else if (primaryText.isNotBlank()) {
-            Text(
-                text = primaryText,
-                modifier = Modifier
-                    .fillMaxWidth(0.7f)
-                    .scale(pulse)
-                    .alpha(brandAlpha),
-                color = Color.White,
-                style = MaterialTheme.typography.headlineLarge,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(72.dp)
-                    .scale(pulse),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    progress = { animatedProgress },
+        val loaderLogo = logoUrl?.takeIf(String::isNotBlank)
+        var logoLoaded by remember(loaderLogo) { mutableStateOf(false) }
+        if (loaderLogo != null) {
+            Box(Modifier.width(360.dp).height(120.dp), contentAlignment = Alignment.Center) {
+                if (!logoLoaded) {
+                    PlaybackLoaderProgress(progress, animatedProgress, rotation, pulse)
+                }
+                AsyncImage(
+                    model = loaderLogo,
+                    contentDescription = primaryText,
                     modifier = Modifier
                         .fillMaxSize()
-                        .rotate(if (progress == null) rotation else 0f),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = Color.White.copy(alpha = 0.14f),
-                    strokeWidth = 4.dp
-                )
-                CircularProgressIndicator(
-                    progress = { 0.22f },
-                    modifier = Modifier
-                        .size(54.dp)
-                        .rotate(-rotation * 1.35f),
-                    color = Color.White.copy(alpha = 0.72f),
-                    trackColor = Color.Transparent,
-                    strokeWidth = 2.dp
+                        .scale(pulse)
+                        .alpha(brandAlpha)
+                        .testTag("playback-loading-logo"),
+                    contentScale = ContentScale.Fit,
+                    onSuccess = { logoLoaded = true },
+                    onError = { logoLoaded = false }
                 )
             }
+        } else {
+            PlaybackLoaderProgress(progress, animatedProgress, rotation, pulse)
         }
 
         Column(
@@ -2403,6 +2369,38 @@ private fun LoadingOverlay(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PlaybackLoaderProgress(
+    progress: Float?,
+    animatedProgress: Float,
+    rotation: Float,
+    pulse: Float
+) {
+    Box(
+        modifier = Modifier.size(72.dp).scale(pulse).testTag("playback-loading-spinner"),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(
+            progress = { animatedProgress },
+            modifier = Modifier
+                .fillMaxSize()
+                .rotate(if (progress == null) rotation else 0f),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = Color.White.copy(alpha = 0.14f),
+            strokeWidth = 4.dp
+        )
+        CircularProgressIndicator(
+            progress = { 0.22f },
+            modifier = Modifier
+                .size(54.dp)
+                .rotate(-rotation * 1.35f),
+            color = Color.White.copy(alpha = 0.72f),
+            trackColor = Color.Transparent,
+            strokeWidth = 2.dp
+        )
     }
 }
 

@@ -14,6 +14,8 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.saab.tv.data.model.ProfileEntity
@@ -21,6 +23,7 @@ import com.saab.tv.data.model.SeriesNextUpEntity
 import com.saab.tv.data.model.WatchHistoryEntity
 import com.saab.tv.data.model.WatchlistEntity
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.ui.components.LocalTitleCardShape
 import com.saab.tv.domain.schema.canonicalPresentationKey
 import com.saab.tv.testing.FeatureFixture
 import kotlinx.coroutines.cancel
@@ -165,6 +168,68 @@ class WatchlistScreenComposeJourneyTest {
         compose.runOnUiThread { entry.requestFocus() }
         compose.waitUntil(3_000) {
             runCatching { secondCard.assertIsFocused(); true }.getOrDefault(false)
+        }
+    }
+
+    @Test fun libraryDpadReachesTheFinalCardInPosterAndLandscapeLayouts() = runBlocking {
+        (2..15).forEach { index ->
+            fixture.dao.addToWatchlist(
+                WatchlistEntity(81, "tt-library-edge-$index", "movie", "Library Edge $index", null, index.toLong())
+            )
+        }
+        val profile = ProfileEntity(id = 81, name = "Watchlist Screen", isActive = true)
+        viewModel.setProfileId(81)
+        compose.waitUntil(5_000) { viewModel.libraryItems.value.watchlist.size == 15 }
+        val titles = viewModel.libraryItems.value.watchlist.map { it.asActionItem().name }
+        val firstItem = viewModel.libraryItems.value.watchlist.first().asActionItem()
+        viewModel.rememberFocusedCard(LIBRARY_WATCHLIST, firstItem.canonicalPresentationKey(), 0)
+        val cardShape = mutableStateOf("poster")
+        val entry = FocusRequester()
+        val drawer = FocusRequester()
+
+        compose.setContent {
+            val shape = cardShape.value
+            key(shape) {
+                CompositionLocalProvider(LocalTitleCardShape provides shape) {
+                    Material3Theme {
+                        MaterialTheme {
+                            WatchlistScreen(
+                                currentProfile = profile,
+                                entryRequester = entry,
+                                drawerRequester = drawer,
+                                onMovieClick = {},
+                                viewModel = viewModel,
+                                actionsViewModel = actionsViewModel
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        for (shape in listOf("poster", "landscape")) {
+            if (cardShape.value != shape) {
+                viewModel.rememberFocusedCard(
+                    LIBRARY_WATCHLIST,
+                    firstItem.canonicalPresentationKey(),
+                    0
+                )
+                compose.runOnUiThread { cardShape.value = shape }
+                compose.waitForIdle()
+            }
+            val first = compose.onNodeWithContentDescription(titles.first())
+            compose.waitUntil(5_000) { first.isDisplayedForWait() }
+            first.performSemanticsAction(SemanticsActions.RequestFocus)
+            first.assertIsFocused()
+            titles.drop(1).forEachIndexed { index, title ->
+                compose.onNodeWithContentDescription(titles[index])
+                    .performKeyInput { pressKey(Key.DirectionRight) }
+                compose.waitUntil(2_000) {
+                    runCatching { compose.onNodeWithContentDescription(title).assertIsFocused(); true }
+                        .getOrDefault(false)
+                }
+            }
+            compose.onNodeWithContentDescription(titles.last()).assertIsFocused()
         }
     }
 

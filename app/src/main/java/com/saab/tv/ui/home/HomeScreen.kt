@@ -160,6 +160,7 @@ private class PreviewUpdateGate {
 fun HomeScreen(
     tab: DashboardTab,
     screenNameOverride: String? = null,
+    browseFocusRestoreToken: Int = 0,
     entryRequester: FocusRequester,
     drawerRequester: FocusRequester,
     viewModel: HomeViewModel = hiltViewModel(),
@@ -412,7 +413,8 @@ fun HomeScreen(
                     },
                     onPrepareArtworkItem = { viewModel.ensureTmdbEnrichment(it) },
                     onWatchedItemShown = { item -> currentProfile?.id?.let { viewModel.ensureWatchedAlias(it, item) } },
-                    isLandscapeContinueWatching = isLandscapeContinueWatching
+                    isLandscapeContinueWatching = isLandscapeContinueWatching,
+                    browseFocusRestoreToken = browseFocusRestoreToken
                 )
             } else {
                 val heroConfig = if (isOttScreen) HeroConfig(null, 0, 0)
@@ -458,6 +460,7 @@ fun HomeScreen(
                     onPrepareArtworkItem = { viewModel.ensureTmdbEnrichment(it) },
                     onWatchedItemShown = { item -> currentProfile?.id?.let { viewModel.ensureWatchedAlias(it, item) } },
                     topActionRequester = entryRequester.takeIf { isOttScreen },
+                    browseFocusRestoreToken = browseFocusRestoreToken,
                     onRefreshOtt = if (isOttScreen) {
                         { viewModel.refreshOtt(currentProfile) }
                     } else {
@@ -765,12 +768,14 @@ fun CinematicLayout(
     onPreviewItemVisible: (MetaItem) -> Unit,
     onPrepareArtworkItem: (MetaItem) -> Unit = {},
     onWatchedItemShown: (MetaItem) -> Unit = {},
-    isLandscapeContinueWatching: Boolean = false
+    isLandscapeContinueWatching: Boolean = false,
+    browseFocusRestoreToken: Int = 0
 ) {
     val continueWatchingTitle = stringResource(R.string.library_continue_watching)
     var instantFocusItem by remember { mutableStateOf<MetaItem?>(null) }
     var displayedItem by remember { mutableStateOf<MetaItem?>(null) }
     var hasRequestedFocus by remember { mutableStateOf(false) }
+    var handledBrowseFocusRestoreToken by remember { mutableIntStateOf(0) }
     val previewUpdateGate = remember { PreviewUpdateGate() }
 
     // Cache the history items transformation to avoid allocating new list on every recomposition
@@ -822,7 +827,7 @@ fun CinematicLayout(
         resolveLatestPreviewItem(displayedItem, state, historyItems, previewMetadataIndex)
     }
 
-    LaunchedEffect(state.rows, state.history, restoredPreviewItem, effectiveLastFocusedKey) {
+    LaunchedEffect(state.rows, state.history, restoredPreviewItem, effectiveLastFocusedKey, browseFocusRestoreToken) {
         if (instantFocusItem == null) {
             val first = when {
                 restoredPreviewItem != null -> restoredPreviewItem
@@ -841,11 +846,16 @@ fun CinematicLayout(
 
         // SMART FOCUS:
         // We are now safe to request focus because HomeScreen ensures we only reach here when data is ready.
-        if (!hasRequestedFocus && (historyItems.isNotEmpty() || state.mixedRows.isNotEmpty())) {
+        val shouldRestoreBrowseFocus = browseFocusRestoreToken > handledBrowseFocusRestoreToken
+        if ((shouldRestoreBrowseFocus || !hasRequestedFocus) &&
+            (historyItems.isNotEmpty() || state.mixedRows.isNotEmpty())
+        ) {
             repeat(8) {
-                if (!hasRequestedFocus) {
-                    delay(100)
-                    hasRequestedFocus = requestFocusIfReady(entryRequester::requestFocus)
+                delay(100)
+                if (requestFocusIfReady(entryRequester::requestFocus)) {
+                    hasRequestedFocus = true
+                    handledBrowseFocusRestoreToken = browseFocusRestoreToken
+                    return@LaunchedEffect
                 }
             }
         }
@@ -1414,10 +1424,12 @@ fun SimpleLayout(
     onWatchedItemShown: (MetaItem) -> Unit = {},
     topActionRequester: FocusRequester? = null,
     onRefreshOtt: (() -> Unit)? = null,
-    isLandscapeContinueWatching: Boolean = false
+    isLandscapeContinueWatching: Boolean = false,
+    browseFocusRestoreToken: Int = 0
 ) {
     val continueWatchingTitle = stringResource(R.string.library_continue_watching)
     var hasRequestedFocus by remember { mutableStateOf(false) }
+    var handledBrowseFocusRestoreToken by remember { mutableIntStateOf(0) }
     // Stable key: only rebuild when items/order/watched-state change, not when images update
     val historyKey = remember(state.history) {
         state.history.map { "${it.id}:${it.watched}:${it.lastWatched}:${it.poster != null}" }
@@ -1459,16 +1471,27 @@ fun SimpleLayout(
     // Focus requester for the first row's pivot item (used by hero carousel DOWN key)
     val firstRowPivotRequester = remember { FocusRequester() }
 
-    LaunchedEffect(state.rows, historyItems) {
-        if (!hasRequestedFocus && (state.rows.isNotEmpty() || historyItems.isNotEmpty())) {
-            delay(100)
+    LaunchedEffect(state.rows, historyItems, browseFocusRestoreToken) {
+        val shouldRestoreBrowseFocus = browseFocusRestoreToken > handledBrowseFocusRestoreToken
+        if ((shouldRestoreBrowseFocus || !hasRequestedFocus) &&
+            (state.rows.isNotEmpty() || historyItems.isNotEmpty())
+        ) {
             val requester = when {
+                // Returning from Details must restore to the saved card (or the
+                // first available title card), not the OTT refresh action.
+                shouldRestoreBrowseFocus -> entryRequester
                 effectiveLastFocusedKey != null -> entryRequester
                 onRefreshOtt != null && topActionRequester != null -> topActionRequester
                 else -> entryRequester
             }
-            runCatching { requester.requestFocus() }
-            hasRequestedFocus = true
+            repeat(8) {
+                delay(100)
+                if (requestFocusIfReady(requester::requestFocus)) {
+                    hasRequestedFocus = true
+                    handledBrowseFocusRestoreToken = browseFocusRestoreToken
+                    return@LaunchedEffect
+                }
+            }
         }
     }
 
@@ -1668,7 +1691,8 @@ fun SimpleLayout(
                             locallyFocusedItemId = if (effectiveLastFocusedKey?.startsWith("hub_") == true) effectiveLastFocusedKey else null,
                             isTopNav = isTopNav,
                             rowIndex = rowIndex,
-                            isFirstRow = heroItems.isEmpty() && historyItems.isEmpty() && rowIndex == 0 && onRefreshOtt == null, // Only steal focus if no hero/history/action row
+                            isFirstRow = heroItems.isEmpty() && historyItems.isEmpty() && rowIndex == 0 &&
+                                (onRefreshOtt == null || browseFocusRestoreToken > 0), // On return, prefer a title over the OTT refresh action.
                             externalListState = hubListState,
                             repeatGate = dpadRepeatGate,
                             isLastRow = rowIndex == state.mixedRows.lastIndex,
@@ -1745,7 +1769,8 @@ fun SimpleLayout(
                             drawerRequester = drawerRequester,
                             locallyFocusedItemId = if (effectiveLastFocusedKey?.startsWith("${rowIndex}_") == true) effectiveLastFocusedKey else null,
                             isGlobalFocusPresent = effectiveLastFocusedKey != null,
-                            isFirstRow = heroItems.isEmpty() && historyItems.isEmpty() && rowIndex == 0 && onRefreshOtt == null,
+                            isFirstRow = heroItems.isEmpty() && historyItems.isEmpty() && rowIndex == 0 &&
+                                (onRefreshOtt == null || browseFocusRestoreToken > 0),
                             isInfiniteLoopEnabled = item.isInfiniteLoopEnabled,
                             visibleItemCount = item.visibleItemCount,
                             isInfiniteScrollingEnabled = item.isInfiniteScrollingEnabled,

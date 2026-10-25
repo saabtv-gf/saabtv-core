@@ -248,7 +248,10 @@ fun WatchlistScreen(
                         val sectionTitle = stringResource(librarySectionTitleResource(title))
                         val rowId = WatchlistFocusPolicy.rowId(title)
                         val rowFocus = restoredFocus?.takeIf { it.rowIndex == index }
-                        val rowState = remember(title, rowFocus?.itemIndex) {
+                        // Seed scroll from the saved card only when this shelf is first
+                        // composed. Recreating LazyListState as focus moves resets the
+                        // viewport on every card and strands D-pad navigation near the end.
+                        val rowState = remember(title) {
                             LazyListState(firstVisibleItemIndex = rowFocus?.itemIndex ?: 0)
                         }
                         InfiniteLoopRow(

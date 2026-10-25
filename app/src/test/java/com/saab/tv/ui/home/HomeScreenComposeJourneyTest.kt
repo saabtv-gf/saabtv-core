@@ -6,6 +6,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
@@ -19,6 +20,8 @@ import com.saab.tv.data.model.CatalogConfigEntity
 import com.saab.tv.data.model.ProfileEntity
 import com.saab.tv.data.model.stremio.CatalogResponse
 import com.saab.tv.data.model.stremio.MetaItem
+import com.saab.tv.domain.CategoryRow
+import com.saab.tv.domain.HomeRow
 import com.saab.tv.domain.DashboardTab
 import com.saab.tv.testing.FeatureFixture
 import com.saab.tv.testing.awaitAppState
@@ -145,6 +148,7 @@ class HomeScreenComposeJourneyTest {
                 MaterialTheme {
                     BackNavigationHost(onUnhandledBack = {}) {
                         var activeView by remember { mutableStateOf(ShellView.Menu) }
+                        var browseFocusRestoreToken by remember { mutableIntStateOf(0) }
                         var selectedTitle by remember { mutableStateOf<CatalogDetailsSelection?>(null) }
                         if (activeView == ShellView.Menu) {
                             val drawerRequesters = remember {
@@ -160,6 +164,7 @@ class HomeScreenComposeJourneyTest {
                                 ) {
                                     HomeScreen(
                                         tab = DashboardTab.HOME,
+                                        browseFocusRestoreToken = browseFocusRestoreToken,
                                         entryRequester = entry,
                                         drawerRequester = drawerRequesters.getValue(NavDestination.Home),
                                         viewModel = viewModel,
@@ -174,6 +179,7 @@ class HomeScreenComposeJourneyTest {
                         } else {
                             AppBackHandler(priority = AppBackPriority.Route) {
                                 activeView = BrowseReturnPolicy.onBack(ShellView.Menu)
+                                browseFocusRestoreToken++
                             }
                             Text("Details: ${selectedTitle?.title} · ${selectedTitle?.contentId}")
                         }
@@ -202,6 +208,60 @@ class HomeScreenComposeJourneyTest {
         compose.runOnIdle {
             assertTrue(viewModel.state.value.lastFocusedKey.orEmpty().contains("tt-home-return"))
         }
+    }
+
+    @Test fun returningToOttPrefersTheFirstTitleCardOverItsRefreshAction() {
+        val row = HomeRow(
+            configId = "fixture:ott",
+            title = "OTT titles",
+            items = listOf(MetaItem("tt-ott-return", "movie", "OTT Return Title")),
+            order = 0
+        )
+        val category = CategoryRow.fromHomeRow(row)
+        val state = HomeViewModel.HomeState(
+            rows = listOf(category),
+            mixedRows = listOf(category),
+            isLoading = false
+        )
+        val contentEntry = FocusRequester()
+        val refreshEntry = FocusRequester()
+        val drawer = FocusRequester()
+
+        compose.setContent {
+            MaterialTheme {
+                SimpleLayout(
+                    startPadding = androidx.compose.ui.unit.Dp(80f),
+                    isTopNav = false,
+                    state = state,
+                    onMovieClick = {},
+                    onContinueClick = {},
+                    onMovieLongClick = { _, _, _ -> },
+                    onViewMore = { _, _, _ -> },
+                    onHubClick = {},
+                    onLoadMore = {},
+                    entryRequester = contentEntry,
+                    drawerRequester = drawer,
+                    lastFocusedKey = null,
+                    rowScrollPositions = emptyMap(),
+                    verticalScrollPosition = 0 to 0,
+                    historyScrollAdjustment = 0,
+                    onFocusChange = {},
+                    onScrollPositionChange = { _, _ -> },
+                    onVerticalScrollChange = {},
+                    onHeroItemVisible = {},
+                    topActionRequester = refreshEntry,
+                    onRefreshOtt = {},
+                    browseFocusRestoreToken = 1
+                )
+            }
+        }
+
+        compose.waitUntil(2_000) {
+            runCatching { compose.onNodeWithContentDescription("OTT Return Title").assertIsFocused(); true }
+                .getOrDefault(false)
+        }
+        compose.onNodeWithContentDescription("OTT Return Title").assertIsFocused()
+        compose.onNodeWithText("Refresh OTT").assertIsNotFocused()
     }
 
     @Test fun catalogDetailsSelectionKeepsSeriesIdentityArtworkAndAddonOrigin() {
