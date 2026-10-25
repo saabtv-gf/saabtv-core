@@ -14,13 +14,24 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class HomeFocusRestorationTest {
+    @Test fun savedViewportOnlyRepairsAnExistingOffscreenTarget() {
+        org.junit.Assert.assertTrue(shouldRestoreSavedListItem(4, 5, listOf(0, 1)))
+        org.junit.Assert.assertFalse(shouldRestoreSavedListItem(1, 5, listOf(0, 1)))
+        org.junit.Assert.assertFalse(shouldRestoreSavedListItem(5, 5, listOf(0, 1)))
+        org.junit.Assert.assertFalse(shouldRestoreSavedListItem(-1, 5, listOf(0, 1)))
+        org.junit.Assert.assertFalse(shouldRestoreSavedListItem(0, 0, emptyList()))
+    }
+
     @Test fun savedShelfIndexIncludesHistoryHeroAndRefreshButIgnoresInvalidAddresses() {
         assertEquals(7, homeShelfListIndex(homeCardFocusKey(6, "tmdb-top-suggestions", "tmdb/movie//123", 14), true))
         assertEquals(8, homeShelfListIndex(homeCardFocusKey(6, "tmdb-top-suggestions", "tmdb/movie//123", 14), false, leadingItems = 2))
         assertEquals(3, homeShelfListIndex(homeHubFocusKey(2, "hub", "item", 0), true))
+        assertEquals(2, homeShelfListIndex(homeCardFocusKey(2, "catalog", "item", 0), false))
         assertEquals(1, homeShelfListIndex(homeCardFocusKey(-1, "history", "tt1234567", 1), true, leadingItems = 1))
         assertNull(homeShelfListIndex("hero_tt1234567", false))
         assertNull(homeShelfListIndex("invalid", false))
+        assertNull(homeShelfListIndex("hub_invalid@hub@item@0", false))
+        assertNull(homeShelfListIndex(homeCardFocusKey(-2, "removed", "item", 0), false))
         assertNull(homeShelfListIndex(null, false))
     }
 

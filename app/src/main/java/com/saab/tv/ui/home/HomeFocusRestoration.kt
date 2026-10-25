@@ -6,12 +6,6 @@ import com.saab.tv.domain.HubGroupRow
 import com.saab.tv.domain.HomeRowItem
 import com.saab.tv.domain.schema.CatalogCardProjection
 import com.saab.tv.domain.schema.canonicalContentIdentity
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.snapshotFlow
-import kotlinx.coroutines.flow.first
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -97,18 +91,8 @@ internal fun resolveFocusedItemIndex(
 
 internal fun focusKeyWithoutRowId(key: String): String = key.substringBefore('@')
 
-/** Only repair the initial saved viewport; normal D-pad movement keeps its animated pivot. */
-@Composable
-internal fun RestoreSavedListItem(listState: LazyListState, savedIndex: Int?) {
-    val initialIndex = remember(listState) { savedIndex }
-    LaunchedEffect(listState, initialIndex) {
-        val target = initialIndex?.takeIf { it >= 0 } ?: return@LaunchedEffect
-        val count = snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
-        if (target < count && listState.layoutInfo.visibleItemsInfo.none { it.index == target }) {
-            listState.scrollToItem(target)
-        }
-    }
-}
+internal fun shouldRestoreSavedListItem(target: Int, itemCount: Int, visibleIndices: List<Int>): Boolean =
+    target in 0 until itemCount && target !in visibleIndices
 
 internal fun homeShelfListIndex(key: String?, hasHistory: Boolean, leadingItems: Int = 0): Int? {
     val address = key?.takeUnless { it.startsWith("hero_") } ?: return null
@@ -284,5 +268,6 @@ private fun resolveMetaItemIndex(items: List<MetaItem>, identity: String, savedI
 }
 
 internal fun MetaItem.homeFocusIdentityKey(): String {
-    return canonicalContentIdentity()?.stableKey ?: id
+    val identity = canonicalContentIdentity() ?: return id
+    return identity.stableKey
 }
