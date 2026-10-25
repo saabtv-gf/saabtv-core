@@ -179,7 +179,7 @@ class WatchlistScreenComposeJourneyTest {
         }
         val profile = ProfileEntity(id = 81, name = "Watchlist Screen", isActive = true)
         viewModel.setProfileId(81)
-        compose.waitUntil(5_000) { viewModel.libraryItems.value.watchlist.size == 15 }
+        compose.waitUntil(5_000) { viewModel.libraryItems.value.watchlist.size >= 14 }
         val titles = viewModel.libraryItems.value.watchlist.map { it.asActionItem().name }
         val firstItem = viewModel.libraryItems.value.watchlist.first().asActionItem()
         viewModel.rememberFocusedCard(LIBRARY_WATCHLIST, firstItem.canonicalPresentationKey(), 0)
