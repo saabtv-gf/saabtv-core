@@ -48,6 +48,7 @@ import com.saab.tv.ui.components.FocusShelf
 import com.saab.tv.ui.components.SetupButton
 import com.saab.tv.ui.utils.requestFocusOrFallback
 import com.saab.tv.ui.utils.requestFocusSafely
+import com.saab.tv.ui.utils.requestFocusWhenAttached
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
