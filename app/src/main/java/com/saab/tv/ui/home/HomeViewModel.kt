@@ -1383,6 +1383,7 @@ class HomeViewModel @Inject constructor(
                 }
             }
 
+            val initialHomePublished = kotlinx.coroutines.CompletableDeferred<Unit>()
             try {
                 if (screenName == "ott") {
                     val ottRows = ottCatalogRepository.getCatalogRows(forceRefresh = forceReload)
@@ -1415,6 +1416,33 @@ class HomeViewModel @Inject constructor(
                     )
                 }
                 val hubRowsDeferred = async { repository.getHubRows(screenName) }
+
+                // Start recommendation work alongside the first catalog requests, but
+                // wait until the initial Home state is published before appending rows.
+                if (screenName == "home" && currentProfile?.tmdbEnabled == true && tmdbService.hasApiKey()) {
+                    launch {
+                        val railIds = TmdbHomeRails.parse(currentProfile.homeTmdbRails)
+                        railIds.forEachIndexed { index, id ->
+                            val row = loadPersonalizedRows(currentProfile.copy(homeTmdbRails = id), emptyList(), railIds).firstOrNull()
+                                ?: return@forEachIndexed
+                            initialHomePublished.await()
+                            if (generation != screenGeneration) return@launch
+                            _state.update { current ->
+                                if (current.loadedScreen != "home" || current.loadedProfileId != currentProfileId) return@update current
+                                val existingKeys = current.mixedRows.filterIsInstance<CategoryRow>()
+                                    .flatMap { it.items }.mapTo(mutableSetOf()) { it.presentationKey }
+                                val uniqueItems = row.items.filter { existingKeys.add(it.presentationKey) }
+                                if (uniqueItems.isEmpty()) return@update current
+                                val published = row.copy(order = personalizedRailOrder(10 + index), items = uniqueItems)
+                                current.copy(
+                                    personalizedRows = (current.personalizedRows + published).distinctBy { it.id }.sortedBy { it.order },
+                                    loadableRowIds = if (tmdbRailPagination[id]?.hasMore == true) current.loadableRowIds + id else current.loadableRowIds,
+                                    mixedRows = (current.mixedRows + published).distinctBy { it.id }.sortedBy { it.order }
+                                )
+                            }
+                        }
+                    }
+                }
 
                 val initialRows = initialRowsDeferred.await()
                 val hubRows = hubRowsDeferred.await()
@@ -1451,23 +1479,7 @@ class HomeViewModel @Inject constructor(
                         tmdbEnabled = currentProfile?.tmdbEnabled == true
                     )
                 }
-
-                if (screenName == "home" && currentProfile?.tmdbEnabled == true && tmdbService.hasApiKey()) {
-                    launch {
-                        val personalized = loadPersonalizedRows(currentProfile, initialRows)
-                        if (generation != screenGeneration || personalized.isEmpty()) return@launch
-                        _state.update { current ->
-                            if (current.loadedScreen != "home" || current.loadedProfileId != currentProfileId) current
-                            else current.copy(
-                                personalizedRows = personalized,
-                                loadableRowIds = current.loadableRowIds + personalized.filter {
-                                    tmdbRailPagination[it.id]?.hasMore == true
-                                }.map { it.id },
-                                mixedRows = (current.mixedRows + personalized).distinctBy { it.id }.sortedBy { it.order }
-                            )
-                        }
-                    }
-                }
+                initialHomePublished.complete(Unit)
 
                 // Start a tiny metadata warmup pass for items likely to render first.
                 prefetchLikelyVisibleMetadata(rows = initialRows, heroRow = heroRow)
@@ -1508,8 +1520,10 @@ class HomeViewModel @Inject constructor(
                     }
                 }
             } catch (e: CancellationException) {
+                initialHomePublished.cancel()
                 throw e
             } catch (e: Exception) {
+                initialHomePublished.cancel()
                 if (generation != screenGeneration) return@launch
                 val message = when {
                     e is OttCatalogException -> e.message
@@ -1530,14 +1544,17 @@ class HomeViewModel @Inject constructor(
 
     private suspend fun loadPersonalizedRows(
         profile: com.saab.tv.data.model.ProfileEntity,
-        homeRows: List<HomeRow>
+        homeRows: List<HomeRow>,
+        interestRailIds: List<String> = TmdbHomeRails.parse(profile.homeTmdbRails)
     ): List<CategoryRow> {
         return try {
             val visibleTmdbRails = TmdbHomeRails.parse(profile.homeTmdbRails)
             val loadPlan = tmdbHomeRailLoadPlan(visibleTmdbRails)
+            val interestPlan = tmdbHomeRailLoadPlan(interestRailIds)
+            val needsInterestDetails = loadPlan.needsInterestDetails || (loadPlan.topSuggestions && interestPlan.needsInterestDetails)
             if (!loadPlan.hasVisibleRails) return emptyList()
             val history = if (loadPlan.needsTasteSeeds) dao.getWatchHistoryForProfileOnce(profile.id) else emptyList()
-            val watchlist = if (loadPlan.needsWatchlist) dao.getWatchlistOnce(profile.id) else emptyList()
+            val watchlist = if (needsInterestDetails) dao.getWatchlistOnce(profile.id) else emptyList()
             val watchedTitles = history.asSequence()
                 .filter { it.watched || it.position > 0L }
                 .groupBy { if (it.type == "series") com.saab.tv.domain.seriesIdFromPlaybackId(it.id) else it.id }
@@ -1550,7 +1567,7 @@ class HomeViewModel @Inject constructor(
                     Triple(id, latest.type, latest.title)
                 }
                 .toList()
-            val interestSeeds = if (loadPlan.needsInterestDetails) {
+            val interestSeeds = if (needsInterestDetails) {
                 (watchedTitles + watchlist.take(2).map { Triple(it.id, it.type, it.title) })
                     .distinctBy { "${it.second}:${it.first}" }.take(MAX_HOME_TASTE_SEEDS)
             } else emptyList()
@@ -1618,7 +1635,7 @@ class HomeViewModel @Inject constructor(
 
             // A small, bounded enrichment sample gives genre rails and cross-type
             // suggestions real signals without slowing the initial catalog load.
-            val interestDetails = if (loadPlan.needsInterestDetails) {
+            val interestDetails = if (needsInterestDetails) {
                 kotlinx.coroutines.coroutineScope {
                     interestSeeds.map { (seedId, type, _) -> async(Dispatchers.IO) {
                         val tmdbId = tmdbService.ensureTmdbId(seedId, type) ?: return@async null
