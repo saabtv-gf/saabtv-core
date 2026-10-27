@@ -39,7 +39,7 @@ catalog-androidx-security-security-crypto = { group = "androidx.security", name 
 catalog-ch-acra-acra-http = { group = "ch.acra", name = "acra-http", version = "5.11.4" }
 catalog-ch-acra-acra-toast = { group = "ch.acra", name = "acra-toast", version = "5.11.4" }
 catalog-junit-junit = { group = "junit", name = "junit", version = "4.13.2" }
-catalog-androidx-test-runner = { group = "androidx.test", name = "runner", version = "1.6.2" }
+catalog-androidx-test-runner = { group = "androidx.test", name = "runner", version = "1.7.0" }
 catalog-androidx-test-core-ktx = { group = "androidx.test", name = "core-ktx", version = "1.6.1" }
 catalog-androidx-test-ext-junit-ktx = { group = "androidx.test.ext", name = "junit-ktx", version = "1.2.1" }
 catalog-androidx-test-rules = { group = "androidx.test", name = "rules", version = "1.6.1" }
