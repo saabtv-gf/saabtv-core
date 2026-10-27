@@ -7,5 +7,5 @@ plugins {
     alias(libs.plugins.kotlin.compose) apply false
 
     // Hilt (still manual as it is not in the plugin block of toml yet)
-    id("com.google.dagger.hilt.android") version "2.51.1" apply false
+    id("com.google.dagger.hilt.android") version "2.60.1" apply false
 }
